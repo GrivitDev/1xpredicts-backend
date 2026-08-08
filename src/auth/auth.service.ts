@@ -224,7 +224,7 @@ export class AuthService {
     await user.save();
 
     const frontendUrl =
-      process.env.FRONTEND_URL || 'https://www.honestpredict.com';
+      process.env.FRONTEND_URL || 'https://www.1xpredicts.com';
 
     const resetLink =
       `${frontendUrl}/reset-password` +
