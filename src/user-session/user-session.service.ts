@@ -1,0 +1,168 @@
+import { Injectable } from '@nestjs/common';
+import { InjectModel } from '@nestjs/mongoose';
+import { Model, Types } from 'mongoose';
+import {
+  UserSession,
+  UserSessionDocument,
+} from './schemas/user-session.schema';
+import { parseDevice } from '../common/utils/device-parser';
+import { GeoLocationService } from 'src/common/services/geo-location.service';
+
+@Injectable()
+export class UserSessionService {
+  constructor(
+    @InjectModel(UserSession.name)
+    private sessionModel: Model<UserSession>,
+    private geoLocationService: GeoLocationService,
+  ) {}
+
+  async createSession(
+    data: Partial<UserSession>,
+  ): Promise<UserSessionDocument> {
+    const location = data.ipAddress
+      ? ((await this.geoLocationService.lookup(data.ipAddress)) ?? undefined)
+      : undefined;
+
+    const session = await this.sessionModel.create({
+      ...data,
+
+      location,
+
+      device: data.userAgent ? parseDevice(data.userAgent) : 'Unknown Device',
+
+      lastActiveAt: new Date(),
+
+      isActive: true,
+    });
+
+    console.log('SESSION LOCATION', location);
+
+    return session;
+  }
+
+  async findSessionById(sessionId: string) {
+    const session = await this.sessionModel.findById(sessionId);
+
+    if (!session) {
+      return null;
+    }
+
+    if (
+      session.isActive &&
+      session.expiresAt &&
+      session.expiresAt <= new Date()
+    ) {
+      await this.sessionModel.findByIdAndUpdate(sessionId, {
+        $set: {
+          isActive: false,
+        },
+      });
+
+      session.isActive = false;
+    }
+
+    return session;
+  }
+
+  async revokeSession(sessionId: string) {
+    return this.sessionModel.findOneAndUpdate(
+      {
+        _id: sessionId,
+        isActive: true,
+      },
+      {
+        $set: {
+          isActive: false,
+        },
+      },
+    );
+  }
+
+  async deactivateAllUserSessions(userId: string) {
+    await this.sessionModel.updateMany(
+      {
+        userId,
+        isActive: true,
+      },
+      {
+        $set: {
+          isActive: false,
+        },
+      },
+    );
+  }
+
+  async updateActivity(sessionId: string) {
+    return this.sessionModel.findOneAndUpdate(
+      {
+        _id: sessionId,
+        isActive: true,
+        expiresAt: {
+          $gt: new Date(),
+        },
+      },
+      {
+        $set: {
+          lastActiveAt: new Date(),
+        },
+      },
+    );
+  }
+  // =====================================
+  // ADMIN SUMMARY
+  // =====================================
+  async getSessionSummary(userId: string) {
+    const sessions = await this.getUserSessions(userId);
+
+    const activeSessions = sessions.filter((session) => session.isActive);
+
+    return {
+      latestSessions: sessions.slice(0, 10),
+
+      totalSessions: sessions.length,
+
+      activeSessions: activeSessions.length,
+
+      lastLogin: sessions.length ? sessions[0].lastActiveAt : null,
+
+      currentSession: activeSessions.length ? activeSessions[0] : null,
+    };
+  }
+
+  async getUserSessions(userId: string) {
+    const now = new Date();
+
+    const sessions = await this.sessionModel
+      .find({
+        userId: new Types.ObjectId(userId),
+      })
+      .sort({
+        lastActiveAt: -1,
+      });
+
+    return sessions.map((session) => ({
+      ...session.toObject(),
+
+      isActive: session.isActive && session.expiresAt > now,
+
+      expired: session.expiresAt <= now,
+    }));
+  }
+
+  async cleanupUserSessions(userId: string) {
+    return this.sessionModel.updateMany(
+      {
+        userId,
+        expiresAt: {
+          $lte: new Date(),
+        },
+        isActive: true,
+      },
+      {
+        $set: {
+          isActive: false,
+        },
+      },
+    );
+  }
+}
