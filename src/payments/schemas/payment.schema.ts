@@ -20,6 +20,12 @@ export class Payment {
 
   @Prop({
     required: true,
+    enum: ['NGN', 'USD'],
+  })
+  currency!: 'NGN' | 'USD';
+
+  @Prop({
+    required: true,
     unique: true,
   })
   reference!: string;
@@ -35,6 +41,28 @@ export class Payment {
     required: true,
   })
   type!: PaymentType;
+
+  // =====================================
+  // GATEWAY PAYMENT VALUES
+  // =====================================
+
+  @Prop({
+    required: true,
+  })
+  gatewayAmount?: number;
+
+  @Prop({
+    type: String,
+    enum: ['NGN'],
+    default: 'NGN',
+  })
+  gatewayCurrency?: 'NGN';
+
+  @Prop({
+    type: Number,
+    default: null,
+  })
+  exchangeRate?: number;
 
   @Prop({
     enum: ['manual', 'paystack', 'opay'],

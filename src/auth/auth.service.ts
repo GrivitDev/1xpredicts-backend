@@ -20,6 +20,7 @@ import { PromosService } from 'src/promos/promos.service';
 
 import { UserStatus } from 'src/users/schemas/user.schema';
 import { TelegramService } from 'src/telegram/telegram.service';
+import { GeoLocationService } from 'src/common/services/geo-location.service';
 
 @Injectable()
 export class AuthService {
@@ -31,12 +32,13 @@ export class AuthService {
     private emailService: EmailService,
     private telegramService: TelegramService,
     private promosService: PromosService,
+    private readonly geoLocationService: GeoLocationService,
   ) {}
 
   // ======================
   // REGISTER
   // ======================
-  async register(registerDto: RegisterDto) {
+  async register(registerDto: RegisterDto, ip?: string) {
     const {
       fullName,
       username,
@@ -91,12 +93,24 @@ export class AuthService {
         throw new BadRequestException('Invalid or expired promo code');
       }
     }
+
+    const location = await this.geoLocationService.lookup(ip || '');
+
+    const country = location?.country || '';
+    const countryCode = location?.countryCode || '';
+    const currency = countryCode === 'NG' ? 'NGN' : 'USD';
+
     const user = await this.usersService.create({
       fullName,
       username: normalizedUsername,
       phoneNumber,
       email,
       password: hashedPassword,
+
+      country,
+      countryCode,
+      currency,
+
       referredBy,
       pendingPromoCode: promoCode?.trim(),
     });
@@ -150,10 +164,6 @@ export class AuthService {
       throw new UnauthorizedException('Account is temporarily banned');
     }
 
-    if (user.bannedUntil && user.bannedUntil > new Date()) {
-      throw new UnauthorizedException('Account temporarily banned');
-    }
-
     // UPDATE LOGIN INFO
     await this.usersService.updateLoginInfo(user._id.toString());
 
@@ -188,6 +198,10 @@ export class AuthService {
 
       role: user.role,
 
+      country: user.country,
+      countryCode: user.countryCode,
+      currency: user.currency,
+
       sessionId: session._id.toString(),
     });
 
@@ -200,6 +214,10 @@ export class AuthService {
         username: user.username,
         email: user.email,
         role: user.role,
+
+        country: user.country,
+        countryCode: user.countryCode,
+        currency: user.currency,
       },
     };
   }
@@ -224,7 +242,7 @@ export class AuthService {
     await user.save();
 
     const frontendUrl =
-      process.env.FRONTEND_URL || 'https://www.1xpredicts.com';
+      process.env.FRONTEND_URL || 'https://www.2xpredict.com';
 
     const resetLink =
       `${frontendUrl}/reset-password` +

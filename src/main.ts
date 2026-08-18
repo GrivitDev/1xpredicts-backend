@@ -14,8 +14,8 @@ async function bootstrap() {
     ) => {
       const allowedOrigins = [
         process.env.FRONTEND_URL,
-        'https://www.1xpredicts.com',
-        'https://1xpredicts.com',
+        'https://www.2xpredict.com',
+        'https://2xpredict.com',
         'http://localhost:3000',
       ].filter(Boolean);
 

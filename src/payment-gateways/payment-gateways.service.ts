@@ -3,11 +3,11 @@ import { BadRequestException, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
 import { PaymentsService } from '../payments/payments.service';
-
 import { TelegramService } from '../telegram/telegram.service';
 
 import { PaymentGatewayFactory } from './providers/payment-gateway.factory';
 import { UsersService } from 'src/users/users.service';
+import { ExchangeRateService } from './exchange-rate.service';
 
 @Injectable()
 export class PaymentGatewaysService {
@@ -21,6 +21,8 @@ export class PaymentGatewaysService {
     private readonly telegramService: TelegramService,
 
     private readonly usersService: UsersService,
+
+    private readonly exchangeRateService: ExchangeRateService,
   ) {}
 
   // ===================================================
@@ -28,42 +30,84 @@ export class PaymentGatewaysService {
   // ===================================================
   async initializePayment(dto: {
     userId: string;
-
     email: string;
-
     gateway: 'paystack' | 'opay';
-
     type: 'subscription' | 'prediction' | 'vip_upgrade';
-
     target: string;
   }) {
     // =================================================
-    // CREATE PENDING PAYMENT RECORD
+    // GET ORIGINAL PRICE FROM BACKEND
     // =================================================
-    const payment = await this.paymentsService.createGatewayPaymentRecord({
+
+    const pricing = await this.paymentsService.calculateGatewayPaymentAmount({
       userId: dto.userId,
-
-      email: dto.email,
-
-      gateway: dto.gateway,
-
       type: dto.type,
-
       target: dto.target,
     });
 
+    const originalAmount = pricing.amount;
+    const originalCurrency = pricing.currency;
+
     // =================================================
-    // CREATE GATEWAY INSTANCE
+    // CONVERT USD → NGN FOR GATEWAY
     // =================================================
+
+    let gatewayAmount = originalAmount;
+    let exchangeRate: number | undefined;
+
+    if (originalCurrency === 'USD') {
+      const conversion =
+        await this.exchangeRateService.convertUsdToNgn(originalAmount);
+
+      gatewayAmount = conversion.amount;
+      exchangeRate = conversion.rate;
+    }
+
+    // =================================================
+    // CREATE PAYMENT RECORD
+    // =================================================
+
+    const payment = await this.paymentsService.createGatewayPaymentRecord({
+      userId: dto.userId,
+      email: dto.email,
+      gateway: dto.gateway,
+      type: dto.type,
+      target: dto.target,
+
+      // What the customer actually purchased
+      amount: originalAmount,
+      currency: originalCurrency,
+
+      // What Paystack/OPay actually receives
+      gatewayAmount,
+      gatewayCurrency: 'NGN',
+
+      // Rate used for conversion
+      exchangeRate,
+    });
+
+    // =================================================
+    // CREATE GATEWAY
+    // =================================================
+
     const gateway = this.gatewayFactory.create(dto.gateway);
 
     // =================================================
-    // INITIALIZE PAYMENT WITH GATEWAY
+    // SEND ONLY NGN TO GATEWAY
     // =================================================
+
+    if (payment.gatewayAmount == null) {
+      throw new BadRequestException(
+        'Gateway payment amount could not be calculated.',
+      );
+    }
+
     return gateway.initializePayment({
       email: dto.email,
 
-      amount: payment.amount,
+      amount: payment.gatewayAmount,
+
+      currency: 'NGN',
 
       reference: payment.reference,
 
@@ -75,25 +119,12 @@ export class PaymentGatewaysService {
 
   // ===================================================
   // VERIFY PAYMENT
-  //
-  // THIS IS THE ONLY PAYMENT APPROVAL FLOW.
-  //
-  // Callback Page
-  //      ↓
-  // Verify with Gateway
-  //      ↓
-  // Approve Payment
-  //      ↓
-  // Activate Subscription / Prediction
   // ===================================================
+
   async verifyPayment(gatewayName: 'paystack' | 'opay', reference: string) {
     const gateway = this.gatewayFactory.create(gatewayName);
 
     const verification = await gateway.verifyPayment(reference);
-
-    // =================================================
-    // SUCCESS
-    // =================================================
 
     if (verification.status === 'success') {
       if (!verification.transactionId) {
@@ -104,15 +135,12 @@ export class PaymentGatewaysService {
 
       const payment = await this.paymentsService.approveGatewayPayment(
         reference,
-
         verification.transactionId,
-
         verification.raw,
       );
 
       return {
         success: true,
-
         status: 'approved',
 
         message:
@@ -127,14 +155,9 @@ export class PaymentGatewaysService {
       };
     }
 
-    // =================================================
-    // PENDING
-    // =================================================
-
     if (verification.status === 'pending') {
       return {
         success: false,
-
         status: 'pending',
 
         message:
@@ -147,19 +170,13 @@ export class PaymentGatewaysService {
       };
     }
 
-    // =================================================
-    // FAILED
-    // =================================================
-
     await this.paymentsService.rejectGatewayPayment(
       reference,
-
       verification.raw,
     );
 
     return {
       success: false,
-
       status: 'failed',
 
       message: verification.message ?? 'We could not confirm your payment.',
@@ -172,57 +189,23 @@ export class PaymentGatewaysService {
 
   // ===================================================
   // WEBHOOK
-  //
-  // IMPORTANT:
-  //
-  // Webhooks DO NOT approve payments.
-  //
-  // Webhooks DO NOT activate subscriptions.
-  //
-  // Webhooks ONLY notify the admin that the gateway
-  // has reported a successful payment.
-  //
-  // Final verification and activation happen through
-  // the payment callback page.
   // ===================================================
+
   async handleWebhook(
     gatewayName: 'paystack' | 'opay',
-
     payload: any,
-
     signature?: string,
   ) {
-    // =================================================
-    // CREATE GATEWAY INSTANCE
-    // =================================================
     const gateway = this.gatewayFactory.create(gatewayName);
 
-    // =================================================
-    // VALIDATE WEBHOOK SIGNATURE
-    // =================================================
-    const valid = await gateway.validateWebhook(
-      payload,
-
-      signature,
-    );
+    const valid = await gateway.validateWebhook(payload, signature);
 
     if (!valid) {
       throw new BadRequestException('Invalid webhook signature.');
     }
 
-    // =================================================
-    // PARSE WEBHOOK EVENT
-    // =================================================
     const event = await gateway.parseWebhook(payload);
 
-    // =================================================
-    // IGNORE NON-SUCCESS EVENTS
-    //
-    // We only notify the admin when the gateway reports
-    // a successful payment event.
-    //
-    // We do NOT approve the payment here.
-    // =================================================
     if (event.status !== 'success') {
       return {
         received: true,
@@ -250,7 +233,11 @@ export class PaymentGatewaysService {
 
       email: user.email,
 
+      // Original customer amount
       amount: payment.amount,
+
+      // Original customer currency
+      currency: payment.currency,
 
       type: payment.type,
 
@@ -260,9 +247,7 @@ export class PaymentGatewaysService {
 
       transactionId: event.transactionId,
     });
-    // =================================================
-    // ACKNOWLEDGE WEBHOOK
-    // =================================================
+
     return {
       received: true,
     };

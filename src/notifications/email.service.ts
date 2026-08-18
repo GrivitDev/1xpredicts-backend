@@ -25,7 +25,7 @@ export class EmailService {
   async sendOtpEmail(email: string, otp: string) {
     try {
       const response = await this.resend.emails.send({
-        from: 'Honest Predict <register@1xpredicts.com>',
+        from: 'Honest Predict <register@2xpredict.com>',
         to: email,
         subject: 'Verify Your Email Address',
         html: `
@@ -76,7 +76,7 @@ export class EmailService {
 <td>
 
 <img
-  src="https://www.1xpredicts.com/banner.png"
+  src="https://www.2xpredict.com/banner.png"
   alt="Football Predictions"
   width="600"
   style="
@@ -242,14 +242,14 @@ you can safely ignore this email.
 >
 
 <a
-  href="https://www.1xpredicts.com"
+  href="https://www.2xpredict.com"
   style="
     color:#2563eb;
     text-decoration:none;
   "
 >
 
-www.1xpredicts.com
+www.2xpredict.com
 
 </a>
 
@@ -283,7 +283,7 @@ www.1xpredicts.com
 
   async sendPasswordResetEmail(email: string, resetLink: string) {
     await this.resend.emails.send({
-      from: 'Honest Predict <passwordreset@1xpredicts.com>',
+      from: 'Honest Predict <passwordreset@2xpredict.com>',
       to: email,
       subject: 'Reset Your Password',
       html: `
@@ -332,7 +332,7 @@ www.1xpredicts.com
 <td>
 
 <img
-  src="https://www.1xpredicts.com/banner.png"
+  src="https://www.2xpredict.com/banner.png"
   alt="Football"
   width="600"
   style="
@@ -506,14 +506,14 @@ Your password will remain unchanged.
 >
 
 <a
-  href="https://www.1xpredicts.com"
+  href="https://www.2xpredict.com"
   style="
     color:#2563eb;
     text-decoration:none;
   "
 >
 
-www.1xpredicts.com
+www.2xpredict.com
 
 </a>
 
@@ -540,15 +540,18 @@ www.1xpredicts.com
   async sendPaymentReceivedEmail(data: {
     email: string;
     amount: number;
+    currency: string;
     paymentType: string;
     reference: string;
   }) {
-    const homeUrl = 'https://www.1xpredicts.com';
+    const homeUrl = 'https://www.2xpredict.com';
 
-    const aboutUrl = 'https://www.1xpredicts.com/about';
+    const aboutUrl = 'https://www.2xpredict.com/about';
+
+    const symbol = data.currency === 'USD' ? '$' : '₦';
 
     return this.resend.emails.send({
-      from: 'Honest Predict <payments@1xpredicts.com>',
+      from: 'Honest Predict <payments@2xpredict.com>',
 
       to: data.email,
 
@@ -586,7 +589,7 @@ ${infoCard('Payment Summary', [
   },
   {
     label: 'Amount',
-    value: `₦${data.amount.toLocaleString()}`,
+    value: `${symbol}${data.amount.toLocaleString()}`,
   },
   {
     label: 'Reference',
@@ -616,18 +619,21 @@ Our support team is always available if you have any questions regarding your pa
     email: string;
     plan: 'regular' | 'vip';
     amount: number;
+    currency: string;
     activatedDate: Date;
     expiryDate: Date;
   }) {
-    const dashboardUrl = 'https://www.1xpredicts.com/dashboard';
+    const dashboardUrl = 'https://www.2xpredict.com/dashboard';
 
-    const predictionsUrl = 'https://www.1xpredicts.com/predictions';
+    const predictionsUrl = 'https://www.2xpredict.com/predictions';
+
+    const symbol = data.currency === 'USD' ? '$' : '₦';
 
     const planName =
       data.plan === 'vip' ? 'VIP Subscription' : 'Regular Subscription';
 
     return this.resend.emails.send({
-      from: 'Honest Predict <subscriptions@1xpredicts.com>',
+      from: 'Honest Predict <subscriptions@2xpredict.com>',
 
       to: data.email,
 
@@ -666,7 +672,7 @@ ${infoCard('Subscription Summary', [
   },
   {
     label: 'Amount Paid',
-    value: `₦${data.amount.toLocaleString()}`,
+    value: `${symbol}${data.amount.toLocaleString()}`,
   },
   {
     label: 'Activated',
@@ -744,14 +750,17 @@ We wish you success with your football predictions!
     email: string;
     paymentType: string;
     amount: number;
+    currency: string;
     reason?: string;
   }) {
-    const paymentUrl = 'https://www.1xpredicts.com/payments';
+    const paymentUrl = 'https://www.2xpredict.com/payments';
 
-    const supportUrl = 'https://www.1xpredicts.com/about';
+    const supportUrl = 'https://www.2xpredict.com/about';
+
+    const symbol = data.currency === 'USD' ? '$' : '₦';
 
     return this.resend.emails.send({
-      from: 'Honest Predict <payments@1xpredicts.com>',
+      from: 'Honest Predict <payments@2xpredict.com>',
 
       to: data.email,
 
@@ -787,7 +796,7 @@ ${infoCard('Payment Details', [
   },
   {
     label: 'Amount',
-    value: `₦${data.amount.toLocaleString()}`,
+    value: `${symbol}${data.amount.toLocaleString()}`,
   },
   {
     label: 'Status',
@@ -816,14 +825,14 @@ We appreciate your continued support of Honest Predict.
   }
 
   async sendWelcomeEmail(data: { email: string; fullName: string }) {
-    const dashboardUrl = 'https://www.1xpredicts.com/dashboard';
+    const dashboardUrl = 'https://www.2xpredict.com/dashboard';
 
-    const predictionsUrl = 'https://www.1xpredicts.com/predictions';
+    const predictionsUrl = 'https://www.2xpredict.com/predictions';
 
-    const vipUrl = 'https://www.1xpredicts.com/subscription';
+    const vipUrl = 'https://www.2xpredict.com/subscription';
 
     return this.resend.emails.send({
-      from: 'Honest Predict <welcome@1xpredicts.com>',
+      from: 'Honest Predict <welcome@2xpredict.com>',
 
       to: data.email,
 
@@ -902,12 +911,12 @@ We wish you success and hope you enjoy everything our platform has to offer.
     expiryDate: Date;
     daysRemaining: number;
   }) {
-    const renewalUrl = 'https://www.1xpredicts.com/subscription';
+    const renewalUrl = 'https://www.2xpredict.com/subscription';
 
-    const dashboardUrl = 'https://www.1xpredicts.com/dashboard';
+    const dashboardUrl = 'https://www.2xpredict.com/dashboard';
 
     return this.resend.emails.send({
-      from: 'Honest Predict <subscriptions@1xpredicts.com>',
+      from: 'Honest Predict <subscriptions@2xpredict.com>',
 
       to: data.email,
 
@@ -977,12 +986,12 @@ We appreciate your continued support.
     plan: 'regular' | 'vip';
     expiryDate: Date;
   }) {
-    const renewalUrl = 'https://www.1xpredicts.com/subscription';
+    const renewalUrl = 'https://www.2xpredict.com/subscription';
 
-    const predictionsUrl = 'https://www.1xpredicts.com/predictions';
+    const predictionsUrl = 'https://www.2xpredict.com/predictions';
 
     return this.resend.emails.send({
-      from: 'Honest Predict <subscriptions@1xpredicts.com>',
+      from: 'Honest Predict <subscriptions@2xpredict.com>',
 
       to: data.email,
 
