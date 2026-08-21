@@ -58,20 +58,20 @@ export class AdsService {
   // GET ALL ADS
   // =====================================================
 
-  async findAll() {
-    return this.adModel
+async findAll() {
+  const ads = await this.adModel
+    .find()
+    .populate('createdBy', 'fullName email')
+    .sort({
+      priority: -1,
+      createdAt: -1,
+    });
 
-      .find()
+  console.log('ADS IN DB:', ads.length);
+  console.log(ads);
 
-      .populate('createdBy', 'fullName email')
-
-      .sort({
-        priority: -1,
-
-        createdAt: -1,
-      });
-  }
-
+  return ads;
+}
   // =====================================================
   // GET SINGLE AD
   // =====================================================
