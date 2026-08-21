@@ -59,24 +59,19 @@ export class AdsService {
   // =====================================================
 
   async findAll() {
-    console.log('========== ADS DEBUG ==========');
+    return this.adModel
 
-    console.log('DB NAME:', this.adModel.db.name);
+      .find()
 
-    console.log('COLLECTION:', this.adModel.collection.name);
+      .populate('createdBy', 'fullName email')
 
-    const count = await this.adModel.countDocuments();
+      .sort({
+        priority: -1,
 
-    console.log('ADS COUNT:', count);
-
-    const ads = await this.adModel.find().lean();
-
-    console.log('ADS:', ads);
-
-    console.log('==============================');
-
-    return ads;
+        createdAt: -1,
+      });
   }
+
   // =====================================================
   // GET SINGLE AD
   // =====================================================
