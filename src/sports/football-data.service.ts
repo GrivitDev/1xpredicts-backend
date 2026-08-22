@@ -888,10 +888,9 @@ export class FootballDataService implements OnModuleInit {
       if (match.status !== 'FINISHED') {
         continue;
       }
+      const homeId = match.homeTeamId;
 
-      const homeId = rawMatch.homeTeamId;
-
-      const awayId = rawMatch.awayTeamId;
+      const awayId = match.awayTeamId;
 
       /*
        * mapMatch intentionally exposes
