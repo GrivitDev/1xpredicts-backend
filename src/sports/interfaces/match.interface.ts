@@ -1,5 +1,3 @@
-// src/sports/interfaces/match.interface.ts
-
 // ============================================================
 // GOAL EVENT
 // ============================================================
@@ -35,6 +33,12 @@ export interface GoalEvent {
     away?: number;
   };
 }
+
+// ============================================================
+// MATCH DURATION
+// ============================================================
+
+export type MatchDuration = 'REGULAR' | 'EXTRA_TIME' | 'PENALTIES' | string;
 
 // ============================================================
 // MATCH
@@ -74,14 +78,32 @@ export interface Match {
   awayTeamBadge?: string;
 
   // ==========================================================
-  // MATCH TIME / LOCATION
+  // DATE / TIME / LOCATION
   // ==========================================================
 
+  /**
+   * Original UTC datetime returned by Football-Data.org.
+   *
+   * Example:
+   * 2026-08-22T18:35:10Z
+   */
   date: string;
 
+  /**
+   * UTC time only.
+   *
+   * Example:
+   * 18:35:10
+   */
   time?: string;
 
   venue?: string;
+
+  /**
+   * Unix timestamp.
+   * This is timezone-independent.
+   */
+  kickoffTimestamp: number;
 
   // ==========================================================
   // STATUS
@@ -115,15 +137,32 @@ export interface Match {
 
   awayScore?: number | null;
 
+  /**
+   * REGULAR
+   * EXTRA_TIME
+   * PENALTIES
+   */
+  scoreDuration?: MatchDuration;
+
   // ==========================================================
-  // GOAL EVENTS
+  // HALF-TIME SCORE
+  // ==========================================================
+
+  halfTimeHomeScore?: number | null;
+
+  halfTimeAwayScore?: number | null;
+
+  // ==========================================================
+  // EXTRA-TIME SCORE
+  // ==========================================================
+
+  extraTimeHomeScore?: number | null;
+
+  extraTimeAwayScore?: number | null;
+
+  // ==========================================================
+  // GOALS
   // ==========================================================
 
   goals: GoalEvent[];
-
-  // ==========================================================
-  // TIMESTAMP
-  // ==========================================================
-
-  kickoffTimestamp: number;
 }

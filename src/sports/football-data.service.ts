@@ -5,12 +5,13 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 
-import axios, { AxiosError, AxiosInstance } from 'axios';
+import axios, { AxiosInstance } from 'axios';
 
 import { ConfigService } from '@nestjs/config';
 
 import { League } from './interfaces/league.interface';
-import { Match } from './interfaces/match.interface';
+
+import { Match, GoalEvent, MatchDuration } from './interfaces/match.interface';
 
 // ============================================================
 // TYPES
@@ -54,38 +55,6 @@ interface CompetitionInfo {
     stages?: CompetitionStage[];
 
     winner?: unknown;
-  };
-}
-
-interface GoalEvent {
-  minute: number;
-
-  injuryTime?: number | null;
-
-  type?: string;
-
-  team?: {
-    id?: number;
-
-    name?: string;
-  };
-
-  scorer?: {
-    id?: number;
-
-    name?: string;
-  };
-
-  assist?: {
-    id?: number;
-
-    name?: string;
-  };
-
-  score?: {
-    home?: number;
-
-    away?: number;
   };
 }
 
@@ -186,13 +155,10 @@ export interface CompetitionStandingsResponse {
 
   season?: CompetitionInfo['season'];
 
-  // Normal league
   table?: TournamentStanding[];
 
-  // Cup groups
   groups?: StandingGroup[];
 
-  // Cup knockout
   knockout?: KnockoutStage[];
 }
 
@@ -229,9 +195,6 @@ export class FootballDataService implements OnModuleInit {
       headers: {
         'X-Auth-Token': this.apiKey,
 
-        // IMPORTANT:
-        // Football-Data.org normally folds goal
-        // information in match list responses.
         'X-Unfold-Goals': 'true',
       },
 
@@ -248,6 +211,28 @@ export class FootballDataService implements OnModuleInit {
       throw new BadRequestException('leagueCode is required');
     }
   }
+
+  // ==========================================================
+  // UTC TIME
+  // ==========================================================
+
+  private formatUtcTime(date: Date): string {
+    return date.toLocaleTimeString('en-GB', {
+      timeZone: 'UTC',
+
+      hour: '2-digit',
+
+      minute: '2-digit',
+
+      second: '2-digit',
+
+      hour12: false,
+    });
+  }
+
+  // ==========================================================
+  // STAGE LABEL
+  // ==========================================================
 
   private getStageLabel(stage?: string): string {
     switch (stage) {
@@ -277,11 +262,15 @@ export class FootballDataService implements OnModuleInit {
         return (
           stage
             ?.replaceAll('_', ' ')
-            ?.toLowerCase()
-            ?.replace(/\b\w/g, (char) => char.toUpperCase()) || 'Stage'
+            .toLowerCase()
+            .replace(/\b\w/g, (char) => char.toUpperCase()) || 'Stage'
         );
     }
   }
+
+  // ==========================================================
+  // STAGE ORDER
+  // ==========================================================
 
   private getStageOrder(stage?: string): number {
     switch (stage) {
@@ -309,6 +298,10 @@ export class FootballDataService implements OnModuleInit {
     }
   }
 
+  // ==========================================================
+  // MAP GOALS
+  // ==========================================================
+
   private mapGoals(goals: any[] | undefined): GoalEvent[] {
     if (!Array.isArray(goals)) {
       return [];
@@ -324,6 +317,7 @@ export class FootballDataService implements OnModuleInit {
       team: goal?.team
         ? {
             id: goal.team.id,
+
             name: goal.team.name,
           }
         : undefined,
@@ -331,6 +325,7 @@ export class FootballDataService implements OnModuleInit {
       scorer: goal?.scorer
         ? {
             id: goal.scorer.id,
+
             name: goal.scorer.name,
           }
         : undefined,
@@ -338,6 +333,7 @@ export class FootballDataService implements OnModuleInit {
       assist: goal?.assist
         ? {
             id: goal.assist.id,
+
             name: goal.assist.name,
           }
         : undefined,
@@ -345,11 +341,16 @@ export class FootballDataService implements OnModuleInit {
       score: goal?.score
         ? {
             home: goal.score.home,
+
             away: goal.score.away,
           }
         : undefined,
     }));
   }
+
+  // ==========================================================
+  // MAP MATCH
+  // ==========================================================
 
   private mapMatch(match: any, leagueCode?: string): Match {
     const kickoff = new Date(match.utcDate);
@@ -388,17 +389,16 @@ export class FootballDataService implements OnModuleInit {
       awayTeamBadge: match.awayTeam?.crest,
 
       // ========================================================
-      // DATE / TIME
+      // DATE / UTC TIME
       // ========================================================
 
       date: match.utcDate,
 
-      time: kickoff.toLocaleTimeString([], {
-        hour: '2-digit',
-        minute: '2-digit',
-      }),
+      time: this.formatUtcTime(kickoff),
 
       venue: match.venue || 'Unknown Stadium',
+
+      kickoffTimestamp: kickoff.getTime(),
 
       // ========================================================
       // STATUS
@@ -432,19 +432,35 @@ export class FootballDataService implements OnModuleInit {
 
       awayScore: match.score?.fullTime?.away ?? null,
 
+      scoreDuration: match.score?.duration as MatchDuration | undefined,
+
+      // ========================================================
+      // HALF-TIME SCORE
+      // ========================================================
+
+      halfTimeHomeScore: match.score?.halfTime?.home ?? null,
+
+      halfTimeAwayScore: match.score?.halfTime?.away ?? null,
+
+      // ========================================================
+      // EXTRA-TIME SCORE
+      // ========================================================
+
+      extraTimeHomeScore: match.score?.extraTime?.home ?? null,
+
+      extraTimeAwayScore: match.score?.extraTime?.away ?? null,
+
       // ========================================================
       // GOALS
       // ========================================================
 
       goals: this.mapGoals(match.goals),
-
-      // ========================================================
-      // TIMESTAMP
-      // ========================================================
-
-      kickoffTimestamp: kickoff.getTime(),
     };
   }
+
+  // ==========================================================
+  // COMPETITION INFO
+  // ==========================================================
 
   private async getCompetitionInfo(
     leagueCode: string,
@@ -492,6 +508,10 @@ export class FootballDataService implements OnModuleInit {
     }
   }
 
+  // ==========================================================
+  // API ERROR
+  // ==========================================================
+
   private logApiError(error: unknown, context: string) {
     if (axios.isAxiosError(error)) {
       console.error(
@@ -512,16 +532,16 @@ export class FootballDataService implements OnModuleInit {
     try {
       const res = await this.http.get('/competitions');
 
-      return (res.data.competitions || []).map((l: any) => ({
-        code: l.code,
+      return (res.data.competitions || []).map((league: any) => ({
+        code: league.code,
 
-        name: l.name,
+        name: league.name,
 
-        country: l.area?.name || 'Unknown',
+        country: league.area?.name || 'Unknown',
 
-        type: l.type,
+        type: league.type,
 
-        emblem: l.emblem,
+        emblem: league.emblem,
       }));
     } catch (error) {
       this.logApiError(error, 'Leagues');
@@ -532,10 +552,6 @@ export class FootballDataService implements OnModuleInit {
 
   // ==========================================================
   // LIVE MATCHES
-  //
-  // IMPORTANT:
-  // Uses /matches instead of selected competition.
-  // This allows the homepage to show all live games.
   // ==========================================================
 
   async getLiveMatches(): Promise<Match[]> {
@@ -611,9 +627,6 @@ export class FootballDataService implements OnModuleInit {
         },
       });
 
-      // Depending on representation:
-      // some responses expose the object directly,
-      // while older code expected res.data.match.
       const match = res.data?.match ?? res.data;
 
       if (!match) {
@@ -678,8 +691,6 @@ export class FootballDataService implements OnModuleInit {
 
       const standings = res.data?.standings || [];
 
-      // For LEAGUE competitions the API
-      // supplies TOTAL / HOME / AWAY.
       const total =
         standings.find((standing: any) => standing.type === 'TOTAL') ||
         standings[0];
@@ -760,12 +771,6 @@ export class FootballDataService implements OnModuleInit {
 
   // ==========================================================
   // CUP MATCHES
-  //
-  // CUP competitions don't expose /standings.
-  // We get the season matches and build:
-  //
-  // GROUP STAGE -> GROUP TABLES
-  // KNOCKOUT -> MATCH BRACKETS
   // ==========================================================
 
   private async getCompetitionMatches(
@@ -808,7 +813,7 @@ export class FootballDataService implements OnModuleInit {
   }
 
   // ==========================================================
-  // BUILD CUP GROUP TABLES
+  // BUILD CUP GROUPS
   // ==========================================================
 
   private buildCupGroups(matches: Match[]): StandingGroup[] {
@@ -888,14 +893,10 @@ export class FootballDataService implements OnModuleInit {
       if (match.status !== 'FINISHED') {
         continue;
       }
+
       const homeId = match.homeTeamId;
 
       const awayId = match.awayTeamId;
-
-      /*
-       * mapMatch intentionally exposes
-       * team IDs below.
-       */
 
       if (homeId == null || awayId == null) {
         continue;
@@ -914,6 +915,7 @@ export class FootballDataService implements OnModuleInit {
       const awayGoals = match.awayScore ?? 0;
 
       home.playedGames++;
+
       away.playedGames++;
 
       home.goalsFor += homeGoals;
@@ -926,19 +928,23 @@ export class FootballDataService implements OnModuleInit {
 
       if (homeGoals > awayGoals) {
         home.won++;
+
         home.points += 3;
 
         away.lost++;
       } else if (homeGoals < awayGoals) {
         away.won++;
+
         away.points += 3;
 
         home.lost++;
       } else {
         home.draw++;
+
         away.draw++;
 
         home.points++;
+
         away.points++;
       }
     }
@@ -1005,12 +1011,13 @@ export class FootballDataService implements OnModuleInit {
       .sort(([a], [b]) => this.getStageOrder(a) - this.getStageOrder(b))
 
       .map(([stage, stageMatches]) => ({
-        stage: stage,
+        stage,
 
         label: this.getStageLabel(stage),
 
         matches: stageMatches
           .sort((a, b) => a.kickoffTimestamp - b.kickoffTimestamp)
+
           .map((match) => ({
             id: match.id,
 
