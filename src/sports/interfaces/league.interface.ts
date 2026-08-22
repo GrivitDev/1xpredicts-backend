@@ -5,7 +5,7 @@ export interface League {
 
   country: string;
 
-  type?: string;
+  type?: 'LEAGUE' | 'CUP' | 'PLAYOFFS' | 'LEAGUE_CUP' | (string & {});
 
   emblem?: string;
 }

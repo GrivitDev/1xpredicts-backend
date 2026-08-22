@@ -371,13 +371,25 @@ export class FootballDataService implements OnModuleInit {
         type: match.competition?.type,
       },
 
+      // ========================================================
+      // TEAMS
+      // ========================================================
+
       homeTeam: match.homeTeam?.name || '',
 
       awayTeam: match.awayTeam?.name || '',
 
+      homeTeamId: match.homeTeam?.id,
+
+      awayTeamId: match.awayTeam?.id,
+
       homeTeamBadge: match.homeTeam?.crest,
 
       awayTeamBadge: match.awayTeam?.crest,
+
+      // ========================================================
+      // DATE / TIME
+      // ========================================================
 
       date: match.utcDate,
 
@@ -388,26 +400,47 @@ export class FootballDataService implements OnModuleInit {
 
       venue: match.venue || 'Unknown Stadium',
 
+      // ========================================================
+      // STATUS
+      // ========================================================
+
       status: match.status,
 
       matchday: match.matchday,
 
-      // IMPORTANT FOR CUPS
+      // ========================================================
+      // TOURNAMENT
+      // ========================================================
+
       stage: match.stage,
 
       group: match.group || null,
 
-      // IMPORTANT FOR LIVE MATCHES
+      // ========================================================
+      // LIVE
+      // ========================================================
+
       minute: match.minute ?? null,
 
       injuryTime: match.injuryTime ?? null,
+
+      // ========================================================
+      // SCORE
+      // ========================================================
 
       homeScore: match.score?.fullTime?.home ?? null,
 
       awayScore: match.score?.fullTime?.away ?? null,
 
-      // GOAL EVENTS
+      // ========================================================
+      // GOALS
+      // ========================================================
+
       goals: this.mapGoals(match.goals),
+
+      // ========================================================
+      // TIMESTAMP
+      // ========================================================
 
       kickoffTimestamp: kickoff.getTime(),
     };
@@ -509,7 +542,7 @@ export class FootballDataService implements OnModuleInit {
     try {
       const res = await this.http.get('/matches', {
         params: {
-          status: 'LIVE,IN_PLAY,PAUSED',
+          status: 'LIVE',
         },
 
         headers: {
@@ -517,9 +550,14 @@ export class FootballDataService implements OnModuleInit {
         },
       });
 
-      return (res.data.matches || [])
+      return (res.data?.matches || [])
 
         .map((match: any) => this.mapMatch(match))
+
+        .filter(
+          (match: Match) =>
+            match.status === 'IN_PLAY' || match.status === 'PAUSED',
+        )
 
         .sort((a, b) => a.kickoffTimestamp - b.kickoffTimestamp);
     } catch (error) {
@@ -539,7 +577,7 @@ export class FootballDataService implements OnModuleInit {
     try {
       const res = await this.http.get(`/competitions/${leagueCode}/matches`, {
         params: {
-          status: 'SCHEDULED,IN_PLAY,PAUSED,LIVE',
+          status: 'SCHEDULED,LIVE',
         },
 
         headers: {
@@ -850,8 +888,6 @@ export class FootballDataService implements OnModuleInit {
       if (match.status !== 'FINISHED') {
         continue;
       }
-
-      const rawMatch = match as any;
 
       const homeId = rawMatch.homeTeamId;
 
