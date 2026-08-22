@@ -22,6 +22,7 @@ type CompetitionType = 'LEAGUE' | 'CUP' | 'PLAYOFFS' | 'LEAGUE_CUP' | string;
 type CompetitionStage =
   | 'REGULAR_SEASON'
   | 'GROUP_STAGE'
+  | 'ROUND_OF_32'
   | 'LAST_16'
   | 'ROUND_OF_16'
   | 'QUARTER_FINALS'
@@ -242,6 +243,9 @@ export class FootballDataService implements OnModuleInit {
       case 'GROUP_STAGE':
         return 'Group Stage';
 
+      case 'ROUND_OF_32':
+        return 'Round of 32';
+
       case 'LAST_16':
       case 'ROUND_OF_16':
         return 'Round of 16';
@@ -277,21 +281,24 @@ export class FootballDataService implements OnModuleInit {
       case 'GROUP_STAGE':
         return 1;
 
-      case 'LAST_16':
-      case 'ROUND_OF_16':
+      case 'ROUND_OF_32':
         return 2;
 
-      case 'QUARTER_FINALS':
+      case 'LAST_16':
+      case 'ROUND_OF_16':
         return 3;
 
-      case 'SEMI_FINALS':
+      case 'QUARTER_FINALS':
         return 4;
 
-      case 'THIRD_PLACE':
+      case 'SEMI_FINALS':
         return 5;
 
-      case 'FINAL':
+      case 'THIRD_PLACE':
         return 6;
+
+      case 'FINAL':
+        return 7;
 
       default:
         return 99;
