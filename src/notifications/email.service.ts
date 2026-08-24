@@ -25,7 +25,7 @@ export class EmailService {
   async sendOtpEmail(email: string, otp: string) {
     try {
       const response = await this.resend.emails.send({
-        from: 'Honest Predict <register@2xpredict.com>',
+        from: '2XPredict <register@2xpredict.com>',
         to: email,
         subject: 'Verify Your Email Address',
         html: `
@@ -114,7 +114,7 @@ Verify Your Email Address
   "
 >
 
-Welcome to <strong>Honest Predict</strong>!
+Welcome to <strong>2XPredict</strong>!
 
 <br><br>
 
@@ -202,7 +202,7 @@ For your security, never share this code with anyone.
   "
 >
 
-If you didn't create an Honest Predict account,
+If you didn't create an 2XPredict account,
 you can safely ignore this email.
 
 </p>
@@ -231,7 +231,7 @@ you can safely ignore this email.
   "
 >
 
-© ${new Date().getFullYear()} Honest Predict
+© ${new Date().getFullYear()} 2XPredict
 
 </p>
 
@@ -283,7 +283,7 @@ www.2xpredict.com
 
   async sendPasswordResetEmail(email: string, resetLink: string) {
     await this.resend.emails.send({
-      from: 'Honest Predict <passwordreset@2xpredict.com>',
+      from: '2XPredict <passwordreset@2xpredict.com>',
       to: email,
       subject: 'Reset Your Password',
       html: `
@@ -374,7 +374,7 @@ Hello,
 
 <br><br>
 
-We received a request to reset the password for your Honest Predict account.
+We received a request to reset the password for your 2XPredict account.
 
 If this was you, simply click the button below.
 
@@ -495,7 +495,7 @@ Your password will remain unchanged.
   "
 >
 
-© ${new Date().getFullYear()} Honest Predict
+© ${new Date().getFullYear()} 2XPredict
 
 </p>
 
@@ -551,7 +551,7 @@ www.2xpredict.com
     const symbol = data.currency === 'USD' ? '$' : '₦';
 
     return this.resend.emails.send({
-      from: 'Honest Predict <payments@2xpredict.com>',
+      from: '2XPredict <payments@2xpredict.com>',
 
       to: data.email,
 
@@ -569,7 +569,7 @@ ${sectionTitle('Payment Received')}
 ${paragraph(`
 Hello,
 
-Thank you for submitting your payment to Honest Predict.
+Thank you for submitting your payment to 2XPredict.
 
 Our finance team has successfully received your payment request and it is now awaiting verification.
 
@@ -603,7 +603,7 @@ ${infoCard('Payment Summary', [
 
 ${primaryButton('🏠 Go to Home', homeUrl)}
 
-${secondaryButton('ℹ About Honest Predict', aboutUrl)}
+${secondaryButton('ℹ About 2XPredict', aboutUrl)}
 
 ${paragraph(`
 Need help?
@@ -633,7 +633,7 @@ Our support team is always available if you have any questions regarding your pa
       data.plan === 'vip' ? 'VIP Subscription' : 'Regular Subscription';
 
     return this.resend.emails.send({
-      from: 'Honest Predict <subscriptions@2xpredict.com>',
+      from: '2XPredict <subscriptions@2xpredict.com>',
 
       to: data.email,
 
@@ -652,7 +652,7 @@ Congratulations!
 
 Your <strong>${planName}</strong> has been activated successfully.
 
-Thank you for choosing Honest Predict.
+Thank you for choosing 2XPredict.
 `)}
 
 ${successBox(`
@@ -737,7 +737,7 @@ ${primaryButton('📊 Go to Dashboard', dashboardUrl)}
 ${secondaryButton('⚽ Browse Predictions', predictionsUrl)}
 
 ${paragraph(`
-Thank you for trusting Honest Predict.
+Thank you for trusting 2XPredict.
 
 We wish you success with your football predictions!
 `)}
@@ -760,7 +760,7 @@ We wish you success with your football predictions!
     const symbol = data.currency === 'USD' ? '$' : '₦';
 
     return this.resend.emails.send({
-      from: 'Honest Predict <payments@2xpredict.com>',
+      from: '2XPredict <payments@2xpredict.com>',
 
       to: data.email,
 
@@ -812,12 +812,12 @@ If you believe this decision was made in error, please contact our support team 
 
 ${primaryButton('Submit Another Payment', paymentUrl)}
 
-${secondaryButton('About Honest Predict', supportUrl)}
+${secondaryButton('About 2XPredict', supportUrl)}
 
 ${paragraph(`
 Thank you for your patience and understanding.
 
-We appreciate your continued support of Honest Predict.
+We appreciate your continued support of 2XPredict.
 `)}
 `,
       }),
@@ -832,24 +832,24 @@ We appreciate your continued support of Honest Predict.
     const vipUrl = 'https://www.2xpredict.com/subscription';
 
     return this.resend.emails.send({
-      from: 'Honest Predict <welcome@2xpredict.com>',
+      from: '2XPredict <welcome@2xpredict.com>',
 
       to: data.email,
 
-      subject: 'Welcome to Honest Predict 🎉',
+      subject: 'Welcome to 2XPredict 🎉',
 
       html: emailLayout({
-        title: 'Welcome to Honest Predict',
+        title: 'Welcome to 2XPredict',
 
         preheader: 'Your account has been verified successfully.',
 
         body: `
-${sectionTitle('Welcome to Honest Predict! ⚽')}
+${sectionTitle('Welcome to 2XPredict! ⚽')}
 
 ${paragraph(`
 Hello <strong>${data.fullName}</strong>,
 
-Congratulations! Your account has been verified successfully, and you're now officially part of the Honest Predict community.
+Congratulations! Your account has been verified successfully, and you're now officially part of the 2XPredict community.
 
 We're excited to have you with us and look forward to helping you make smarter football prediction decisions.
 `)}
@@ -876,7 +876,7 @@ ${infoCard('Your Account', [
 ])}
 
 ${paragraph(`
-As a member of Honest Predict, you can:
+As a member of 2XPredict, you can:
 
 • View free football predictions
 
@@ -896,7 +896,7 @@ ${secondaryButton('Browse Predictions', predictionsUrl)}
 ${secondaryButton('Upgrade to VIP', vipUrl)}
 
 ${paragraph(`
-Thank you for choosing Honest Predict.
+Thank you for choosing 2XPredict.
 
 We wish you success and hope you enjoy everything our platform has to offer.
 `)}
@@ -916,7 +916,7 @@ We wish you success and hope you enjoy everything our platform has to offer.
     const dashboardUrl = 'https://www.2xpredict.com/dashboard';
 
     return this.resend.emails.send({
-      from: 'Honest Predict <subscriptions@2xpredict.com>',
+      from: '2XPredict <subscriptions@2xpredict.com>',
 
       to: data.email,
 
@@ -972,7 +972,7 @@ ${primaryButton('Renew Subscription', renewalUrl)}
 ${secondaryButton('Go to Dashboard', dashboardUrl)}
 
 ${paragraph(`
-Thank you for choosing Honest Predict.
+Thank you for choosing 2XPredict.
 
 We appreciate your continued support.
 `)}
@@ -991,7 +991,7 @@ We appreciate your continued support.
     const predictionsUrl = 'https://www.2xpredict.com/predictions';
 
     return this.resend.emails.send({
-      from: 'Honest Predict <subscriptions@2xpredict.com>',
+      from: '2XPredict <subscriptions@2xpredict.com>',
 
       to: data.email,
 
@@ -1054,7 +1054,7 @@ ${secondaryButton('Browse Free Predictions', predictionsUrl)}
 ${paragraph(`
 We hope to welcome you back soon.
 
-Thank you for being part of Honest Predict.
+Thank you for being part of 2XPredict.
 `)}
 `,
       }),

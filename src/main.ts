@@ -16,6 +16,7 @@ async function bootstrap() {
         process.env.FRONTEND_URL,
         'https://www.2xpredict.com',
         'https://2xpredict.com',
+        'http://localhost:3000',
       ].filter(Boolean);
 
       if (!origin || allowedOrigins.includes(origin)) {

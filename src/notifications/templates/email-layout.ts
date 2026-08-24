@@ -128,7 +128,7 @@ ${body}
   "
 >
 
-© ${year} Honest Predict
+© ${year} 2XPredict
 
 </p>
 
