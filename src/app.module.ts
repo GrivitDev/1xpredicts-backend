@@ -39,6 +39,8 @@ import { EmailModule } from './notifications/email.module';
 import { CommunityModule } from './community/community.module';
 import { PaymentGatewaysModule } from './payment-gateways/payment-gateways.module';
 
+import { WebsiteAnalyticsModule } from './website-analytics/website-analytics.module';
+
 @Module({
   imports: [
     ConfigModule.forRoot({
@@ -90,6 +92,8 @@ import { PaymentGatewaysModule } from './payment-gateways/payment-gateways.modul
     PaymentGatewaysModule,
 
     ReferralsModule,
+
+    WebsiteAnalyticsModule,
   ],
   providers: [AdminGateway],
 })
