@@ -1,4 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
+
 import { HydratedDocument, Types } from 'mongoose';
 
 import { AnalyticsVisitorType } from '../enums/analytics-visitor-type.enum';
@@ -65,12 +66,14 @@ export class AnalyticsVisitor {
   // ==========================================
 
   @Prop({
+    type: Date,
     default: null,
     index: true,
   })
   firstSeenAt?: Date | null;
 
   @Prop({
+    type: Date,
     default: null,
     index: true,
   })

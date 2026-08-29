@@ -48,18 +48,21 @@ export class AnalyticsSession {
   // ==========================================
 
   @Prop({
+    type: Date,
     required: true,
     index: true,
   })
   startedAt!: Date;
 
   @Prop({
+    type: Date,
     required: true,
     index: true,
   })
   lastActiveAt!: Date;
 
   @Prop({
+    type: Date,
     default: null,
   })
   endedAt?: Date | null;
@@ -68,6 +71,7 @@ export class AnalyticsSession {
     default: 0,
   })
   durationMs!: number;
+
   @Prop({
     default: 0,
   })
@@ -113,6 +117,7 @@ export class AnalyticsSession {
 
   @Prop({
     default: false,
+    index: true,
   })
   isActive!: boolean;
 

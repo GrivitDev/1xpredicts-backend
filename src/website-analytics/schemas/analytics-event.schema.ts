@@ -107,6 +107,7 @@ export class AnalyticsEvent {
   // ==========================================
 
   @Prop({
+    type: Date,
     required: true,
     index: true,
   })
