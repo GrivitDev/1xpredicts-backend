@@ -1,10 +1,18 @@
 import { Injectable } from '@nestjs/common';
 
 import { SubscriptionsService } from '../../subscriptions/subscriptions.service';
+
 import { PredictionPurchasesService } from '../../prediction-purchases/prediction-purchases.service';
 
+import { PredictionPreviewService } from '../prediction-preview.service';
+
 import { PlanLevels } from '../constants/plan-levels';
+
 import { PredictionAccessRules } from '../constants/access-rules';
+
+// ============================================================
+// TYPES
+// ============================================================
 
 interface User {
   _id: {
@@ -22,17 +30,31 @@ interface Prediction {
   };
 }
 
+// ============================================================
+// SERVICE
+// ============================================================
+
 @Injectable()
 export class AccessService {
   constructor(
     private readonly subscriptionService: SubscriptionsService,
 
     private readonly purchaseService: PredictionPurchasesService,
+
+    private readonly previewService: PredictionPreviewService,
   ) {}
+
+  // ==========================================================
+  // HOURS LEFT
+  // ==========================================================
 
   private getHoursLeft(kickoffTimestamp: number) {
     return (kickoffTimestamp - Date.now()) / (1000 * 60 * 60);
   }
+
+  // ==========================================================
+  // RELEASE DATA
+  // ==========================================================
 
   private getReleaseData(
     kickoffTimestamp: number,
@@ -49,6 +71,10 @@ export class AccessService {
     };
   }
 
+  // ==========================================================
+  // ACCESS CHECK
+  // ==========================================================
+
   async canAccessPrediction(
     user: User | null,
 
@@ -56,13 +82,25 @@ export class AccessService {
   ) {
     let userPlan: 'free' | 'regular' | 'vip' = 'free';
 
+    // ========================================================
+    // GET USER PLAN
+    // ========================================================
+
     if (user) {
       userPlan = await this.subscriptionService.getUserPlan(
         user._id.toString(),
       );
     }
 
+    // ========================================================
+    // ACCESS RULE
+    // ========================================================
+
     const rule = PredictionAccessRules[userPlan];
+
+    // ========================================================
+    // RELEASE
+    // ========================================================
 
     const release = this.getReleaseData(
       prediction.kickoffTimestamp,
@@ -72,11 +110,57 @@ export class AccessService {
 
     const hoursLeft = this.getHoursLeft(prediction.kickoffTimestamp);
 
-    // ==========================
-    // LOGIN REQUIRED
-    // ==========================
+    // ========================================================
+    // PUBLIC PREVIEW
+    // ========================================================
+    //
+    // Anonymous visitors can access ONLY the five
+    // predictions selected by PredictionPreviewService.
+    //
+    // These must already satisfy:
+    //
+    // - free
+    // - pending
+    // - not deleted
+    // - not settled
+    // - confidence >= 80%
+    //
+    // The preview service determines which five.
+    // ========================================================
 
     if (!user) {
+      const isPublicPreview =
+        prediction.accessType === 'free' &&
+        (await this.previewService.isPublicPrediction(
+          prediction._id.toString(),
+        ));
+
+      if (isPublicPreview) {
+        return {
+          allowed: true,
+
+          state: 'public_preview',
+
+          purchased: false,
+
+          ...release,
+
+          // Public previews need probabilities
+          // because they are part of the preview card.
+          showProbabilities: true,
+
+          // Do not expose betting markets
+          // to anonymous visitors.
+          allowedMarkets: [],
+
+          message: null,
+        };
+      }
+
+      // ======================================================
+      // EVERYTHING ELSE REQUIRES LOGIN
+      // ======================================================
+
       return {
         allowed: false,
 
@@ -94,9 +178,9 @@ export class AccessService {
       };
     }
 
-    // ==========================
-    // ONE TIME PURCHASE
-    // ==========================
+    // ========================================================
+    // ONE-TIME PURCHASE
+    // ========================================================
 
     const purchased = await this.purchaseService.hasPurchased(
       user._id.toString(),
@@ -120,9 +204,9 @@ export class AccessService {
       };
     }
 
-    // ==========================
+    // ========================================================
     // SUBSCRIPTION LEVEL CHECK
-    // ==========================
+    // ========================================================
 
     const userLevel = PlanLevels[userPlan] ?? 0;
 
@@ -146,9 +230,9 @@ export class AccessService {
       };
     }
 
-    // ==========================
+    // ========================================================
     // RELEASE WINDOW CHECK
-    // ==========================
+    // ========================================================
 
     if (hoursLeft > rule.releaseHoursBeforeKickoff) {
       return {
@@ -168,9 +252,9 @@ export class AccessService {
       };
     }
 
-    // ==========================
+    // ========================================================
     // FULL ACCESS
-    // ==========================
+    // ========================================================
 
     return {
       allowed: true,

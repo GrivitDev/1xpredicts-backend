@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 
 import { InjectModel } from '@nestjs/mongoose';
+
 import { Model } from 'mongoose';
 
 import { Prediction, PredictionDocument } from './schemas/prediction.schema';
@@ -9,20 +10,37 @@ import { AccessService } from './access/access.service';
 
 import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 
+import { PredictionPreviewService } from './prediction-preview.service';
+
+// ============================================================
+// TYPES
+// ============================================================
+
 interface User {
   _id: string;
 }
 
 interface AccessResult {
   allowed: boolean;
+
   state: string;
+
   released: boolean;
+
   releaseAt: number;
+
   purchased: boolean;
+
   message?: string | null;
+
   showProbabilities: boolean;
+
   allowedMarkets: readonly string[] | null;
 }
+
+// ============================================================
+// SERVICE
+// ============================================================
 
 @Injectable()
 export class PredictionUserService {
@@ -33,11 +51,25 @@ export class PredictionUserService {
     private readonly accessService: AccessService,
 
     private readonly subscriptionService: SubscriptionsService,
+
+    private readonly previewService: PredictionPreviewService,
   ) {}
 
-  // =====================================
+  // ==========================================================
+  // PUBLIC PREVIEW
+  // ==========================================================
+
+  async getPublicPreview() {
+    const predictions = await this.previewService.getPublicPreview();
+
+    return Promise.all(
+      predictions.map((prediction) => this.formatPrediction(null, prediction)),
+    );
+  }
+
+  // ==========================================================
   // GET ALL USER PREDICTIONS
-  // =====================================
+  // ==========================================================
 
   async getUserPredictions(user: User | null, league?: string) {
     const query: Record<string, any> = {
@@ -57,9 +89,9 @@ export class PredictionUserService {
     );
   }
 
-  // =====================================
+  // ==========================================================
   // FORMAT RESPONSE
-  // =====================================
+  // ==========================================================
 
   private async formatPrediction(
     user: User | null,
@@ -73,6 +105,10 @@ export class PredictionUserService {
     const userPlan = user
       ? await this.subscriptionService.getUserPlan(user._id.toString())
       : 'free';
+
+    // ========================================================
+    // BASE
+    // ========================================================
 
     const base = {
       id: prediction._id,
@@ -104,9 +140,9 @@ export class PredictionUserService {
       confidence: prediction.confidence,
     };
 
-    // =====================================
+    // ========================================================
     // FULL ACCESS
-    // =====================================
+    // ========================================================
 
     if (access.allowed) {
       return {
@@ -130,6 +166,7 @@ export class PredictionUserService {
 
         data: {
           prediction: prediction.prediction,
+
           probabilities: access.showProbabilities
             ? prediction.probabilities
             : null,
@@ -142,9 +179,9 @@ export class PredictionUserService {
       };
     }
 
-    // =====================================
+    // ========================================================
     // LOCKED
-    // =====================================
+    // ========================================================
 
     return {
       ...base,
@@ -171,33 +208,48 @@ export class PredictionUserService {
     };
   }
 
-  // =====================================
+  // ==========================================================
   // FILTER MARKETS
-  // =====================================
+  // ==========================================================
 
   private filterMarkets(
-    markets: Array<{ market: string; [key: string]: unknown }>,
+    markets: Array<{
+      market: string;
+      [key: string]: unknown;
+    }>,
 
     allowedMarkets: readonly string[] | null,
-  ): Array<{ market: string; [key: string]: unknown }> {
+  ): Array<{
+    market: string;
+    [key: string]: unknown;
+  }> {
+    // ========================================================
     // VIP
-    // No filtering
+    // ========================================================
+    // null means all markets are allowed.
+
     if (allowedMarkets === null) {
       return markets;
     }
 
-    // FREE
+    // ========================================================
+    // NO MARKETS
+    // ========================================================
+
     if (!allowedMarkets.length) {
       return [];
     }
 
+    // ========================================================
     // REGULAR
+    // ========================================================
+
     return markets.filter((market) => allowedMarkets.includes(market.market));
   }
 
-  // =====================================
+  // ==========================================================
   // SINGLE PREDICTION
-  // =====================================
+  // ==========================================================
 
   async getUserPredictionById(user: User | null, id: string) {
     const prediction = await this.predictionModel.findById(id);
@@ -209,9 +261,9 @@ export class PredictionUserService {
     return this.formatPrediction(user, prediction);
   }
 
-  // =====================================
+  // ==========================================================
   // ACTIONS FOR FRONTEND
-  // =====================================
+  // ==========================================================
 
   private getActions(userPlan: string, prediction: PredictionDocument) {
     const actions: string[] = [];
@@ -239,9 +291,9 @@ export class PredictionUserService {
     return actions;
   }
 
-  // =====================================
+  // ==========================================================
   // AVAILABLE LEAGUES
-  // =====================================
+  // ==========================================================
 
   async getLeagues() {
     return this.predictionModel.distinct('leagueCode', {

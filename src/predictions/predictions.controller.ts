@@ -26,6 +26,14 @@ export class PredictionsController {
     private readonly userService: PredictionUserService,
   ) {}
 
+  // ============================================================
+  // PUBLIC PREDICTION PREVIEW
+  // ============================================================
+
+  @Get('public-preview')
+  getPublicPreview() {
+    return this.userService.getPublicPreview();
+  }
   // ======================
   // PUBLIC LIST (TABLE)
   // ======================
