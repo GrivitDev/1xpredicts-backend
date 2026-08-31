@@ -28,7 +28,7 @@ export class AiSchedulerService {
   // EVERY HOUR
   // ==========================================================
 
-  @Cron('0 * * * *', {
+  @Cron('*/10 * * * *', {
     timeZone: 'Africa/Lagos',
   })
   async processPredictions(): Promise<void> {
