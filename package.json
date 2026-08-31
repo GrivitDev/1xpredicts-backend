@@ -20,6 +20,7 @@
     "test:e2e": "jest --config ./test/jest-e2e.json"
   },
   "dependencies": {
+    "@google/genai": "^2.19.0",
     "@nestjs/axios": "^4.0.1",
     "@nestjs/common": "^11.0.1",
     "@nestjs/config": "^4.0.4",
@@ -102,6 +103,8 @@
   "allowScripts": {
     "@nestjs/core@11.1.21": true,
     "bcrypt@6.0.0": true,
-    "unrs-resolver@1.11.1": true
+    "unrs-resolver@1.11.1": true,
+    "@google/genai@2.19.0": true,
+    "protobufjs@7.6.6": true
   }
 }

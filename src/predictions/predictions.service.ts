@@ -260,4 +260,58 @@ export class PredictionsService {
       },
     }));
   }
+
+  async findExistingMatchIds(matchIds: string[]): Promise<string[]> {
+    if (!Array.isArray(matchIds) || matchIds.length === 0) {
+      return [];
+    }
+
+    const predictions = await this.predictionModel
+      .find(
+        {
+          matchId: {
+            $in: matchIds,
+          },
+
+          deleted: false,
+        },
+        {
+          matchId: 1,
+          _id: 0,
+        },
+      )
+      .lean();
+
+    return predictions.map((prediction) => prediction.matchId);
+  }
+
+  // ==========================================================
+  // UPCOMING AI DISCUSSION PREDICTIONS
+  // ==========================================================
+
+  async findUpcomingPredictionsForDiscussion() {
+    const now = Date.now();
+
+    const sevenDaysFromNow = now + 7 * 24 * 60 * 60 * 1000;
+
+    return this.predictionModel
+      .find({
+        deleted: false,
+
+        settled: false,
+
+        kickoffTimestamp: {
+          $gt: now,
+
+          $lte: sevenDaysFromNow,
+        },
+      })
+      .sort({
+        kickoffTimestamp: 1,
+
+        confidence: -1,
+      })
+      .limit(10)
+      .lean();
+  }
 }

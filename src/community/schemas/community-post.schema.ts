@@ -1,3 +1,5 @@
+// src/community/schemas/community-post.schema.ts
+
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 
 import { HydratedDocument } from 'mongoose';
@@ -8,17 +10,17 @@ import { CommunityMediaType } from '../enums/community-media-type.enum';
 
 export type CommunityPostDocument = HydratedDocument<CommunityPost>;
 
+export interface CommunityPostSource {
+  title: string;
+  url: string;
+}
+
 export enum CommunityReaction {
   STRONGLY_AGREE = 'strongly_agree',
-
   AGREE = 'agree',
-
   SLIGHTLY_AGREE = 'slightly_agree',
-
   SLIGHTLY_DISAGREE = 'slightly_disagree',
-
   DISAGREE = 'disagree',
-
   STRONGLY_DISAGREE = 'strongly_disagree',
 }
 
@@ -79,6 +81,50 @@ export class CommunityPost {
   @Prop()
   category?: string;
 
+  // ==========================================================
+  // AI CONTENT
+  // ==========================================================
+
+  @Prop({
+    default: false,
+    index: true,
+  })
+  isAiGenerated!: boolean;
+
+  @Prop({
+    type: [
+      {
+        title: {
+          type: String,
+          required: true,
+        },
+
+        url: {
+          type: String,
+          required: true,
+        },
+      },
+    ],
+
+    default: [],
+    _id: false,
+  })
+  sources!: CommunityPostSource[];
+
+  // ==========================================================
+  // TELEGRAM
+  // ==========================================================
+
+  @Prop({
+    default: false,
+    index: true,
+  })
+  telegramSent!: boolean;
+
+  // ==========================================================
+  // REACTIONS
+  // ==========================================================
+
   @Prop({
     type: {
       strongly_agree: {
@@ -125,10 +171,13 @@ export class CommunityPost {
 
   @Prop({
     type: [String],
-
     default: [],
   })
   reactedBy!: string[];
+
+  // ==========================================================
+  // VISIBILITY
+  // ==========================================================
 
   @Prop({
     default: true,

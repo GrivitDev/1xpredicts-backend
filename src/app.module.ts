@@ -40,6 +40,7 @@ import { CommunityModule } from './community/community.module';
 import { PaymentGatewaysModule } from './payment-gateways/payment-gateways.module';
 
 import { WebsiteAnalyticsModule } from './website-analytics/website-analytics.module';
+import { GeminiModule } from './ai/gemini/gemini.module';
 
 @Module({
   imports: [
@@ -93,6 +94,7 @@ import { WebsiteAnalyticsModule } from './website-analytics/website-analytics.mo
 
     ReferralsModule,
 
+    GeminiModule,
     WebsiteAnalyticsModule,
   ],
   providers: [AdminGateway],

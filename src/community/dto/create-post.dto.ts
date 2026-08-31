@@ -1,3 +1,5 @@
+// src/community/dto/create-post.dto.ts
+
 import {
   IsEnum,
   IsObject,

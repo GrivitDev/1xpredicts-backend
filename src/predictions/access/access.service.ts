@@ -145,13 +145,9 @@ export class AccessService {
 
           ...release,
 
-          // Public previews need probabilities
-          // because they are part of the preview card.
           showProbabilities: true,
 
-          // Do not expose betting markets
-          // to anonymous visitors.
-          allowedMarkets: [],
+          allowedMarkets: PredictionAccessRules.free.allowedMarkets,
 
           message: null,
         };
@@ -200,7 +196,7 @@ export class AccessService {
 
         showProbabilities: true,
 
-        allowedMarkets: null,
+        allowedMarkets: PredictionAccessRules.free.allowedMarkets,
       };
     }
 

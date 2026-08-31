@@ -1,3 +1,5 @@
+// src/uploads/uploads.service.ts
+
 import { Injectable } from '@nestjs/common';
 
 import cloudinary from './config/cloudinary.config';
@@ -6,27 +8,45 @@ import { UploadFolder } from './enums/upload-folder.enum';
 
 @Injectable()
 export class UploadsService {
+  // ============================================================
+  // UPLOAD EXPRESS FILE
+  // ============================================================
+
   private async upload(file: Express.Multer.File, folder: UploadFolder) {
-    return new Promise<{
-      url: string;
-      publicId: string;
-      width: number;
-      height: number;
-      format: string;
-      bytes: number;
-    }>((resolve, reject) => {
+    return this.uploadBuffer(file.buffer, folder);
+  }
+
+  // ============================================================
+  // UPLOAD BUFFER
+  // ============================================================
+
+  async uploadBuffer(
+    buffer: Buffer,
+    folder: UploadFolder,
+  ): Promise<{
+    url: string;
+    publicId: string;
+    width: number;
+    height: number;
+    format: string;
+    bytes: number;
+  }> {
+    return new Promise((resolve, reject) => {
       cloudinary.uploader
         .upload_stream(
           {
             folder,
 
-            resource_type: 'auto',
+            resource_type: 'image',
 
             transformation: [
               {
                 width: 1200,
+
                 crop: 'limit',
+
                 quality: 'auto',
+
                 fetch_format: 'auto',
               },
             ],
@@ -34,7 +54,7 @@ export class UploadsService {
 
           (error, result) => {
             if (error || !result) {
-              return reject(error);
+              return reject(error || new Error('Cloudinary upload failed'));
             }
 
             resolve({
@@ -52,9 +72,13 @@ export class UploadsService {
             });
           },
         )
-        .end(file.buffer);
+        .end(buffer);
     });
   }
+
+  // ============================================================
+  // EXISTING UPLOAD METHODS
+  // ============================================================
 
   async uploadAdImage(file: Express.Multer.File) {
     return this.upload(file, UploadFolder.ADS);
@@ -79,6 +103,10 @@ export class UploadsService {
   async uploadCommunityMedia(file: Express.Multer.File) {
     return this.upload(file, UploadFolder.COMMUNITY);
   }
+
+  // ============================================================
+  // DELETE IMAGE
+  // ============================================================
 
   async deleteImage(publicId: string) {
     return cloudinary.uploader.destroy(publicId);
