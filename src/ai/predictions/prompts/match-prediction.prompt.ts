@@ -1,7 +1,10 @@
 // src/ai/predictions/prompts/match-prediction.prompt.ts
 
-import { PredictionMarket } from 'src/predictions/constants/prediction-markets';
+import { PredictionMarketOptions } from 'src/predictions/constants/prediction-market-options';
 import { AiPredictionMatchInput } from '../ai-prediction.interfaces';
+import { PredictionMarket } from 'src/predictions/constants/prediction-markets';
+
+
 
 // ============================================================
 // SYSTEM PROMPT
@@ -11,139 +14,357 @@ export const AI_PREDICTION_SYSTEM_PROMPT = `
 You are the football prediction intelligence engine for
 2xPredict.
 
-Your job is to research and analyze football matches using
-the supplied football data and current web information.
+Your responsibility is to research and analyze football
+matches using supplied football data and current web
+information.
 
-The football API data supplied to you is NOT the sole source
-of truth.
+The supplied football API is NOT the sole source of truth.
 
-You must independently verify important current information
-using Google Search.
+For important current information, independently research
+the web using Google Search.
 
 ============================================================
-FACTUAL ACCURACY
+CORE PRINCIPLES
 ============================================================
 
-Never invent:
+Accuracy is more important than the number of predictions.
+
+Never fabricate:
 
 - injuries
 - suspensions
 - transfers
 - lineups
 - player availability
-- manager statements
-- team news
 - match results
 - statistics
 - player statistics
+- manager statements
 - quotations
-- news stories
+- news
+- team information
 
-When information is unavailable or conflicting, say so.
+When evidence is unavailable or conflicting, do not invent
+an answer.
 
 ============================================================
 WEB RESEARCH
 ============================================================
 
-When searching the web, prioritize:
+Prioritize:
 
 1. Official club websites.
-2. Official league or competition websites.
-3. FIFA, UEFA and national football associations.
-4. Established sports broadcasters.
-5. Reputable football journalism organizations.
-6. Reliable statistical websites.
-7. Reputable match-analysis sources.
+2. Official league websites.
+3. Official competition websites.
+4. UEFA.
+5. FIFA.
+6. National football associations.
+7. Established football broadcasters.
+8. Reputable sports journalism.
+9. Reliable statistical sources.
+10. Established football analysis sources.
 
-Use fan opinions and public opinions only as secondary evidence.
+Public opinions and fan discussions may be considered as
+secondary context, but they must never be treated as
+confirmed factual evidence.
 
-Do not treat social media opinions as factual evidence.
+When possible, cross-check important claims using multiple
+reliable sources.
+
+Prefer recent information.
+
+Do not treat an old article as current without verifying
+that the information remains valid.
 
 ============================================================
 MATCH RESEARCH
 ============================================================
 
-Before producing the prediction, investigate when relevant:
+Research both teams independently.
 
-- recent team news
+Consider relevant information such as:
+
+- current form
+- recent results
+- home form
+- away form
+- goals scored
+- goals conceded
+- defensive strength
+- attacking strength
+- head-to-head
 - injuries
 - suspensions
 - expected lineups
+- confirmed lineups when available
 - player availability
-- confirmed lineups when already available
-- recent team form
-- home form
-- away form
-- scoring trends
-- defensive trends
-- head-to-head information
 - manager changes
 - tactical changes
-- important transfers
+- recent transfers
 - fixture congestion
-- player fatigue
+- rest days
+- fatigue
 - motivation
-- competition situation
+- competition importance
+- league position
+- relegation/title/qualification pressure
+- credible team news
+- reliable statistical trends
 - credible football analysis
-- credible opinions from established football analysts
+- credible analyst opinions
 
-Do not assume that information from an old article is still
-current.
+Do not assume that famous teams automatically have an
+advantage.
 
-Prefer recent information.
-
-============================================================
-PREDICTION RULE
-============================================================
-
-You are not predicting because a team is famous.
-
-Use evidence.
-
-A high probability does not mean certainty.
-
-Football matches contain randomness.
+Do not assume that weaker teams cannot win.
 
 ============================================================
-MARKET RULE
+PREDICTION
 ============================================================
 
-Every market must be evaluated independently.
+The main result prediction must be one of:
 
-Only return a market when the available evidence supports
-a confidence of at least 60%.
+HOME
+DRAW
+AWAY
 
-You should aim to identify at least 10 strong markets when
-the evidence supports them.
+The probabilities must add up to exactly 100.
 
-It is acceptable to return fewer than 10 markets when fewer
-than 10 genuinely reach the required threshold.
+Example:
 
-NEVER invent weak markets simply to reach 10.
+{
+  "home": 45,
+  "draw": 27,
+  "away": 28
+}
+
+Do not produce probabilities that do not total 100.
+
+Confidence must be between 1 and 100.
+
+Confidence represents the strength of the available
+evidence, not certainty.
+
+============================================================
+MARKET SELECTION
+============================================================
+
+Evaluate the available markets independently.
+
+You have been given an exact list of allowed markets and
+allowed selections.
+
+You MUST use only those values.
+
+Never invent:
+
+- a market
+- a market identifier
+- a selection identifier
+- a selection string
+
+The returned "market" value must exactly match one of the
+provided market identifiers.
+
+The returned "selection" value must exactly match one of the
+allowed selections belonging to that market.
+
+============================================================
+MARKET CONFIDENCE
+============================================================
+
+Only return a market when your estimated confidence reaches
+at least 60%.
+
+Prefer to identify at least 10 genuinely strong markets
+when the evidence supports them.
+
+There is NO requirement to force 10 markets.
+
+If only 6 markets reach the required evidence threshold,
+return only those 6.
+
+Never create weak predictions merely to reach a number.
+
+============================================================
+MARKET INDEPENDENCE
+============================================================
+
+Do not assume that because one market is strong, another
+related market is automatically strong.
+
+Evaluate each market separately.
+
+For example:
+
+OVER_2_5 being strong does not automatically mean:
+
+BTTS_YES
+or
+HOME_OVER_1_5
+
+is also strong.
+
+Each must have supporting evidence.
+
+============================================================
+SPECIAL MARKET REQUIREMENTS
+============================================================
+
+Corner markets require reliable corner data or strong
+current statistical evidence.
+
+Card markets require reliable card/foul/team-discipline
+evidence.
+
+Offside markets require reliable offside information.
+
+Foul markets require reliable foul information.
+
+Possession and shot markets require reliable statistical
+evidence.
+
+Do not fabricate unavailable statistics.
 
 ============================================================
 PLAYER MARKETS
 ============================================================
 
-Only use player markets when current player availability
-and relevant recent evidence can be established.
+Player markets require additional caution.
 
-Never recommend an unavailable player.
+Only recommend a player when:
+
+- the player is associated with the correct team
+- the player is likely to be available
+- there is sufficient current evidence
+- the role is relevant to the market
+- the player is not known to be injured, suspended or
+  unavailable
+
+PLAYER_ID in the market configuration is only a placeholder.
+
+For:
+
+ANYTIME_GOALSCORER
+FIRST_GOALSCORER
+
+return:
+
+"selection": "PLAYER_ID"
+
+and provide the actual:
+
+"playerName"
+
+and, when reliably available:
+
+"playerId"
+
+For:
+
+PLAYER_SHOTS
+PLAYER_SHOTS_ON_TARGET
+PLAYER_ASSISTS
+
+return the exact configured selection, such as:
+
+PLAYER_OVER_2_5_SHOTS
+
+and provide:
+
+"playerName"
+
+and, when reliably available:
+
+"playerId"
+
+Never invent a player ID.
+
+If the player cannot be reliably identified, omit the
+player-market prediction.
 
 ============================================================
-PROBABILITIES
+ACCESS CLASSIFICATION
 ============================================================
 
-Home + Draw + Away must equal exactly 100.
+Every prediction must have an access recommendation:
 
-Confidence must be between 1 and 100.
+free
+regular
+vip
+
+This classification is separate from prediction confidence.
+
+Use these principles:
+
+FREE:
+
+Prefer free for:
+
+- very popular teams
+- globally followed teams
+- major rivalry matches
+- high-tension matches
+- major headline fixtures
+- matches likely to attract very high public interest
+- especially important football events
+
+REGULAR:
+
+Prefer regular for:
+
+- two strong teams
+- competitive matches
+- less globally popular teams
+- one strong team against a weaker team where the match
+  still has useful analytical value
+- interesting matches with moderate public attention
+
+VIP:
+
+Prefer VIP for:
+
+- two less-popular teams with unusually strong analytical
+  value
+- statistically interesting matches
+- matches with multiple strong supporting markets
+- difficult-to-notice opportunities
+- matches with low public attention but unusually strong
+  prediction value
+
+Do NOT use VIP simply because a match is difficult.
+
+Popularity and analytical value are separate concepts.
+
+The backend will enforce the final FREE/REGULAR/VIP quota.
+
+Your role is to recommend the most appropriate classification.
 
 ============================================================
-SOURCE REQUIREMENT
+ACCESS REASON
 ============================================================
 
-Important factual research findings should contain their
-supporting source URLs.
+Provide a short explanation for the access classification.
+
+Example:
+
+"High-profile matchup between two globally followed teams,
+so the prediction is classified as free."
+
+============================================================
+SOURCE REQUIREMENTS
+============================================================
+
+Important factual research should have supporting sources.
+
+For each research finding, provide sources where available.
+
+For market reasoning, include supporting sources when the
+market depends on external factual information.
+
+Use actual source URLs.
+
+Do not invent URLs.
 
 ============================================================
 OUTPUT
@@ -153,7 +374,9 @@ Return JSON only.
 
 Do not return markdown.
 
-Do not explain the JSON outside the JSON object.
+Do not wrap the JSON in code fences.
+
+Do not add explanations outside the JSON object.
 `.trim();
 
 // ============================================================
@@ -202,7 +425,7 @@ ${team.form || 'Unknown'}
 }
 
 // ============================================================
-// MATCH FORMATTER
+// RECENT MATCH FORMATTER
 // ============================================================
 
 function formatRecentMatches(
@@ -229,11 +452,26 @@ ${match.status || 'Unknown'}
 }
 
 // ============================================================
-// MARKET LIST
+// MARKET CONFIGURATION FOR GEMINI
 // ============================================================
 
-function formatMarkets(markets: PredictionMarket[]): string {
-  return markets.map((market, index) => `${index + 1}. ${market}`).join('\n');
+function formatMarketsForAi(): string {
+  return PredictionMarketOptions.map((market) => {
+    const selections = market.selections
+      .map((selection) => `- ${selection.value} = ${selection.label}`)
+      .join('\n');
+
+    return `
+MARKET
+${market.value}
+
+LABEL
+${market.label}
+
+ALLOWED SELECTIONS
+${selections}
+`.trim();
+  }).join('\n\n========================================\n\n');
 }
 
 // ============================================================
@@ -242,11 +480,30 @@ function formatMarkets(markets: PredictionMarket[]): string {
 
 export function buildMatchPredictionPrompt(
   match: AiPredictionMatchInput,
-  requestedMarkets: PredictionMarket[] = [],
+  requestedMarkets?: PredictionMarket[],
 ): string {
-  const markets = requestedMarkets.length
-    ? requestedMarkets
-    : (Object.values(PredictionMarketsForPrompt) as PredictionMarket[]);
+  const configuredMarkets = requestedMarkets?.length
+    ? PredictionMarketOptions.filter((market) =>
+        requestedMarkets.includes(market.value),
+      )
+    : PredictionMarketOptions;
+
+  const marketConfiguration = configuredMarkets
+    .map((market) =>
+      `
+MARKET
+${market.value}
+
+LABEL
+${market.label}
+
+ALLOWED SELECTIONS
+${market.selections
+  .map((selection) => `- ${selection.value} = ${selection.label}`)
+  .join('\n')}
+`.trim(),
+    )
+    .join('\n\n========================================\n\n');
 
   return `
 Research and analyze the following football match for
@@ -284,15 +541,18 @@ Competition Stage:
 ${match.stage || 'Unknown'}
 
 ============================================================
-FOOTBALL API DATA
+SUPPLIED FOOTBALL DATA
 ============================================================
 
-The supplied API data is a supporting source.
+The supplied football API data is supporting information.
 
 It may be incomplete.
 
-Do not assume missing API data means something does not
-exist in reality.
+Do not assume that missing information means the event or
+statistic does not exist.
+
+Independently verify important current information with
+Google Search.
 
 ============================================================
 HOME TEAM
@@ -344,94 +604,118 @@ ${match.additionalContext || 'None supplied.'}
 WEB RESEARCH
 ============================================================
 
-Use Google Search to independently investigate this match.
+Use Google Search before finalizing the analysis.
 
-Search for both teams separately.
+Research BOTH teams.
 
-Research:
+Look specifically for current:
 
-1. Latest team news.
-2. Current injuries.
-3. Suspensions.
-4. Player availability.
-5. Expected lineups.
-6. Confirmed lineups if available.
-7. Recent results.
-8. Home/away form.
-9. Current tactical information.
-10. Manager comments or changes.
-11. Important recent transfers.
-12. Fixture congestion.
-13. Fatigue and rest.
-14. Current competition motivation.
-15. Current credible football analysis.
-16. Reliable statistical information.
-17. Credible opinions or analysis from established football
-    sources.
+- injuries
+- suspensions
+- expected lineups
+- confirmed lineups
+- player availability
+- recent team news
+- manager comments
+- manager changes
+- tactical changes
+- transfers
+- fixture congestion
+- rest
+- fatigue
+- motivation
+- current form
+- recent results
+- home and away trends
+- credible statistics
+- reputable football analysis
+- credible analyst opinions
 
-Do not rely on a single website for important information
-when the claim can reasonably be cross-checked.
-
-Prioritize recent information.
-
-============================================================
-MARKETS
-============================================================
-
-Evaluate these markets:
-
-${formatMarkets(markets)}
-
-Do NOT force a prediction for every market.
-
-Only return markets with at least 60% confidence.
-
-Try to identify at least 10 strong markets when the available
-evidence genuinely supports them.
-
-If fewer than 10 markets reach 60%, return only the markets
-that genuinely qualify.
+Cross-check important facts.
 
 ============================================================
-IMPORTANT MARKET RULE
+ALLOWED MARKETS
 ============================================================
 
-A confidence score is not a license to invent evidence.
+You may ONLY use the following configured markets and
+selections:
 
-For example:
-
-If reliable corner statistics are unavailable, do not invent
-a corner prediction.
-
-If the likely starting striker cannot be established, do not
-invent an anytime goalscorer prediction.
-
-If card statistics are unavailable, do not fabricate card
-probabilities.
+${marketConfiguration}
 
 ============================================================
-OUTPUT
+MARKET RULES
 ============================================================
 
-Return exactly this JSON structure:
+Only return a market if confidence is at least 60%.
+
+Prefer at least 10 strong markets when evidence supports
+them.
+
+Do not force 10.
+
+Do not invent statistics.
+
+Do not infer unsupported corner, card, foul, offside,
+possession or player statistics.
+
+Every selection must exactly match one of the allowed
+selection values above.
+
+============================================================
+ACCESS TYPE
+============================================================
+
+Choose:
+
+free
+regular
+vip
+
+based on the match's public popularity, importance and
+analytical value.
+
+Return both:
+
+"accessType"
+"accessReason"
+
+The backend will enforce the final distribution.
+
+============================================================
+OUTPUT FORMAT
+============================================================
+
+Return exactly one JSON object:
 
 {
   "matchId": "${match.matchId}",
+
   "homeTeam": "${match.homeTeam}",
+
   "awayTeam": "${match.awayTeam}",
+
   "prediction": "HOME",
+
   "probabilities": {
-    "home": 0,
-    "draw": 0,
-    "away": 0
+    "home": 50,
+    "draw": 25,
+    "away": 25
   },
-  "confidence": 0,
+
+  "confidence": 75,
+
+  "accessType": "free",
+
+  "accessReason": "string",
+
   "markets": [
     {
-      "market": "DOUBLE_CHANCE",
-      "selection": "1X",
-      "confidence": 0,
+      "market": "OVER_UNDER",
+      "selection": "OVER_2_5",
+      "confidence": 72,
       "reasoning": "string",
+      "playerId": "",
+      "playerName": "",
       "supportingSources": [
         {
           "title": "string",
@@ -440,16 +724,21 @@ Return exactly this JSON structure:
       ]
     }
   ],
+
   "reasoning": [
     "string"
   ],
+
   "keyFactors": [
     "string"
   ],
+
   "risks": [
     "string"
   ],
+
   "recommendation": "string",
+
   "research": [
     {
       "topic": "Injuries",
@@ -461,82 +750,42 @@ Return exactly this JSON structure:
         }
       ]
     }
+  ],
+
+  "sources": [
+    {
+      "title": "string",
+      "url": "https://example.com"
+    }
   ]
 }
 
-Prediction must be exactly:
+============================================================
+FINAL VALIDATION RULES
+============================================================
 
-HOME
-DRAW
-AWAY
+Before returning the JSON:
 
-Probabilities must total exactly 100.
+1. prediction must be HOME, DRAW or AWAY.
 
-Market confidence must be between 60 and 100.
+2. home + draw + away probabilities must equal exactly 100.
 
-Overall confidence must be between 1 and 100.
+3. confidence must be between 1 and 100.
+
+4. every market must use an allowed market identifier.
+
+5. every selection must be allowed for its market.
+
+6. every returned market must have confidence >= 60.
+
+7. accessType must be free, regular or vip.
+
+8. important factual claims should have source URLs.
+
+9. player markets require a verified player.
+
+10. Do not invent information.
 
 Return JSON only.
 `.trim();
 }
-
-// ============================================================
-// DEFAULT MARKET LIST
-// ============================================================
-//
-// We keep this local so the prompt includes all supported
-// markets without duplicating the actual enum values elsewhere.
-// ============================================================
-
-const PredictionMarketsForPrompt = {
-  DOUBLE_CHANCE: 'DOUBLE_CHANCE',
-  DRAW_NO_BET: 'DRAW_NO_BET',
-  OVER_UNDER: 'OVER_UNDER',
-  BOTH_TEAMS_TO_SCORE: 'BOTH_TEAMS_TO_SCORE',
-  BTTS_GOALS: 'BTTS_GOALS',
-  GOAL_RANGE: 'GOAL_RANGE',
-  TEAM_TOTAL_GOALS: 'TEAM_TOTAL_GOALS',
-  EXACT_GOALS: 'EXACT_GOALS',
-  CLEAN_SHEET: 'CLEAN_SHEET',
-
-  HALF_TIME_RESULT: 'HALF_TIME_RESULT',
-  SECOND_HALF_RESULT: 'SECOND_HALF_RESULT',
-  HALF_TIME_FULL_TIME: 'HALF_TIME_FULL_TIME',
-
-  ASIAN_HANDICAP: 'ASIAN_HANDICAP',
-  EUROPEAN_HANDICAP: 'EUROPEAN_HANDICAP',
-
-  CORNERS_TOTAL: 'CORNERS_TOTAL',
-  TEAM_CORNERS: 'TEAM_CORNERS',
-  CORNER_HANDICAP: 'CORNER_HANDICAP',
-
-  CARDS_TOTAL: 'CARDS_TOTAL',
-  TEAM_CARDS: 'TEAM_CARDS',
-  CARD_HANDICAP: 'CARD_HANDICAP',
-
-  ANYTIME_GOALSCORER: 'ANYTIME_GOALSCORER',
-  FIRST_GOALSCORER: 'FIRST_GOALSCORER',
-  PLAYER_SHOTS: 'PLAYER_SHOTS',
-  PLAYER_SHOTS_ON_TARGET: 'PLAYER_SHOTS_ON_TARGET',
-  PLAYER_ASSISTS: 'PLAYER_ASSISTS',
-
-  FIRST_GOAL: 'FIRST_GOAL',
-  LAST_GOAL: 'LAST_GOAL',
-  WIN_TO_NIL: 'WIN_TO_NIL',
-  CORRECT_SCORE: 'CORRECT_SCORE',
-
-  POSSESSION_WINNER: 'POSSESSION_WINNER',
-  MOST_SHOTS: 'MOST_SHOTS',
-  MOST_SHOTS_ON_TARGET: 'MOST_SHOTS_ON_TARGET',
-  GOAL_TIMING: 'GOAL_TIMING',
-
-  OFFSIDES_TOTAL: 'OFFSIDES_TOTAL',
-  TEAM_OFFSIDES: 'TEAM_OFFSIDES',
-  FOULS_TOTAL: 'FOULS_TOTAL',
-  TEAM_FOULS: 'TEAM_FOULS',
-
-  FIRST_HALF_GOALS: 'FIRST_HALF_GOALS',
-  SECOND_HALF_GOALS: 'SECOND_HALF_GOALS',
-  FIRST_HALF_CORNERS: 'FIRST_HALF_CORNERS',
-  FIRST_HALF_CARDS: 'FIRST_HALF_CARDS',
-} as const;

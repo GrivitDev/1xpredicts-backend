@@ -1,9 +1,31 @@
-// src/ai/predictions/ai-prediction.interfaces.ts
-
-import { PredictionMarket } from 'src/predictions/constants/prediction-markets';
+import { PredictionMarket } from '../../predictions/constants/prediction-markets';
 
 // ============================================================
-// TEAM SNAPSHOT
+// ACCESS
+// ============================================================
+
+export type AiPredictionAccessType = 'free' | 'regular' | 'vip';
+
+// ============================================================
+// SOURCES
+// ============================================================
+
+export interface AiResearchSource {
+  title: string;
+
+  url: string;
+}
+
+export interface AiResearchFinding {
+  topic: string;
+
+  finding: string;
+
+  sources: AiResearchSource[];
+}
+
+// ============================================================
+// TEAM
 // ============================================================
 
 export interface AiTeamSnapshot {
@@ -48,24 +70,6 @@ export interface AiRecentMatch {
   date: string;
 
   status?: string;
-}
-
-// ============================================================
-// WEB RESEARCH
-// ============================================================
-
-export interface AiResearchSource {
-  title: string;
-
-  url: string;
-}
-
-export interface AiResearchFinding {
-  topic: string;
-
-  finding: string;
-
-  sources: AiResearchSource[];
 }
 
 // ============================================================
@@ -122,10 +126,14 @@ export interface AiPredictionMarket {
   reasoning: string;
 
   supportingSources: AiResearchSource[];
+
+  playerId?: string;
+
+  playerName?: string;
 }
 
 // ============================================================
-// PREDICTION RESULT
+// RESULT
 // ============================================================
 
 export interface AiPredictionResult {
@@ -148,6 +156,10 @@ export interface AiPredictionResult {
   confidence: number;
 
   markets: AiPredictionMarket[];
+
+  accessType: AiPredictionAccessType;
+
+  accessReason: string;
 
   reasoning: string[];
 

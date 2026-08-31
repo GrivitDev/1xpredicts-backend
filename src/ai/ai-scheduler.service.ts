@@ -1,5 +1,3 @@
-// src/ai/ai-scheduler.service.ts
-
 import { Injectable, Logger } from '@nestjs/common';
 
 import { Cron } from '@nestjs/schedule';
@@ -11,6 +9,8 @@ import { PredictionsService } from '../predictions/predictions.service';
 import { AiPredictionDataService } from './predictions/ai-prediction-data.service';
 
 import { AiPredictionService } from './predictions/ai-prediction.service';
+
+import { AiPredictionAccessType } from './predictions/ai-prediction.interfaces';
 
 import { Match } from '../sports/interfaces/match.interface';
 
@@ -47,7 +47,7 @@ export class AiSchedulerService {
   }
 
   // ==========================================================
-  // PROCESS ONE MATCH
+  // ONE MATCH
   // ==========================================================
 
   private async processOneMatch(): Promise<void> {
@@ -77,9 +77,9 @@ export class AiSchedulerService {
       const existingMatchIds =
         await this.predictionsService.findExistingMatchIds(matchIds);
 
-      const predicted = new Set(existingMatchIds);
+      const existing = new Set(existingMatchIds);
 
-      const match = matches.find((item) => !predicted.has(item.id));
+      const match = matches.find((item) => !existing.has(item.id));
 
       if (!match) {
         continue;
@@ -87,7 +87,7 @@ export class AiSchedulerService {
 
       this.leagueIndex = index;
 
-      await this.predictMatch(match);
+      await this.predictMatch(match, matches);
 
       return;
     }
@@ -96,7 +96,7 @@ export class AiSchedulerService {
   }
 
   // ==========================================================
-  // 7-DAY MATCH WINDOW
+  // 7-DAY WINDOW
   // ==========================================================
 
   private async getEligibleMatches(leagueCode: string): Promise<Match[]> {
@@ -105,24 +105,26 @@ export class AiSchedulerService {
 
     const now = Date.now();
 
-    const sevenDays = now + 7 * 24 * 60 * 60 * 1000;
+    const sevenDaysFromNow = now + 7 * 24 * 60 * 60 * 1000;
 
     return matches
       .filter((match) => {
+        if (!Number.isFinite(match.kickoffTimestamp)) {
+          return false;
+        }
+
         if (match.kickoffTimestamp <= now) {
           return false;
         }
 
-        if (match.kickoffTimestamp > sevenDays) {
+        if (match.kickoffTimestamp > sevenDaysFromNow) {
           return false;
         }
 
         if (
-          match.status === 'IN_PLAY' ||
-          match.status === 'PAUSED' ||
-          match.status === 'FINISHED' ||
-          match.status === 'POSTPONED' ||
-          match.status === 'CANCELLED'
+          ['IN_PLAY', 'PAUSED', 'FINISHED', 'POSTPONED', 'CANCELLED'].includes(
+            match.status || '',
+          )
         ) {
           return false;
         }
@@ -136,8 +138,13 @@ export class AiSchedulerService {
   // PREDICT
   // ==========================================================
 
-  private async predictMatch(match: Match): Promise<void> {
-    this.logger.log(`AI prediction: ${match.homeTeam} vs ${match.awayTeam}`);
+  private async predictMatch(
+    match: Match,
+    eligibleMatches: Match[],
+  ): Promise<void> {
+    this.logger.log(
+      `Generating AI prediction: ${match.homeTeam} vs ${match.awayTeam}`,
+    );
 
     const input = await this.aiPredictionDataService.buildMatchInput(match.id);
 
@@ -148,6 +155,18 @@ export class AiSchedulerService {
 
       includeReasoning: true,
     });
+
+    const accessCounts = await this.predictionsService.countAccessTypes(
+      eligibleMatches.map((item) => item.id),
+    );
+
+    const accessTargets = this.calculateAccessTargets(eligibleMatches.length);
+
+    const accessType = this.selectAccessType(
+      result.accessType,
+      accessCounts,
+      accessTargets,
+    );
 
     await this.predictionsService.create({
       matchId: match.id,
@@ -182,16 +201,130 @@ export class AiSchedulerService {
         market: market.market,
 
         selection: market.selection,
+
+        ...(market.playerId
+          ? {
+              playerId: market.playerId,
+            }
+          : {}),
+
+        ...(market.playerName
+          ? {
+              playerName: market.playerName,
+            }
+          : {}),
       })),
 
+      accessType,
+
       matchDate: match.date,
-
-      accessType: 'free',
-
-      price: 0,
     });
 
     this.logger.log(`AI prediction saved: ${match.id}`);
+  }
+
+  // ==========================================================
+  // TARGETS
+  // ==========================================================
+
+  private calculateAccessTargets(totalMatches: number) {
+    if (totalMatches <= 0) {
+      return {
+        free: 0,
+        regular: 0,
+        vip: 0,
+      };
+    }
+
+    if (totalMatches === 1) {
+      return {
+        free: 1,
+        regular: 0,
+        vip: 0,
+      };
+    }
+
+    if (totalMatches === 2) {
+      return {
+        free: 1,
+        regular: 1,
+        vip: 0,
+      };
+    }
+
+    if (totalMatches === 3) {
+      return {
+        free: 1,
+        regular: 1,
+        vip: 1,
+      };
+    }
+
+    const free = Math.round(totalMatches * 0.35);
+
+    const vip = Math.round(totalMatches * 0.15);
+
+    return {
+      free,
+
+      regular: totalMatches - free - vip,
+
+      vip,
+    };
+  }
+
+  // ==========================================================
+  // FINAL ACCESS TYPE
+  // ==========================================================
+
+  private selectAccessType(
+    aiRecommendation: AiPredictionAccessType,
+    counts: {
+      free: number;
+      regular: number;
+      vip: number;
+    },
+    targets: {
+      free: number;
+      regular: number;
+      vip: number;
+    },
+  ): AiPredictionAccessType {
+    const remaining = {
+      free: Math.max(targets.free - counts.free, 0),
+
+      regular: Math.max(targets.regular - counts.regular, 0),
+
+      vip: Math.max(targets.vip - counts.vip, 0),
+    };
+
+    if (remaining[aiRecommendation] > 0) {
+      return aiRecommendation;
+    }
+
+    const fallback: {
+      type: AiPredictionAccessType;
+      remaining: number;
+    }[] = [
+      {
+        type: 'free',
+        remaining: remaining.free,
+      },
+
+      {
+        type: 'regular',
+        remaining: remaining.regular,
+      },
+
+      {
+        type: 'vip',
+        remaining: remaining.vip,
+      },
+    ];
+
+    fallback.sort((a, b) => b.remaining - a.remaining);
+
+    return fallback[0]?.type || 'free';
   }
 
   constructor(

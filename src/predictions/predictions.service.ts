@@ -4,22 +4,30 @@ import {
   NotFoundException,
   BadRequestException,
 } from '@nestjs/common';
+
 import { InjectModel } from '@nestjs/mongoose';
+
 import { Model } from 'mongoose';
+
 import { Prediction, PredictionDocument } from './schemas/prediction.schema';
+
 import { CreatePredictionDto } from './dto/create-prediction.dto';
+
 import { UpdatePredictionDto } from './dto/update-prediction.dto';
+
+import { isValidPredictionSelection } from './constants/prediction-market-options';
 
 @Injectable()
 export class PredictionsService {
   constructor(
     @InjectModel(Prediction.name)
-    private predictionModel: Model<PredictionDocument>,
+    private readonly predictionModel: Model<PredictionDocument>,
   ) {}
 
-  // =========================
+  // ==========================================================
   // PROBABILITY VALIDATION
-  // =========================
+  // ==========================================================
+
   private validateProbabilities(dto: {
     probabilities?: {
       home: number;
@@ -27,7 +35,9 @@ export class PredictionsService {
       away: number;
     };
   }) {
-    if (!dto.probabilities) return;
+    if (!dto.probabilities) {
+      return;
+    }
 
     const total =
       dto.probabilities.home + dto.probabilities.draw + dto.probabilities.away;
@@ -37,9 +47,99 @@ export class PredictionsService {
     }
   }
 
-  // =========================
-  // AUTO PREDICTION ENGINE
-  // =========================
+  // ==========================================================
+  // ACCESS TYPE COUNTS
+  // ==========================================================
+
+  async countAccessTypes(matchIds: string[]) {
+    if (!Array.isArray(matchIds) || matchIds.length === 0) {
+      return {
+        free: 0,
+        regular: 0,
+        vip: 0,
+      };
+    }
+
+    const result = await this.predictionModel.aggregate([
+      {
+        $match: {
+          matchId: {
+            $in: matchIds,
+          },
+
+          deleted: false,
+        },
+      },
+
+      {
+        $group: {
+          _id: '$accessType',
+
+          count: {
+            $sum: 1,
+          },
+        },
+      },
+    ]);
+
+    const counts = {
+      free: 0,
+
+      regular: 0,
+
+      vip: 0,
+    };
+
+    for (const item of result) {
+      if (item._id === 'free') {
+        counts.free = item.count;
+      }
+
+      if (item._id === 'regular') {
+        counts.regular = item.count;
+      }
+
+      if (item._id === 'vip') {
+        counts.vip = item.count;
+      }
+    }
+
+    return counts;
+  }
+
+  // ==========================================================
+  // ACCESS PRICING
+  // ==========================================================
+
+  private getAccessPricing(accessType: 'free' | 'regular' | 'vip') {
+    switch (accessType) {
+      case 'regular':
+        return {
+          price: 100,
+          priceNGN: 100,
+          priceUSD: 0.3,
+        };
+
+      case 'vip':
+        return {
+          price: 300,
+          priceNGN: 300,
+          priceUSD: 0.5,
+        };
+
+      default:
+        return {
+          price: 0,
+          priceNGN: 0,
+          priceUSD: 0,
+        };
+    }
+  }
+
+  // ==========================================================
+  // RESULT
+  // ==========================================================
+
   private getPredictionFromProbabilities(
     home: number,
     draw: number,
@@ -47,28 +147,75 @@ export class PredictionsService {
   ): 'HOME' | 'DRAW' | 'AWAY' {
     const max = Math.max(home, draw, away);
 
-    if (max === home) return 'HOME';
-    if (max === away) return 'AWAY';
+    if (max === home) {
+      return 'HOME';
+    }
+
+    if (max === away) {
+      return 'AWAY';
+    }
+
     return 'DRAW';
   }
 
-  // =========================
-  // NORMALIZE MARKETS
-  // =========================
+  // ==========================================================
+  // MARKETS
+  // ==========================================================
+
   private normalizeMarkets(markets: any[] = []) {
-    return markets
-      .filter((m) => m?.market)
-      .map((m) => ({
-        market: m.market.trim(),
-        selection: m.selection?.trim() || '',
-      }));
+    if (!Array.isArray(markets)) {
+      return [];
+    }
+
+    return markets.map((market) => {
+      const marketValue = String(market?.market || '').trim();
+
+      const selection = String(market?.selection || '').trim();
+
+      if (!marketValue) {
+        throw new BadRequestException('Prediction market is required');
+      }
+
+      if (!selection) {
+        throw new BadRequestException(
+          `Selection is required for ${marketValue}`,
+        );
+      }
+
+      if (!isValidPredictionSelection(marketValue, selection)) {
+        throw new BadRequestException(
+          `Invalid selection "${selection}" for market "${marketValue}"`,
+        );
+      }
+
+      return {
+        market: marketValue,
+
+        selection,
+
+        ...(market?.playerId
+          ? {
+              playerId: String(market.playerId).trim(),
+            }
+          : {}),
+
+        ...(market?.playerName
+          ? {
+              playerName: String(market.playerName).trim(),
+            }
+          : {}),
+      };
+    });
   }
-  // =========================
-  // CREATE PREDICTION
-  // =========================
+
+  // ==========================================================
+  // CREATE
+  // ==========================================================
+
   async create(dto: CreatePredictionDto) {
     const existingPrediction = await this.predictionModel.findOne({
       matchId: dto.matchId,
+
       deleted: false,
     });
 
@@ -77,6 +224,7 @@ export class PredictionsService {
         'A prediction already exists for this match',
       );
     }
+
     this.validateProbabilities(dto);
 
     const prediction = this.getPredictionFromProbabilities(
@@ -84,6 +232,8 @@ export class PredictionsService {
       dto.probabilities.draw,
       dto.probabilities.away,
     );
+
+    const pricing = this.getAccessPricing(dto.accessType);
 
     return this.predictionModel.create({
       matchId: dto.matchId,
@@ -110,25 +260,36 @@ export class PredictionsService {
 
       accessType: dto.accessType,
 
-      price: dto.price ?? 0,
+      price: pricing.price,
+
+      priceNGN: pricing.priceNGN,
+
+      priceUSD: pricing.priceUSD,
 
       matchDate: dto.matchDate,
 
       kickoffTimestamp: new Date(dto.matchDate).getTime(),
     });
   }
-  // =========================
+
+  // ==========================================================
   // GET ALL
-  // =========================
+  // ==========================================================
+
   async findAll() {
     return this.predictionModel
-      .find({ deleted: false })
-      .sort({ createdAt: -1 });
+      .find({
+        deleted: false,
+      })
+      .sort({
+        createdAt: -1,
+      });
   }
 
-  // =========================
+  // ==========================================================
   // GET ONE
-  // =========================
+  // ==========================================================
+
   async findOne(id: string) {
     const prediction = await this.predictionModel.findById(id);
 
@@ -139,9 +300,10 @@ export class PredictionsService {
     return prediction;
   }
 
-  // =========================
-  // UPDATE PREDICTION
-  // =========================
+  // ==========================================================
+  // UPDATE
+  // ==========================================================
+
   async update(id: string, dto: UpdatePredictionDto) {
     const prediction = await this.findOne(id);
 
@@ -164,7 +326,16 @@ export class PredictionsService {
     }
 
     if (dto.markets) {
-      dto.markets = this.normalizeMarkets(dto.markets);
+      updateData.markets = this.normalizeMarkets(dto.markets);
+    }
+
+    // Keep price derived from access type.
+    if (dto.accessType) {
+      const pricing = this.getAccessPricing(dto.accessType);
+
+      updateData.price = pricing.price;
+      updateData.priceNGN = pricing.priceNGN;
+      updateData.priceUSD = pricing.priceUSD;
     }
 
     return this.predictionModel.findByIdAndUpdate(
@@ -179,9 +350,10 @@ export class PredictionsService {
     );
   }
 
-  // =========================
-  // DELETE (SOFT)
-  // =========================
+  // ==========================================================
+  // DELETE
+  // ==========================================================
+
   async delete(id: string) {
     const prediction = await this.findOne(id);
 
@@ -191,35 +363,52 @@ export class PredictionsService {
 
     return this.predictionModel.findByIdAndUpdate(
       id,
-      { $set: { deleted: true } },
-      { new: true },
+      {
+        $set: {
+          deleted: true,
+        },
+      },
+      {
+        new: true,
+      },
     );
   }
 
-  // =========================
+  // ==========================================================
   // USER VIEW
-  // =========================
+  // ==========================================================
+
   async getForUser(id: string, user: any) {
     const prediction = await this.findOne(id);
 
     return {
       ...prediction.toObject(),
+
       markets: prediction.markets || [],
     };
   }
 
-  // =========================
+  // ==========================================================
   // COUNT
-  // =========================
+  // ==========================================================
+
   async countPredictions() {
-    return this.predictionModel.countDocuments({ deleted: false });
+    return this.predictionModel.countDocuments({
+      deleted: false,
+    });
   }
+
+  // ==========================================================
+  // SETTLED WINS
+  // ==========================================================
 
   async findSettledWins() {
     const predictions = await this.predictionModel
       .find({
         status: 'won',
+
         settled: true,
+
         deleted: false,
       })
       .sort({
@@ -261,6 +450,10 @@ export class PredictionsService {
     }));
   }
 
+  // ==========================================================
+  // EXISTING MATCH IDS
+  // ==========================================================
+
   async findExistingMatchIds(matchIds: string[]): Promise<string[]> {
     if (!Array.isArray(matchIds) || matchIds.length === 0) {
       return [];
@@ -275,8 +468,10 @@ export class PredictionsService {
 
           deleted: false,
         },
+
         {
           matchId: 1,
+
           _id: 0,
         },
       )
@@ -286,7 +481,7 @@ export class PredictionsService {
   }
 
   // ==========================================================
-  // UPCOMING AI DISCUSSION PREDICTIONS
+  // UPCOMING DISCUSSION PREDICTIONS
   // ==========================================================
 
   async findUpcomingPredictionsForDiscussion() {

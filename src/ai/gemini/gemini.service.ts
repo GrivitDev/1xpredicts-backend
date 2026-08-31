@@ -1,6 +1,5 @@
-// src/ai/gemini/gemini.service.ts
-
 import {
+  BadRequestException,
   Injectable,
   InternalServerErrorException,
   Logger,
@@ -30,7 +29,6 @@ import {
 
 import {
   GeminiGenerateRequest,
-  GeminiHealthStatus,
   GeminiMultimodalRequest,
 } from './gemini.interfaces';
 
@@ -74,22 +72,6 @@ export class GeminiService {
   }
 
   // ============================================================
-  // HEALTH
-  // ============================================================
-
-  getHealth(): GeminiHealthStatus {
-    return {
-      configured: true,
-
-      provider: GEMINI_PROVIDER,
-
-      model: this.model,
-
-      googleSearchEnabled: this.googleSearchEnabled,
-    };
-  }
-
-  // ============================================================
   // MODEL
   // ============================================================
 
@@ -105,7 +87,7 @@ export class GeminiService {
     request: GeminiGenerateRequest,
   ): Promise<GeminiResult<string>> {
     if (!request.prompt?.trim()) {
-      throw new InternalServerErrorException('Gemini prompt is required');
+      throw new BadRequestException('Gemini prompt is required');
     }
 
     const options = request.options || {};
@@ -127,6 +109,8 @@ export class GeminiService {
         throw new Error('Gemini returned an empty response');
       }
 
+      const sources = this.extractSources(response);
+
       return {
         success: true,
 
@@ -138,9 +122,9 @@ export class GeminiService {
 
         usage: this.extractUsage(response),
 
-        sources: this.extractSources(response),
+        sources,
 
-        grounded: Boolean(options.useGoogleSearch && this.googleSearchEnabled),
+        grounded: sources.length > 0,
       };
     } catch (error) {
       this.handleError(error, request.task || 'general');
@@ -150,19 +134,12 @@ export class GeminiService {
   // ============================================================
   // JSON GENERATION
   // ============================================================
-  //
-  // For grounded requests we intentionally request JSON
-  // through the prompt and parse it ourselves.
-  //
-  // This keeps Google Search compatible with Gemini 2.5 Flash
-  // without depending on structured-output + tools support.
-  // ============================================================
 
   async generateJson<T>(
     request: GeminiGenerateRequest,
   ): Promise<GeminiResult<T>> {
     if (!request.prompt?.trim()) {
-      throw new InternalServerErrorException('Gemini prompt is required');
+      throw new BadRequestException('Gemini prompt is required');
     }
 
     const options = request.options || {};
@@ -174,6 +151,8 @@ export class GeminiService {
     const config = this.buildGenerationConfig({
       ...options,
 
+      // Gemini 2.5 + Google Search:
+      // request text and parse JSON ourselves.
       responseFormat: useGoogleSearch ? 'text' : 'json',
     });
 
@@ -194,6 +173,8 @@ export class GeminiService {
 
       const parsed = this.parseJson<T>(text);
 
+      const sources = this.extractSources(response);
+
       return {
         success: true,
 
@@ -205,9 +186,9 @@ export class GeminiService {
 
         usage: this.extractUsage(response),
 
-        sources: this.extractSources(response),
+        sources,
 
-        grounded: useGoogleSearch,
+        grounded: sources.length > 0,
       };
     } catch (error) {
       this.handleError(error, request.task || 'general');
@@ -215,14 +196,14 @@ export class GeminiService {
   }
 
   // ============================================================
-  // MULTIMODAL GENERATION
+  // MULTIMODAL
   // ============================================================
 
   async generateMultimodal(
     request: GeminiMultimodalRequest,
   ): Promise<GeminiResult<string>> {
     if (!request.prompt?.trim()) {
-      throw new InternalServerErrorException('Gemini prompt is required');
+      throw new BadRequestException('Gemini prompt is required');
     }
 
     const options = request.options || {};
@@ -266,6 +247,8 @@ export class GeminiService {
         throw new Error('Gemini returned an empty response');
       }
 
+      const sources = this.extractSources(response);
+
       return {
         success: true,
 
@@ -277,9 +260,9 @@ export class GeminiService {
 
         usage: this.extractUsage(response),
 
-        sources: this.extractSources(response),
+        sources,
 
-        grounded: Boolean(options.useGoogleSearch && this.googleSearchEnabled),
+        grounded: sources.length > 0,
       };
     } catch (error) {
       this.handleError(error, request.task || 'general');
@@ -287,7 +270,7 @@ export class GeminiService {
   }
 
   // ============================================================
-  // GENERATION CONFIG
+  // CONFIG
   // ============================================================
 
   private buildGenerationConfig(
@@ -384,7 +367,7 @@ export class GeminiService {
   }
 
   // ============================================================
-  // GROUNDING SOURCES
+  // SOURCES
   // ============================================================
 
   private extractSources(response: GenerateContentResponse): GeminiSource[] {
@@ -396,7 +379,7 @@ export class GeminiService {
       return [];
     }
 
-    const chunks = Array.isArray(groundingMetadata?.groundingChunks)
+    const chunks = Array.isArray(groundingMetadata.groundingChunks)
       ? groundingMetadata.groundingChunks
       : [];
 
@@ -442,13 +425,11 @@ export class GeminiService {
   // ============================================================
 
   private handleError(error: unknown, task: string): never {
-    if (error instanceof Error) {
-      this.logger.error(`Gemini ${task} failed: ${error.message}`);
-
-      throw new InternalServerErrorException('Gemini request failed');
-    }
-
-    this.logger.error(`Gemini ${task} failed: ${String(error)}`);
+    this.logger.error(
+      `Gemini ${task} failed: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
 
     throw new InternalServerErrorException('Gemini request failed');
   }

@@ -1,5 +1,3 @@
-// src/ai/ai-content-scheduler.service.ts
-
 import { Injectable, Logger } from '@nestjs/common';
 
 import { Cron } from '@nestjs/schedule';
@@ -21,17 +19,12 @@ export class AiContentSchedulerService {
   private running = false;
 
   // ==========================================================
-  // CONTENT WINDOW
-  // ==========================================================
-  //
-  // 06:00
-  // 06:15
-  // ...
-  // 09:45
-  //
+  // MORNING CONTENT WINDOW
   // ==========================================================
 
-  @Cron('*/15 6-9 * * *')
+  @Cron('*/15 6-9 * * *', {
+    timeZone: 'Africa/Lagos',
+  })
   async generateMorningContent(): Promise<void> {
     if (this.running) {
       return;
@@ -52,7 +45,7 @@ export class AiContentSchedulerService {
   }
 
   // ==========================================================
-  // ONE CONTENT ITEM
+  // ONE ITEM
   // ==========================================================
 
   private async generateOne(): Promise<void> {
@@ -84,7 +77,7 @@ export class AiContentSchedulerService {
   }
 
   // ==========================================================
-  // SELECT TYPE
+  // SELECT
   // ==========================================================
 
   private selectType(counts: {
@@ -109,10 +102,6 @@ export class AiContentSchedulerService {
       },
     ];
 
-    // --------------------------------------------------------
-    // Minimum daily target = 3
-    // --------------------------------------------------------
-
     const missingMinimum = items
       .filter((item) => item.count < 3)
       .sort((a, b) => a.count - b.count);
@@ -120,10 +109,6 @@ export class AiContentSchedulerService {
     if (missingMinimum.length) {
       return missingMinimum[0].type;
     }
-
-    // --------------------------------------------------------
-    // Optional target = 5
-    // --------------------------------------------------------
 
     const belowMaximum = items
       .filter((item) => item.count < 5)
@@ -181,7 +166,7 @@ Do not write an article.
 
       category: generated.category,
 
-      sources: [],
+      sources: generated.sources,
     });
   }
 

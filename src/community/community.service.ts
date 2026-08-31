@@ -126,13 +126,15 @@ export class CommunityService {
   }
 
   // ==========================================================
-  // LATEST TELEGRAM DISCUSSION
+  // LATEST AI TELEGRAM DISCUSSION
   // ==========================================================
 
   async getLatestTelegramDiscussion() {
     return this.postModel
       .findOne({
         isVisible: true,
+
+        isAiGenerated: true,
 
         telegramSent: false,
 
@@ -144,18 +146,15 @@ export class CommunityService {
   }
 
   // ==========================================================
-  // LATEST TELEGRAM NEWS POST
-  // ==========================================================
-  //
-  // Only image-based media posts qualify.
-  // Videos are deliberately excluded.
-  //
+  // LATEST AI TELEGRAM NEWS POST
   // ==========================================================
 
   async getLatestTelegramNewsPost() {
     return this.postModel
       .findOne({
         isVisible: true,
+
+        isAiGenerated: true,
 
         telegramSent: false,
 

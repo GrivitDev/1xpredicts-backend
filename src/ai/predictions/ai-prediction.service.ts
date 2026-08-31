@@ -1,5 +1,3 @@
-// src/ai/predictions/ai-prediction.service.ts
-
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 
 import { GeminiService } from '../gemini/gemini.service';
@@ -17,6 +15,13 @@ import {
   AI_PREDICTION_SYSTEM_PROMPT,
   buildMatchPredictionPrompt,
 } from './prompts/match-prediction.prompt';
+
+import {
+  findPredictionMarket,
+  isValidPredictionSelection,
+} from '../../predictions/constants/prediction-market-options';
+
+import { PredictionMarket } from '../../predictions/constants/prediction-markets';
 
 @Injectable()
 export class AiPredictionService {
@@ -66,7 +71,7 @@ export class AiPredictionService {
   }
 
   // ============================================================
-  // VALIDATE REQUEST
+  // REQUEST VALIDATION
   // ============================================================
 
   private validateRequest(request: AiPredictionRequest): void {
@@ -94,7 +99,7 @@ export class AiPredictionService {
   }
 
   // ============================================================
-  // VALIDATE PREDICTION
+  // RESULT VALIDATION
   // ============================================================
 
   private validatePrediction(
@@ -154,10 +159,18 @@ export class AiPredictionService {
 
     const ownSources = this.normalizeSources(result.sources);
 
+    const accessType = this.validateAccessType(result.accessType);
+
+    const accessReason =
+      typeof result.accessReason === 'string' ? result.accessReason.trim() : '';
+
     const sources = this.mergeSources(
       groundedSources,
+
       ownSources,
+
       research.flatMap((item) => item.sources),
+
       markets.flatMap((market) => market.supportingSources),
     );
 
@@ -182,6 +195,10 @@ export class AiPredictionService {
 
       markets,
 
+      accessType,
+
+      accessReason,
+
       reasoning,
 
       keyFactors,
@@ -200,6 +217,22 @@ export class AiPredictionService {
   }
 
   // ============================================================
+  // ACCESS
+  // ============================================================
+
+  private validateAccessType(accessType: unknown): 'free' | 'regular' | 'vip' {
+    if (
+      accessType !== 'free' &&
+      accessType !== 'regular' &&
+      accessType !== 'vip'
+    ) {
+      throw new BadRequestException('Invalid AI access type');
+    }
+
+    return accessType;
+  }
+
+  // ============================================================
   // MARKETS
   // ============================================================
 
@@ -210,15 +243,49 @@ export class AiPredictionService {
       return [];
     }
 
+    const playerMarkets = new Set<PredictionMarket>([
+      'ANYTIME_GOALSCORER',
+      'FIRST_GOALSCORER',
+      'PLAYER_SHOTS',
+      'PLAYER_SHOTS_ON_TARGET',
+      'PLAYER_ASSISTS',
+    ]);
+
     return markets
-      .filter(
-        (market) =>
-          market &&
-          typeof market.market === 'string' &&
-          typeof market.selection === 'string' &&
-          typeof market.confidence === 'number' &&
-          market.confidence >= 60,
-      )
+      .filter((market) => {
+        if (!market) {
+          return false;
+        }
+
+        if (
+          typeof market.market !== 'string' ||
+          typeof market.selection !== 'string'
+        ) {
+          return false;
+        }
+
+        if (typeof market.confidence !== 'number') {
+          return false;
+        }
+
+        if (market.confidence < 60 || market.confidence > 100) {
+          return false;
+        }
+
+        if (!findPredictionMarket(market.market)) {
+          return false;
+        }
+
+        if (!isValidPredictionSelection(market.market, market.selection)) {
+          return false;
+        }
+
+        if (playerMarkets.has(market.market) && !market.playerName?.trim()) {
+          return false;
+        }
+
+        return true;
+      })
       .map((market) => ({
         market: market.market,
 
@@ -230,13 +297,11 @@ export class AiPredictionService {
           typeof market.reasoning === 'string' ? market.reasoning.trim() : '',
 
         supportingSources: this.normalizeSources(market.supportingSources),
-      }))
-      .filter(
-        (market) =>
-          market.selection.length > 0 &&
-          market.confidence >= 60 &&
-          market.confidence <= 100,
-      );
+
+        playerId: market.playerId?.trim() || undefined,
+
+        playerName: market.playerName?.trim() || undefined,
+      }));
   }
 
   // ============================================================
@@ -294,7 +359,7 @@ export class AiPredictionService {
   }
 
   // ============================================================
-  // MERGE SOURCES
+  // MERGE
   // ============================================================
 
   private mergeSources(...groups: AiResearchSource[][]): AiResearchSource[] {
@@ -312,7 +377,7 @@ export class AiPredictionService {
   }
 
   // ============================================================
-  // STRING NORMALIZER
+  // STRINGS
   // ============================================================
 
   private normalizeStrings(values?: string[]): string[] {

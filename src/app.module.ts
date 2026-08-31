@@ -41,6 +41,7 @@ import { PaymentGatewaysModule } from './payment-gateways/payment-gateways.modul
 
 import { WebsiteAnalyticsModule } from './website-analytics/website-analytics.module';
 import { GeminiModule } from './ai/gemini/gemini.module';
+import { AiModule } from './ai/ai.module';
 
 @Module({
   imports: [
@@ -95,6 +96,8 @@ import { GeminiModule } from './ai/gemini/gemini.module';
     ReferralsModule,
 
     GeminiModule,
+    AiModule,
+
     WebsiteAnalyticsModule,
   ],
   providers: [AdminGateway],

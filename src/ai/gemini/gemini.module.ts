@@ -1,5 +1,3 @@
-// src/ai/gemini/gemini.module.ts
-
 import { Module } from '@nestjs/common';
 
 import { ConfigModule } from '@nestjs/config';

@@ -1,5 +1,3 @@
-// src/ai/community-post/ai-community-post.service.ts
-
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 
 import { ConfigService } from '@nestjs/config';
@@ -63,11 +61,17 @@ export class AiCommunityPostService {
       throw new BadRequestException('Gemini returned no community post');
     }
 
-    return this.validateResult(result.data);
+    const post = this.validateResult(result.data);
+
+    return {
+      ...post,
+
+      sources: this.mergeSources(result.sources || [], post.sources),
+    };
   }
 
   // ==========================================================
-  // GENERATE AND PUBLISH
+  // GENERATE + PUBLISH
   // ==========================================================
 
   async generateAndPublish(
@@ -88,17 +92,9 @@ export class AiCommunityPostService {
       this.configService.get<string>('AI_COMMUNITY_FULL_NAME') ||
       '2xPredict AI';
 
-    // ========================================================
-    // GENERATE IMAGE
-    // ========================================================
-
     const image = await this.aiImageService.generateCommunityImage(
       generated.imagePrompt || generated.title,
     );
-
-    // ========================================================
-    // SAVE POST
-    // ========================================================
 
     const post = await this.communityService.createAiPost({
       userId,
@@ -132,7 +128,7 @@ export class AiCommunityPostService {
       post,
 
       ai: {
-        grounded: true,
+        grounded: generated.sources.length > 0,
 
         sources: generated.sources,
       },
@@ -151,6 +147,7 @@ for 2xPredict.
 ${
   request.topic
     ? `Preferred topic:
+
 ${request.topic}`
     : ''
 }
@@ -158,6 +155,7 @@ ${request.topic}`
 ${
   request.category
     ? `Preferred category:
+
 ${request.category}`
     : ''
 }
@@ -213,8 +211,6 @@ Do not invent statistics.
 WRITING
 ============================================================
 
-Write an original news post.
-
 Title:
 Maximum 100 characters.
 
@@ -238,10 +234,7 @@ IMAGE
 
 Provide an original image prompt.
 
-The image will be generated separately.
-
-Do not ask the system to download or reproduce a
-copyrighted news photograph.
+Do not reproduce a copyrighted news photograph.
 
 ============================================================
 OUTPUT
@@ -301,6 +294,8 @@ Cross-check important claims where possible.
 Write original concise summaries.
 
 Do not copy articles.
+
+Return valid JSON only.
 `.trim();
   }
 
@@ -335,26 +330,24 @@ Do not copy articles.
       throw new BadRequestException('AI post message is too long');
     }
 
-    if (!Array.isArray(result.sources) || result.sources.length === 0) {
-      throw new BadRequestException('AI post has no sources');
-    }
+    const sources = Array.isArray(result.sources)
+      ? result.sources
+          .filter(
+            (source) =>
+              source &&
+              typeof source.title === 'string' &&
+              typeof source.url === 'string',
+          )
+          .map((source) => ({
+            title: source.title.trim(),
 
-    const sources = result.sources
-      .filter(
-        (source) =>
-          source &&
-          typeof source.title === 'string' &&
-          typeof source.url === 'string' &&
-          /^https?:\/\//i.test(source.url),
-      )
-      .map((source) => ({
-        title: source.title.trim(),
-
-        url: source.url.trim(),
-      }));
+            url: source.url.trim(),
+          }))
+          .filter((source) => source.title && /^https?:\/\//i.test(source.url))
+      : [];
 
     if (!sources.length) {
-      throw new BadRequestException('AI post sources are invalid');
+      throw new BadRequestException('AI post has no valid sources');
     }
 
     return {
@@ -377,5 +370,34 @@ Do not copy articles.
 
       sources,
     };
+  }
+
+  // ==========================================================
+  // SOURCES
+  // ==========================================================
+
+  private mergeSources(
+    ...groups: {
+      title: string;
+      url: string;
+    }[][]
+  ) {
+    const map = new Map<
+      string,
+      {
+        title: string;
+        url: string;
+      }
+    >();
+
+    for (const group of groups) {
+      for (const source of group) {
+        if (!map.has(source.url)) {
+          map.set(source.url, source);
+        }
+      }
+    }
+
+    return Array.from(map.values());
   }
 }

@@ -1,5 +1,3 @@
-// src/predictions/dto/create-prediction.dto.ts
-
 import {
   IsString,
   IsNumber,
@@ -30,6 +28,14 @@ class MarketDto {
   @IsOptional()
   @IsString()
   selection?: string;
+
+  @IsOptional()
+  @IsString()
+  playerId?: string;
+
+  @IsOptional()
+  @IsString()
+  playerName?: string;
 }
 
 class LeagueDto {
@@ -85,15 +91,13 @@ export class CreatePredictionDto {
   @IsEnum(['free', 'regular', 'vip'])
   accessType!: 'free' | 'regular' | 'vip';
 
-  @IsOptional()
-  @IsNumber()
-  price?: number;
-
   @IsString()
   matchDate!: string;
 
   @IsOptional()
-  @ValidateNested({ each: true })
+  @ValidateNested({
+    each: true,
+  })
   @Type(() => MarketDto)
   markets?: MarketDto[];
 }

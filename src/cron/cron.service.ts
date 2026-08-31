@@ -64,7 +64,9 @@ export class CronService {
   // No Gemini call happens here.
   // ==========================================================
 
-  @Cron('0 10 * * *')
+  @Cron('0 10 * * *', {
+    timeZone: 'Africa/Lagos',
+  })
   async distributeDailyTelegramContent(): Promise<void> {
     this.logger.log('Sending daily community content to Telegram...');
 

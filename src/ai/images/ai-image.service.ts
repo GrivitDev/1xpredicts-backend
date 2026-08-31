@@ -116,7 +116,7 @@ ${prompt.trim()}
         contents: finalPrompt,
 
         config: {
-          responseModalities: ['IMAGE', 'TEXT'],
+          responseModalities: ['IMAGE'],
         },
       });
 
