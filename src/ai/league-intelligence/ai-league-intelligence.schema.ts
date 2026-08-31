@@ -7,6 +7,10 @@ import { HydratedDocument } from 'mongoose';
 export type AiLeagueIntelligenceDocument =
   HydratedDocument<AiLeagueIntelligence>;
 
+// ============================================================
+// RESEARCH ITEM
+// ============================================================
+
 @Schema({
   _id: false,
 })
@@ -33,6 +37,10 @@ export class AiLeagueResearchItem {
 
 export const AiLeagueResearchItemSchema =
   SchemaFactory.createForClass(AiLeagueResearchItem);
+
+// ============================================================
+// LEAGUE INTELLIGENCE
+// ============================================================
 
 @Schema({
   timestamps: true,
@@ -87,13 +95,16 @@ export class AiLeagueIntelligence {
   @Prop({
     type: Date,
     required: true,
-    index: true,
   })
   expiresAt!: Date;
 }
 
 export const AiLeagueIntelligenceSchema =
   SchemaFactory.createForClass(AiLeagueIntelligence);
+
+// ============================================================
+// ONE CACHE PER LEAGUE PER DAY
+// ============================================================
 
 AiLeagueIntelligenceSchema.index(
   {
@@ -104,6 +115,10 @@ AiLeagueIntelligenceSchema.index(
     unique: true,
   },
 );
+
+// ============================================================
+// 24-HOUR TTL CACHE
+// ============================================================
 
 AiLeagueIntelligenceSchema.index(
   {
