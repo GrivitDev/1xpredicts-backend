@@ -1,3 +1,5 @@
+// src/ai/ai-scheduler.service.ts
+
 import { Injectable, Logger } from '@nestjs/common';
 
 import { Cron } from '@nestjs/schedule';
@@ -23,10 +25,12 @@ export class AiSchedulerService {
   private running = false;
 
   // ==========================================================
-  // EVERY 5 MINUTES
+  // EVERY HOUR
   // ==========================================================
 
-  @Cron('*/5 * * * *')
+  @Cron('0 * * * *', {
+    timeZone: 'Africa/Lagos',
+  })
   async processPredictions(): Promise<void> {
     if (this.running) {
       return;
@@ -54,6 +58,8 @@ export class AiSchedulerService {
     const leagues = await this.footballDataService.getLeagues();
 
     if (!leagues.length) {
+      this.logger.warn('No leagues available for prediction.');
+
       return;
     }
 
@@ -65,6 +71,10 @@ export class AiSchedulerService {
       const index = (this.leagueIndex + offset) % leagues.length;
 
       const league = leagues[index];
+
+      if (!league?.code) {
+        continue;
+      }
 
       const matches = await this.getEligibleMatches(league.code);
 
@@ -93,10 +103,14 @@ export class AiSchedulerService {
     }
 
     this.leagueIndex = (this.leagueIndex + 1) % leagues.length;
+
+    this.logger.log(
+      'No unpredicted matches found inside the current 7-day windows.',
+    );
   }
 
   // ==========================================================
-  // 7-DAY WINDOW
+  // CURRENT 7-DAY WINDOW
   // ==========================================================
 
   private async getEligibleMatches(leagueCode: string): Promise<Match[]> {
@@ -151,8 +165,8 @@ export class AiSchedulerService {
     const result = await this.aiPredictionService.generatePrediction({
       match: input,
 
-      useGoogleSearch: true,
-
+      // Tavily research is supplied
+      // to Gemini through the match input.
       includeReasoning: true,
     });
 
@@ -164,8 +178,15 @@ export class AiSchedulerService {
 
     const accessType = this.selectAccessType(
       result.accessType,
+
       accessCounts,
+
       accessTargets,
+    );
+
+    this.logger.log(
+      `Access classification ${match.homeTeam} vs ${match.awayTeam}: ` +
+        `AI=${result.accessType}, FINAL=${accessType}`,
     );
 
     await this.predictionsService.create({
@@ -224,10 +245,14 @@ export class AiSchedulerService {
   }
 
   // ==========================================================
-  // TARGETS
+  // ACCESS TARGETS
   // ==========================================================
 
-  private calculateAccessTargets(totalMatches: number) {
+  private calculateAccessTargets(totalMatches: number): {
+    free: number;
+    regular: number;
+    vip: number;
+  } {
     if (totalMatches <= 0) {
       return {
         free: 0,
@@ -264,26 +289,30 @@ export class AiSchedulerService {
 
     const vip = Math.round(totalMatches * 0.15);
 
+    const regular = totalMatches - free - vip;
+
     return {
       free,
 
-      regular: totalMatches - free - vip,
+      regular,
 
       vip,
     };
   }
 
   // ==========================================================
-  // FINAL ACCESS TYPE
+  // FINAL ACCESS
   // ==========================================================
 
   private selectAccessType(
     aiRecommendation: AiPredictionAccessType,
+
     counts: {
       free: number;
       regular: number;
       vip: number;
     },
+
     targets: {
       free: number;
       regular: number;
@@ -308,16 +337,19 @@ export class AiSchedulerService {
     }[] = [
       {
         type: 'free',
+
         remaining: remaining.free,
       },
 
       {
         type: 'regular',
+
         remaining: remaining.regular,
       },
 
       {
         type: 'vip',
+
         remaining: remaining.vip,
       },
     ];

@@ -1,3 +1,5 @@
+// src/ai/predictions/ai-prediction.service.ts
+
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 
 import { GeminiService } from '../gemini/gemini.service';
@@ -29,9 +31,9 @@ export class AiPredictionService {
 
   constructor(private readonly geminiService: GeminiService) {}
 
-  // ============================================================
+  // ==========================================================
   // GENERATE
-  // ============================================================
+  // ==========================================================
 
   async generatePrediction(
     request: AiPredictionRequest,
@@ -49,13 +51,9 @@ export class AiPredictionService {
       prompt,
 
       options: {
-        temperature: 0.2,
-
         maxOutputTokens: 5000,
 
         systemInstruction: AI_PREDICTION_SYSTEM_PROMPT,
-
-        useGoogleSearch: request.useGoogleSearch ?? true,
       },
     });
 
@@ -63,16 +61,12 @@ export class AiPredictionService {
       throw new BadRequestException('Gemini returned no prediction');
     }
 
-    return this.validatePrediction(
-      result.data,
-      request.match,
-      result.sources || [],
-    );
+    return this.validatePrediction(result.data, request.match);
   }
 
-  // ============================================================
+  // ==========================================================
   // REQUEST VALIDATION
-  // ============================================================
+  // ==========================================================
 
   private validateRequest(request: AiPredictionRequest): void {
     if (!request?.match) {
@@ -98,14 +92,13 @@ export class AiPredictionService {
     }
   }
 
-  // ============================================================
+  // ==========================================================
   // RESULT VALIDATION
-  // ============================================================
+  // ==========================================================
 
   private validatePrediction(
     result: AiPredictionResult,
     match: AiPredictionMatchInput,
-    groundedSources: AiResearchSource[],
   ): AiPredictionResult {
     if (result.matchId !== match.matchId) {
       throw new BadRequestException('Gemini returned the wrong matchId');
@@ -157,22 +150,18 @@ export class AiPredictionService {
 
     const risks = this.normalizeStrings(result.risks);
 
-    const ownSources = this.normalizeSources(result.sources);
-
-    const accessType = this.validateAccessType(result.accessType);
-
-    const accessReason =
-      typeof result.accessReason === 'string' ? result.accessReason.trim() : '';
-
     const sources = this.mergeSources(
-      groundedSources,
-
-      ownSources,
+      this.normalizeSources(result.sources),
 
       research.flatMap((item) => item.sources),
 
       markets.flatMap((market) => market.supportingSources),
     );
+
+    const accessType = this.validateAccessType(result.accessType);
+
+    const accessReason =
+      typeof result.accessReason === 'string' ? result.accessReason.trim() : '';
 
     return {
       matchId: match.matchId,
@@ -185,9 +174,7 @@ export class AiPredictionService {
 
       probabilities: {
         home,
-
         draw,
-
         away,
       },
 
@@ -216,9 +203,9 @@ export class AiPredictionService {
     };
   }
 
-  // ============================================================
+  // ==========================================================
   // ACCESS
-  // ============================================================
+  // ==========================================================
 
   private validateAccessType(accessType: unknown): 'free' | 'regular' | 'vip' {
     if (
@@ -232,9 +219,9 @@ export class AiPredictionService {
     return accessType;
   }
 
-  // ============================================================
+  // ==========================================================
   // MARKETS
-  // ============================================================
+  // ==========================================================
 
   private validateMarkets(
     markets?: AiPredictionMarket[],
@@ -250,6 +237,8 @@ export class AiPredictionService {
       'PLAYER_SHOTS_ON_TARGET',
       'PLAYER_ASSISTS',
     ]);
+
+    const seen = new Set<string>();
 
     return markets
       .filter((market) => {
@@ -272,7 +261,9 @@ export class AiPredictionService {
           return false;
         }
 
-        if (!findPredictionMarket(market.market)) {
+        const config = findPredictionMarket(market.market);
+
+        if (!config) {
           return false;
         }
 
@@ -283,6 +274,13 @@ export class AiPredictionService {
         if (playerMarkets.has(market.market) && !market.playerName?.trim()) {
           return false;
         }
+
+        // One prediction per market.
+        if (seen.has(market.market)) {
+          return false;
+        }
+
+        seen.add(market.market);
 
         return true;
       })
@@ -304,9 +302,9 @@ export class AiPredictionService {
       }));
   }
 
-  // ============================================================
+  // ==========================================================
   // RESEARCH
-  // ============================================================
+  // ==========================================================
 
   private validateResearch(
     research?: AiResearchFinding[],
@@ -332,9 +330,9 @@ export class AiPredictionService {
       .filter((item) => item.topic.length > 0 && item.finding.length > 0);
   }
 
-  // ============================================================
+  // ==========================================================
   // SOURCES
-  // ============================================================
+  // ==========================================================
 
   private normalizeSources(sources?: AiResearchSource[]): AiResearchSource[] {
     if (!Array.isArray(sources)) {
@@ -358,9 +356,9 @@ export class AiPredictionService {
       );
   }
 
-  // ============================================================
-  // MERGE
-  // ============================================================
+  // ==========================================================
+  // MERGE SOURCES
+  // ==========================================================
 
   private mergeSources(...groups: AiResearchSource[][]): AiResearchSource[] {
     const map = new Map<string, AiResearchSource>();
@@ -376,9 +374,9 @@ export class AiPredictionService {
     return Array.from(map.values());
   }
 
-  // ============================================================
+  // ==========================================================
   // STRINGS
-  // ============================================================
+  // ==========================================================
 
   private normalizeStrings(values?: string[]): string[] {
     if (!Array.isArray(values)) {
@@ -391,9 +389,9 @@ export class AiPredictionService {
       .filter(Boolean);
   }
 
-  // ============================================================
+  // ==========================================================
   // INTEGER
-  // ============================================================
+  // ==========================================================
 
   private toInteger(value: unknown): number {
     const number = Number(value);

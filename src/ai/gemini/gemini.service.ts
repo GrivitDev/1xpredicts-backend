@@ -1,3 +1,5 @@
+// src/ai/gemini/gemini.service.ts
+
 import {
   BadRequestException,
   Injectable,
@@ -18,24 +20,19 @@ import {
   DEFAULT_GEMINI_MODEL,
   GEMINI_API_KEY_ENV,
   GEMINI_DEFAULT_MAX_OUTPUT_TOKENS,
-  GEMINI_DEFAULT_TEMPERATURE,
-  GEMINI_DEFAULT_TOP_K,
-  GEMINI_DEFAULT_TOP_P,
-  GEMINI_GROUNDING_ENV,
   GEMINI_MODEL_ENV,
   GEMINI_PROVIDER,
-  GEMINI_SEARCH_TOOL,
 } from './gemini.constants';
 
 import {
   GeminiGenerateRequest,
+  GeminiHealthStatus,
   GeminiMultimodalRequest,
 } from './gemini.interfaces';
 
 import {
   GeminiGenerationOptions,
   GeminiResult,
-  GeminiSource,
   GeminiUsage,
 } from './gemini.types';
 
@@ -46,8 +43,6 @@ export class GeminiService {
   private readonly client: GoogleGenAI;
 
   private readonly model: string;
-
-  private readonly googleSearchEnabled: boolean;
 
   constructor(private readonly configService: ConfigService) {
     const apiKey = this.configService.get<string>(GEMINI_API_KEY_ENV);
@@ -61,9 +56,6 @@ export class GeminiService {
     this.model =
       this.configService.get<string>(GEMINI_MODEL_ENV) || DEFAULT_GEMINI_MODEL;
 
-    this.googleSearchEnabled =
-      this.configService.get<string>(GEMINI_GROUNDING_ENV) !== 'false';
-
     this.client = new GoogleGenAI({
       apiKey,
     });
@@ -71,17 +63,34 @@ export class GeminiService {
     this.logger.log(`Gemini initialized: ${this.model}`);
   }
 
-  // ============================================================
+  // ==========================================================
+  // HEALTH
+  // ==========================================================
+
+  getHealth(): GeminiHealthStatus {
+    return {
+      configured: true,
+
+      provider: GEMINI_PROVIDER,
+
+      model: this.model,
+
+      // Web research is handled by Tavily.
+      googleSearchEnabled: false,
+    };
+  }
+
+  // ==========================================================
   // MODEL
-  // ============================================================
+  // ==========================================================
 
   getModel(): string {
     return this.model;
   }
 
-  // ============================================================
+  // ==========================================================
   // TEXT GENERATION
-  // ============================================================
+  // ==========================================================
 
   async generate(
     request: GeminiGenerateRequest,
@@ -92,11 +101,13 @@ export class GeminiService {
 
     const options = request.options || {};
 
+    const model = options.model || this.model;
+
     const config = this.buildGenerationConfig(options);
 
     try {
       const response = await this.client.models.generateContent({
-        model: options.model || this.model,
+        model,
 
         contents: request.prompt,
 
@@ -109,8 +120,6 @@ export class GeminiService {
         throw new Error('Gemini returned an empty response');
       }
 
-      const sources = this.extractSources(response);
-
       return {
         success: true,
 
@@ -118,22 +127,22 @@ export class GeminiService {
 
         text,
 
-        model: options.model || this.model,
+        model,
 
         usage: this.extractUsage(response),
 
-        sources,
+        sources: [],
 
-        grounded: sources.length > 0,
+        grounded: false,
       };
     } catch (error) {
       this.handleError(error, request.task || 'general');
     }
   }
 
-  // ============================================================
+  // ==========================================================
   // JSON GENERATION
-  // ============================================================
+  // ==========================================================
 
   async generateJson<T>(
     request: GeminiGenerateRequest,
@@ -144,21 +153,17 @@ export class GeminiService {
 
     const options = request.options || {};
 
-    const useGoogleSearch = Boolean(
-      options.useGoogleSearch && this.googleSearchEnabled,
-    );
+    const model = options.model || this.model;
 
     const config = this.buildGenerationConfig({
       ...options,
 
-      // Gemini 2.5 + Google Search:
-      // request text and parse JSON ourselves.
-      responseFormat: useGoogleSearch ? 'text' : 'json',
+      responseFormat: 'json',
     });
 
     try {
       const response = await this.client.models.generateContent({
-        model: options.model || this.model,
+        model,
 
         contents: request.prompt,
 
@@ -173,8 +178,6 @@ export class GeminiService {
 
       const parsed = this.parseJson<T>(text);
 
-      const sources = this.extractSources(response);
-
       return {
         success: true,
 
@@ -182,22 +185,22 @@ export class GeminiService {
 
         text,
 
-        model: options.model || this.model,
+        model,
 
         usage: this.extractUsage(response),
 
-        sources,
+        sources: [],
 
-        grounded: sources.length > 0,
+        grounded: false,
       };
     } catch (error) {
       this.handleError(error, request.task || 'general');
     }
   }
 
-  // ============================================================
+  // ==========================================================
   // MULTIMODAL
-  // ============================================================
+  // ==========================================================
 
   async generateMultimodal(
     request: GeminiMultimodalRequest,
@@ -207,6 +210,8 @@ export class GeminiService {
     }
 
     const options = request.options || {};
+
+    const model = options.model || this.model;
 
     const config = this.buildGenerationConfig(options);
 
@@ -228,7 +233,7 @@ export class GeminiService {
 
     try {
       const response = await this.client.models.generateContent({
-        model: options.model || this.model,
+        model,
 
         contents: [
           {
@@ -247,8 +252,6 @@ export class GeminiService {
         throw new Error('Gemini returned an empty response');
       }
 
-      const sources = this.extractSources(response);
-
       return {
         success: true,
 
@@ -256,33 +259,32 @@ export class GeminiService {
 
         text,
 
-        model: options.model || this.model,
+        model,
 
         usage: this.extractUsage(response),
 
-        sources,
+        sources: [],
 
-        grounded: sources.length > 0,
+        grounded: false,
       };
     } catch (error) {
       this.handleError(error, request.task || 'general');
     }
   }
 
-  // ============================================================
+  // ==========================================================
   // CONFIG
-  // ============================================================
+  // ==========================================================
+  //
+  // Gemini 3.x no longer uses the old temperature,
+  // topP and topK parameters in our application.
+  //
+  // ==========================================================
 
   private buildGenerationConfig(
     options: GeminiGenerationOptions,
   ): GenerateContentConfig {
     const config: GenerateContentConfig = {
-      temperature: options.temperature ?? GEMINI_DEFAULT_TEMPERATURE,
-
-      topP: options.topP ?? GEMINI_DEFAULT_TOP_P,
-
-      topK: options.topK ?? GEMINI_DEFAULT_TOP_K,
-
       maxOutputTokens:
         options.maxOutputTokens ?? GEMINI_DEFAULT_MAX_OUTPUT_TOKENS,
     };
@@ -295,16 +297,12 @@ export class GeminiService {
       config.systemInstruction = options.systemInstruction;
     }
 
-    if (options.useGoogleSearch && this.googleSearchEnabled) {
-      config.tools = [GEMINI_SEARCH_TOOL];
-    }
-
     return config;
   }
 
-  // ============================================================
+  // ==========================================================
   // JSON PARSER
-  // ============================================================
+  // ==========================================================
 
   private parseJson<T>(text: string): T {
     try {
@@ -320,9 +318,9 @@ export class GeminiService {
     }
   }
 
-  // ============================================================
+  // ==========================================================
   // JSON BLOCK
-  // ============================================================
+  // ==========================================================
 
   private extractJsonBlock(text: string): string {
     const objectStart = text.indexOf('{');
@@ -344,9 +342,9 @@ export class GeminiService {
     return text;
   }
 
-  // ============================================================
+  // ==========================================================
   // USAGE
-  // ============================================================
+  // ==========================================================
 
   private extractUsage(
     response: GenerateContentResponse,
@@ -366,70 +364,14 @@ export class GeminiService {
     };
   }
 
-  // ============================================================
-  // SOURCES
-  // ============================================================
-
-  private extractSources(response: GenerateContentResponse): GeminiSource[] {
-    const candidate = (response as any)?.candidates?.[0];
-
-    const groundingMetadata = candidate?.groundingMetadata;
-
-    if (!groundingMetadata) {
-      return [];
-    }
-
-    const chunks = Array.isArray(groundingMetadata.groundingChunks)
-      ? groundingMetadata.groundingChunks
-      : [];
-
-    const sources: GeminiSource[] = [];
-
-    for (const chunk of chunks) {
-      const web = chunk?.web;
-
-      if (typeof web?.uri !== 'string') {
-        continue;
-      }
-
-      sources.push({
-        title: typeof web.title === 'string' ? web.title : web.uri,
-
-        url: web.uri,
-      });
-    }
-
-    return this.uniqueSources(sources);
-  }
-
-  // ============================================================
-  // UNIQUE SOURCES
-  // ============================================================
-
-  private uniqueSources(sources: GeminiSource[]): GeminiSource[] {
-    const seen = new Set<string>();
-
-    return sources.filter((source) => {
-      if (seen.has(source.url)) {
-        return false;
-      }
-
-      seen.add(source.url);
-
-      return true;
-    });
-  }
-
-  // ============================================================
-  // ERROR HANDLING
-  // ============================================================
+  // ==========================================================
+  // ERROR
+  // ==========================================================
 
   private handleError(error: unknown, task: string): never {
-    this.logger.error(
-      `Gemini ${task} failed: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
-    );
+    const message = error instanceof Error ? error.message : String(error);
+
+    this.logger.error(`Gemini ${task} failed: ${message}`);
 
     throw new InternalServerErrorException('Gemini request failed');
   }

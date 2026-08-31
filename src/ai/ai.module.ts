@@ -2,11 +2,18 @@
 
 import { Module } from '@nestjs/common';
 
+import { MongooseModule } from '@nestjs/mongoose';
+
 import { GeminiModule } from './gemini/gemini.module';
 
+import { TavilyModule } from '../tavily/tavily.module';
+
 import { SportsModule } from '../sports/sports.module';
+
 import { PredictionsModule } from '../predictions/predictions.module';
+
 import { CommunityModule } from '../community/community.module';
+
 import { UploadsModule } from '../uploads/uploads.module';
 
 // ============================================================
@@ -16,12 +23,6 @@ import { UploadsModule } from '../uploads/uploads.module';
 import { AiCommunityPostService } from './community-post/ai-community-post.service';
 
 import { AiCommunityDiscussionService } from './community-discussions/ai-community-discussion.service';
-
-// ============================================================
-// IMAGE AI
-// ============================================================
-
-import { AiImageService } from './images/ai-image.service';
 
 // ============================================================
 // VIDEO AI
@@ -47,9 +48,24 @@ import { AiSchedulerService } from './ai-scheduler.service';
 
 import { AiContentSchedulerService } from './ai-content-scheduler.service';
 
+import { AiLeagueIntelligenceScheduler } from './league-intelligence/ai-league-intelligence.scheduler';
+
+// ============================================================
+// LEAGUE INTELLIGENCE
+// ============================================================
+
+import { AiLeagueIntelligenceService } from './league-intelligence/ai-league-intelligence.service';
+
+import {
+  AiLeagueIntelligence,
+  AiLeagueIntelligenceSchema,
+} from './league-intelligence/ai-league-intelligence.schema';
+
 @Module({
   imports: [
     GeminiModule,
+
+    TavilyModule,
 
     SportsModule,
 
@@ -58,35 +74,50 @@ import { AiContentSchedulerService } from './ai-content-scheduler.service';
     CommunityModule,
 
     UploadsModule,
+
+    MongooseModule.forFeature([
+      {
+        name: AiLeagueIntelligence.name,
+
+        schema: AiLeagueIntelligenceSchema,
+      },
+    ]),
   ],
 
   controllers: [AiPredictionController],
 
   providers: [
     AiCommunityPostService,
-    AiCommunityDiscussionService,
 
-    AiImageService,
+    AiCommunityDiscussionService,
 
     AiVideoService,
 
     AiPredictionService,
+
     AiPredictionDataService,
 
     AiSchedulerService,
+
     AiContentSchedulerService,
+
+    AiLeagueIntelligenceService,
+
+    AiLeagueIntelligenceScheduler,
   ],
 
   exports: [
     AiCommunityPostService,
-    AiCommunityDiscussionService,
 
-    AiImageService,
+    AiCommunityDiscussionService,
 
     AiVideoService,
 
     AiPredictionService,
+
     AiPredictionDataService,
+
+    AiLeagueIntelligenceService,
   ],
 })
 export class AiModule {}

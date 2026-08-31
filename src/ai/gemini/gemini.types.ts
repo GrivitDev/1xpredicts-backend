@@ -27,19 +27,11 @@ export type GeminiResponseFormat = 'text' | 'json';
 export interface GeminiGenerationOptions {
   model?: string;
 
-  temperature?: number;
-
-  topP?: number;
-
-  topK?: number;
-
   maxOutputTokens?: number;
 
   responseFormat?: GeminiResponseFormat;
 
   systemInstruction?: string;
-
-  useGoogleSearch?: boolean;
 }
 
 // ============================================================

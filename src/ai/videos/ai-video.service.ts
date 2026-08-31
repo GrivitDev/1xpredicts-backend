@@ -6,6 +6,8 @@ import { ConfigService } from '@nestjs/config';
 
 import { GeminiService } from '../gemini/gemini.service';
 
+import { TavilyService } from '../../tavily/tavily.service';
+
 import { CommunityService } from '../../community/community.service';
 
 import { CommunityPostType } from '../../community/enums/community-post-type.enum';
@@ -21,6 +23,8 @@ export class AiVideoService {
   constructor(
     private readonly geminiService: GeminiService,
 
+    private readonly tavilyService: TavilyService,
+
     private readonly communityService: CommunityService,
 
     private readonly configService: ConfigService,
@@ -31,17 +35,41 @@ export class AiVideoService {
   // ==========================================================
 
   async generateVideoPost(): Promise<AiVideoPostResult> {
+    const search = await this.tavilyService.search(
+      `
+latest football viral video
+important football moment
+football analysis press conference
+recent football video YouTube
+        `.trim(),
+      {
+        searchDepth: 'basic',
+
+        maxResults: 10,
+
+        timeRange: 'day',
+
+        includeImages: false,
+
+        includeDomains: ['youtube.com', 'youtu.be'],
+      },
+    );
+
+    const video = this.findYoutubeVideo(search.results);
+
+    if (!video) {
+      throw new BadRequestException(
+        'Tavily returned no suitable YouTube football video',
+      );
+    }
+
     const result = await this.geminiService.generateJson<AiVideoPostResult>({
       task: 'general',
 
-      prompt: this.buildPrompt(),
+      prompt: this.buildPrompt(video),
 
       options: {
-        temperature: 0.5,
-
-        maxOutputTokens: 2500,
-
-        useGoogleSearch: true,
+        maxOutputTokens: 1500,
 
         systemInstruction: this.getSystemInstruction(),
       },
@@ -51,7 +79,7 @@ export class AiVideoService {
       throw new BadRequestException('Gemini returned no video post');
     }
 
-    return this.validateResult(result.data);
+    return this.validateResult(result.data, video.url);
   }
 
   // ==========================================================
@@ -60,6 +88,7 @@ export class AiVideoService {
 
   async generateAndPublish(): Promise<{
     post: unknown;
+
     video: AiVideoPostResult;
   }> {
     const generated = await this.generateVideoPost();
@@ -97,8 +126,6 @@ export class AiVideoService {
 
         url: generated.video.url,
 
-        // We are not uploading the video to Cloudinary.
-        // The YouTube ID is stored here as the media identifier.
         publicId: generated.video.videoId,
       },
 
@@ -124,64 +151,62 @@ export class AiVideoService {
   // PROMPT
   // ==========================================================
 
-  private buildPrompt(): string {
+  private buildPrompt(video: {
+    title: string;
+
+    url: string;
+
+    content?: string;
+
+    publishedDate?: string;
+  }): string {
+    const videoId = this.extractYoutubeVideoId(video.url);
+
+    if (!videoId) {
+      throw new BadRequestException('Invalid YouTube video result');
+    }
+
     return `
-Find one relevant and interesting football video that is
-suitable for a 2xPredict community video post.
-
-The video should preferably be recent.
-
-Prioritize:
-
-- major football moments
-- important match moments
-- tactical moments
-- great goals
-- controversial football incidents
-- major team news shown in video
-- important press conferences
-- important football analysis
-- highly relevant football stories
-
-The video must be publicly accessible on YouTube.
-
-Do not select:
-
-- pirated uploads
-- obviously stolen full-match broadcasts
-- illegal streams
-- harmful content
-- unrelated videos
-- old videos unless the event is currently highly relevant
+Create a short football community comment about this
+verified YouTube video.
 
 ============================================================
-RESEARCH
+VIDEO
 ============================================================
 
-Use Google Search to find the video.
+Title:
+${video.title}
 
-Verify the video's title, relevance and public URL.
+URL:
+${video.url}
 
-The video URL must be a real public YouTube URL.
+Published:
+${video.publishedDate || 'Unknown'}
+
+Available description:
+${video.content || 'No description supplied.'}
 
 ============================================================
-COMMENTARY
+RULES
 ============================================================
 
-Write a short football comment about the video.
+The video URL has already been discovered by Tavily.
 
-The comment should:
+Do not change the URL.
 
-- be interesting
-- be analytical
-- be concise
-- use short sentences
-- avoid pretending opinions are facts
-- encourage discussion
-- not simply repeat the video title
+Do not invent another video.
 
-Maximum comment length:
+Do not pretend to have watched the video if the supplied
+information does not establish what happened.
+
+Write a short analytical football comment.
+
+Maximum:
 700 characters.
+
+Encourage discussion.
+
+Do not simply repeat the video title.
 
 ============================================================
 OUTPUT
@@ -190,66 +215,100 @@ OUTPUT
 Return JSON only:
 
 {
-  "title": "string",
+  "title": "${video.title}",
   "message": "string",
   "category": "Football Video",
   "video": {
-    "url": "https://www.youtube.com/watch?v=VIDEO_ID",
+    "url": "${video.url}",
     "platform": "youtube",
-    "videoId": "VIDEO_ID"
+    "videoId": "${videoId}"
   },
   "source": {
-    "title": "string",
-    "url": "https://www.youtube.com/watch?v=VIDEO_ID",
-    "channel": "string"
+    "title": "${video.title}",
+    "url": "${video.url}"
   }
 }
-
-The video platform must be:
-
-"youtube"
-
-The URL must be a public YouTube URL.
 
 Return JSON only.
 `.trim();
   }
 
   // ==========================================================
-  // SYSTEM INSTRUCTION
+  // SYSTEM
   // ==========================================================
 
   private getSystemInstruction(): string {
     return `
 You are the football video editor for 2xPredict.
 
-Find relevant public football videos.
+The video has already been found by Tavily.
 
-Prefer current and important football moments.
+Never invent:
 
-Never invent a video.
+- a video
+- a video URL
+- a video ID
+- a channel
+- an event
+- information about what happened
 
-Never invent its title.
-
-Never invent its channel.
-
-Never invent information about what happened in the video.
-
-The supplied YouTube video must actually exist as a public URL.
+Use the supplied video information.
 
 Write short original football commentary.
-
-Do not download or rehost the video.
 
 Return valid JSON only.
 `.trim();
   }
 
   // ==========================================================
+  // FIND YOUTUBE VIDEO
+  // ==========================================================
+
+  private findYoutubeVideo(results: any[]) {
+    if (!Array.isArray(results)) {
+      return null;
+    }
+
+    for (const result of results) {
+      if (typeof result?.url !== 'string') {
+        continue;
+      }
+
+      if (!this.extractYoutubeVideoId(result.url)) {
+        continue;
+      }
+
+      return {
+        title:
+          typeof result.title === 'string'
+            ? result.title.trim()
+            : 'Football Video',
+
+        url: result.url.trim(),
+
+        content:
+          typeof result.content === 'string'
+            ? result.content.trim()
+            : undefined,
+
+        publishedDate:
+          typeof result.publishedDate === 'string'
+            ? result.publishedDate
+            : undefined,
+      };
+    }
+
+    return null;
+  }
+
+  // ==========================================================
   // VALIDATE
   // ==========================================================
 
-  private validateResult(result: AiVideoPostResult): AiVideoPostResult {
+  private validateResult(
+    result: AiVideoPostResult,
+    verifiedUrl: string,
+  ): AiVideoPostResult {
     if (!result) {
       throw new BadRequestException('Invalid AI video result');
     }
@@ -280,26 +339,10 @@ Return valid JSON only.
       throw new BadRequestException('AI video commentary is too long');
     }
 
-    if (result.video?.platform !== 'youtube') {
-      throw new BadRequestException('Only YouTube videos are supported');
-    }
+    const verifiedVideoId = this.extractYoutubeVideoId(verifiedUrl);
 
-    const videoUrl = result.video?.url?.trim();
-
-    if (!videoUrl || !this.isYoutubeUrl(videoUrl)) {
-      throw new BadRequestException('Invalid YouTube video URL');
-    }
-
-    const videoId = this.extractYoutubeVideoId(videoUrl);
-
-    if (!videoId) {
-      throw new BadRequestException('Unable to extract YouTube video ID');
-    }
-
-    const sourceUrl = result.source?.url?.trim();
-
-    if (!sourceUrl || !this.isYoutubeUrl(sourceUrl)) {
-      throw new BadRequestException('Invalid video source URL');
+    if (!verifiedVideoId) {
+      throw new BadRequestException('Verified YouTube video is invalid');
     }
 
     return {
@@ -310,40 +353,21 @@ Return valid JSON only.
       category,
 
       video: {
-        url: videoUrl,
+        url: verifiedUrl,
 
         platform: 'youtube',
 
-        videoId,
+        videoId: verifiedVideoId,
       },
 
       source: {
-        title: result.source.title?.trim() || title,
+        title: result.source?.title?.trim() || title,
 
-        url: sourceUrl,
+        url: verifiedUrl,
 
-        channel: result.source.channel?.trim() || undefined,
+        channel: result.source?.channel?.trim() || undefined,
       },
     };
-  }
-
-  // ==========================================================
-  // YOUTUBE URL CHECK
-  // ==========================================================
-
-  private isYoutubeUrl(url: string): boolean {
-    try {
-      const parsed = new URL(url);
-
-      return (
-        parsed.hostname === 'youtube.com' ||
-        parsed.hostname === 'www.youtube.com' ||
-        parsed.hostname === 'youtu.be' ||
-        parsed.hostname === 'www.youtu.be'
-      );
-    } catch {
-      return false;
-    }
   }
 
   // ==========================================================
@@ -354,25 +378,26 @@ Return valid JSON only.
     try {
       const parsed = new URL(url);
 
-      if (
-        parsed.hostname === 'youtu.be' ||
-        parsed.hostname === 'www.youtu.be'
-      ) {
+      const hostname = parsed.hostname.toLowerCase();
+
+      if (hostname === 'youtu.be' || hostname === 'www.youtu.be') {
         return parsed.pathname.replace(/^\/+/, '').split('/')[0] || null;
       }
 
-      const id = parsed.searchParams.get('v');
+      if (hostname === 'youtube.com' || hostname === 'www.youtube.com') {
+        const id = parsed.searchParams.get('v');
 
-      if (id) {
-        return id;
-      }
+        if (id) {
+          return id;
+        }
 
-      const parts = parsed.pathname.split('/');
+        const parts = parsed.pathname.split('/').filter(Boolean);
 
-      const index = parts.indexOf('shorts');
+        const shortsIndex = parts.indexOf('shorts');
 
-      if (index !== -1 && parts[index + 1]) {
-        return parts[index + 1];
+        if (shortsIndex !== -1 && parts[shortsIndex + 1]) {
+          return parts[shortsIndex + 1] || null;
+        }
       }
 
       return null;

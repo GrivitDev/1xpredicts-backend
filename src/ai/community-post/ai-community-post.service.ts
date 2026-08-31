@@ -1,10 +1,12 @@
+// src/ai/community-post/ai-community-post.service.ts
+
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 
 import { ConfigService } from '@nestjs/config';
 
 import { GeminiService } from '../gemini/gemini.service';
 
-import { AiImageService } from '../images/ai-image.service';
+import { TavilyService } from '../../tavily/tavily.service';
 
 import { CommunityService } from '../../community/community.service';
 
@@ -25,7 +27,7 @@ export class AiCommunityPostService {
   constructor(
     private readonly geminiService: GeminiService,
 
-    private readonly aiImageService: AiImageService,
+    private readonly tavilyService: TavilyService,
 
     private readonly communityService: CommunityService,
 
@@ -39,18 +41,26 @@ export class AiCommunityPostService {
   async generatePost(
     request: AiCommunityPostRequest = {},
   ): Promise<AiCommunityPostResult> {
+    const research = await this.searchNews(request);
+
+    if (!research.results.length) {
+      throw new BadRequestException('Tavily returned no current football news');
+    }
+
+    const imageUrl = research.images?.[0];
+
+    if (!imageUrl) {
+      throw new BadRequestException('Tavily returned no news image');
+    }
+
     const result = await this.geminiService.generateJson<AiCommunityPostResult>(
       {
         task: 'community_post',
 
-        prompt: this.buildPrompt(request),
+        prompt: this.buildPrompt(request, research, imageUrl),
 
         options: {
-          temperature: 0.4,
-
-          maxOutputTokens: 3000,
-
-          useGoogleSearch: true,
+          maxOutputTokens: 2200,
 
           systemInstruction: this.systemInstruction(),
         },
@@ -61,13 +71,7 @@ export class AiCommunityPostService {
       throw new BadRequestException('Gemini returned no community post');
     }
 
-    const post = this.validateResult(result.data);
-
-    return {
-      ...post,
-
-      sources: this.mergeSources(result.sources || [], post.sources),
-    };
+    return this.validateResult(result.data, research, imageUrl);
   }
 
   // ==========================================================
@@ -92,10 +96,6 @@ export class AiCommunityPostService {
       this.configService.get<string>('AI_COMMUNITY_FULL_NAME') ||
       '2xPredict AI';
 
-    const image = await this.aiImageService.generateCommunityImage(
-      generated.imagePrompt || generated.title,
-    );
-
     const post = await this.communityService.createAiPost({
       userId,
 
@@ -114,15 +114,16 @@ export class AiCommunityPostService {
       media: {
         type: CommunityMediaType.IMAGE,
 
-        url: image.url,
+        url: generated.imageUrl,
 
-        publicId: image.publicId,
+        // External Tavily image URL.
+        publicId: generated.imageUrl,
       },
 
       sources: generated.sources,
     });
 
-    this.logger.log(`AI community news post published: ${post._id}`);
+    this.logger.log(`AI football news post published: ${post._id}`);
 
     return {
       post,
@@ -130,82 +131,135 @@ export class AiCommunityPostService {
       ai: {
         grounded: generated.sources.length > 0,
 
-        sources: generated.sources,
+        sources: generated.sources.map((source) => ({
+          title: source.title,
+
+          url: source.url,
+        })),
       },
     };
+  }
+
+  // ==========================================================
+  // TAVILY SEARCH
+  // ==========================================================
+
+  private async searchNews(request: AiCommunityPostRequest) {
+    const query = `
+${request.topic ? `${request.topic} football` : 'important football news'}
+
+${request.category ? request.category : ''}
+
+latest football news today
+major transfers injuries suspensions
+team news manager news player availability
+important football developments
+    `.trim();
+
+    return this.tavilyService.searchNews(query, {
+      searchDepth: 'basic',
+
+      maxResults: 8,
+
+      timeRange: 'day',
+
+      includeImages: true,
+
+      includeImageDescriptions: false,
+
+      includeRawContent: false,
+    });
   }
 
   // ==========================================================
   // PROMPT
   // ==========================================================
 
-  private buildPrompt(request: AiCommunityPostRequest): string {
+  private buildPrompt(
+    request: AiCommunityPostRequest,
+    research: any,
+    imageUrl: string,
+  ): string {
+    const researchText = research.results
+      .map((item: any, index: number) =>
+        `
+${index + 1}. ${item.title}
+
+URL:
+${item.url}
+
+Published:
+${item.publishedDate || 'Unknown'}
+
+Information:
+${item.content || 'No summary supplied.'}
+`.trim(),
+      )
+      .join('\n\n');
+
     return `
 Create one important and current football news post
 for 2xPredict.
 
-${
-  request.topic
-    ? `Preferred topic:
+Do NOT search the web yourself.
 
-${request.topic}`
-    : ''
-}
-
-${
-  request.category
-    ? `Preferred category:
-
-${request.category}`
-    : ''
-}
+Current web research has already been supplied by Tavily.
 
 ============================================================
-RESEARCH
+CURRENT RESEARCH
 ============================================================
 
-Use Google Search.
+${researchText}
 
-Find a genuinely important current football story.
+============================================================
+IMAGE
+============================================================
+
+A current football image was found by Tavily.
+
+Use this exact image URL:
+
+${imageUrl}
+
+Do not create another image URL.
+
+============================================================
+TOPIC PREFERENCE
+============================================================
+
+${request.topic || 'Choose the most important current story.'}
+
+============================================================
+CATEGORY
+============================================================
+
+${request.category || 'Football News'}
+
+============================================================
+EDITORIAL STANDARD
+============================================================
+
+Choose a genuinely important story.
 
 Prioritize:
 
 - major transfers
 - major injury developments
-- significant player availability updates
 - suspensions
+- major player availability
 - manager changes
 - major club announcements
-- important tournament developments
-- important league developments
-- major upcoming football events
+- important competition developments
 - significant team news
-- major player news
+- major football events
 
-Do not choose trivial stories just to create content.
-
-============================================================
-FACTUAL STANDARD
-============================================================
-
-Verify important claims.
-
-Prefer:
-
-- official club sources
-- official competition sources
-- UEFA
-- FIFA
-- national football associations
-- established broadcasters
-- established sports journalists
-- reputable statistics websites
-
-Do not treat speculation as confirmed.
+Do not choose trivial stories simply to create content.
 
 Do not invent quotations.
 
 Do not invent statistics.
+
+Do not present speculation as confirmed fact.
 
 ============================================================
 WRITING
@@ -222,19 +276,11 @@ Explain:
 1. What happened.
 2. Why it matters.
 
-Use concise football journalism.
+Use concise original football journalism.
+
+Do not copy an article.
 
 Do not mention AI.
-
-Do not copy the source article.
-
-============================================================
-IMAGE
-============================================================
-
-Provide an original image prompt.
-
-Do not reproduce a copyrighted news photograph.
 
 ============================================================
 OUTPUT
@@ -249,7 +295,8 @@ Return JSON only:
   "category": "Football News",
   "importance": "high",
   "imageNeeded": true,
-  "imagePrompt": "string",
+  "imagePrompt": "",
+  "imageUrl": "${imageUrl}",
   "sources": [
     {
       "title": "string",
@@ -258,7 +305,9 @@ Return JSON only:
   ]
 }
 
-At least one source is required.
+The imageUrl MUST remain exactly:
+
+"${imageUrl}"
 
 Return JSON only.
 `.trim();
@@ -272,9 +321,11 @@ Return JSON only.
     return `
 You are the football news editor for 2xPredict.
 
-Research current football information with Google Search.
+Tavily has already performed the web research.
 
-Accuracy is more important than volume.
+Do not claim that you searched the web.
+
+Write original concise football news.
 
 Never fabricate:
 
@@ -287,13 +338,9 @@ Never fabricate:
 - results
 - player availability
 
-Use reputable sources.
+Use the supplied research.
 
-Cross-check important claims where possible.
-
-Write original concise summaries.
-
-Do not copy articles.
+Use the supplied image URL exactly.
 
 Return valid JSON only.
 `.trim();
@@ -303,7 +350,11 @@ Return valid JSON only.
   // VALIDATE
   // ==========================================================
 
-  private validateResult(result: AiCommunityPostResult): AiCommunityPostResult {
+  private validateResult(
+    result: AiCommunityPostResult,
+    research: any,
+    imageUrl: string,
+  ): AiCommunityPostResult {
     const title = typeof result.title === 'string' ? result.title.trim() : '';
 
     const message =
@@ -363,17 +414,24 @@ Return valid JSON only.
 
       imageNeeded: true,
 
-      imagePrompt:
-        typeof result.imagePrompt === 'string'
-          ? result.imagePrompt.trim()
-          : title,
+      imagePrompt: '',
 
-      sources,
+      imageUrl,
+
+      sources: this.mergeSources(
+        research.results.map((item: any) => ({
+          title: item.title,
+
+          url: item.url,
+        })),
+
+        sources,
+      ),
     };
   }
 
   // ==========================================================
-  // SOURCES
+  // MERGE SOURCES
   // ==========================================================
 
   private mergeSources(

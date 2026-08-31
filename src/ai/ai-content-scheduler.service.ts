@@ -1,3 +1,5 @@
+// src/ai/ai-content-scheduler.service.ts
+
 import { Injectable, Logger } from '@nestjs/common';
 
 import { Cron } from '@nestjs/schedule';
@@ -19,10 +21,22 @@ export class AiContentSchedulerService {
   private running = false;
 
   // ==========================================================
-  // MORNING CONTENT WINDOW
+  // CONTENT WINDOW
+  // ==========================================================
+  //
+  // 06:00 - 10:45
+  //
+  // Every 15 minutes.
+  //
+  // Maximum practical daily output:
+  //
+  // News        3-5
+  // Discussions 3-5
+  // Videos      3-5
+  //
   // ==========================================================
 
-  @Cron('*/15 6-9 * * *', {
+  @Cron('*/15 6-10 * * *', {
     timeZone: 'Africa/Lagos',
   })
   async generateMorningContent(): Promise<void> {
@@ -77,7 +91,7 @@ export class AiContentSchedulerService {
   }
 
   // ==========================================================
-  // SELECT
+  // SELECT CONTENT TYPE
   // ==========================================================
 
   private selectType(counts: {
@@ -88,19 +102,26 @@ export class AiContentSchedulerService {
     const items = [
       {
         type: 'news' as const,
+
         count: counts.news,
       },
 
       {
         type: 'discussion' as const,
+
         count: counts.discussions,
       },
 
       {
         type: 'video' as const,
+
         count: counts.videos,
       },
     ];
+
+    // --------------------------------------------------------
+    // Guarantee minimum 3 of each.
+    // --------------------------------------------------------
 
     const missingMinimum = items
       .filter((item) => item.count < 3)
@@ -109,6 +130,10 @@ export class AiContentSchedulerService {
     if (missingMinimum.length) {
       return missingMinimum[0].type;
     }
+
+    // --------------------------------------------------------
+    // Prefer 5 where possible.
+    // --------------------------------------------------------
 
     const belowMaximum = items
       .filter((item) => item.count < 5)
@@ -132,12 +157,15 @@ upcoming match or popular football team.
 
 Prefer a match happening today or within the next few days.
 
+Use current information supplied by the research service.
+
 The discussion should be connected to a current 2xPredict
 prediction when one is available.
 
-Use current information.
+The purpose is to create an argument that encourages users
+to agree or disagree.
 
-Keep the sentences short.
+Keep every sentence short.
 
 Do not write an article.
 `.trim();

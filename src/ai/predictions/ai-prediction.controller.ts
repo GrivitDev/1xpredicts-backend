@@ -11,7 +11,8 @@ import { Roles } from '../../common/decorators/roles.decorator';
 import { AiPredictionDataService } from './ai-prediction-data.service';
 
 import { AiPredictionService } from './ai-prediction.service';
-import { PredictionMarket } from 'src/predictions/constants/prediction-markets';
+
+import { PredictionMarket } from '../../predictions/constants/prediction-markets';
 
 interface AnalyzePredictionBody {
   requestedMarkets?: PredictionMarket[];
@@ -19,8 +20,6 @@ interface AnalyzePredictionBody {
   additionalNews?: string[];
 
   additionalContext?: string;
-
-  useGoogleSearch?: boolean;
 }
 
 @Controller('ai/predictions')
@@ -31,9 +30,9 @@ export class AiPredictionController {
     private readonly aiPredictionService: AiPredictionService,
   ) {}
 
-  // ============================================================
+  // ==========================================================
   // ANALYZE ONE MATCH
-  // ============================================================
+  // ==========================================================
 
   @Roles('admin')
   @UseGuards(JwtAuthGuard, RolesGuard)
@@ -64,8 +63,6 @@ export class AiPredictionController {
       requestedMarkets: body?.requestedMarkets,
 
       includeReasoning: true,
-
-      useGoogleSearch: body?.useGoogleSearch ?? true,
     });
 
     return {

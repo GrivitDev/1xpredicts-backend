@@ -40,7 +40,7 @@ import { CommunityModule } from './community/community.module';
 import { PaymentGatewaysModule } from './payment-gateways/payment-gateways.module';
 
 import { WebsiteAnalyticsModule } from './website-analytics/website-analytics.module';
-import { GeminiModule } from './ai/gemini/gemini.module';
+
 import { AiModule } from './ai/ai.module';
 
 @Module({
@@ -95,7 +95,6 @@ import { AiModule } from './ai/ai.module';
 
     ReferralsModule,
 
-    GeminiModule,
     AiModule,
 
     WebsiteAnalyticsModule,

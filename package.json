@@ -34,6 +34,7 @@
     "@nestjs/schedule": "^6.1.3",
     "@nestjs/throttler": "^6.5.0",
     "@nestjs/websockets": "^11.1.27",
+    "@tavily/core": "^0.7.8",
     "axios": "^1.19.0",
     "bcrypt": "^6.0.0",
     "class-transformer": "^0.5.1",

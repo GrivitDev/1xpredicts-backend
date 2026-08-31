@@ -1,3 +1,5 @@
+// src/ai/predictions/ai-prediction.interfaces.ts
+
 import { PredictionMarket } from '../../predictions/constants/prediction-markets';
 
 // ============================================================
@@ -16,12 +18,50 @@ export interface AiResearchSource {
   url: string;
 }
 
+// ============================================================
+// RESEARCH FINDING
+// ============================================================
+
 export interface AiResearchFinding {
   topic: string;
 
   finding: string;
 
   sources: AiResearchSource[];
+}
+
+// ============================================================
+// LEAGUE RESEARCH
+// ============================================================
+
+export interface AiLeagueResearchItem {
+  title: string;
+
+  url: string;
+
+  content?: string;
+
+  publishedDate?: string;
+
+  score?: number;
+}
+
+export interface AiLeagueResearch {
+  leagueCode: string;
+
+  leagueName: string;
+
+  country: string;
+
+  cacheDate: string;
+
+  searchedAt: Date;
+
+  expiresAt: Date;
+
+  results: AiLeagueResearchItem[];
+
+  images: string[];
 }
 
 // ============================================================
@@ -107,6 +147,8 @@ export interface AiPredictionMatchInput {
 
   headToHead?: AiRecentMatch[];
 
+  leagueResearch?: AiLeagueResearch;
+
   additionalNews?: string[];
 
   additionalContext?: string;
@@ -184,6 +226,4 @@ export interface AiPredictionRequest {
   requestedMarkets?: PredictionMarket[];
 
   includeReasoning?: boolean;
-
-  useGoogleSearch?: boolean;
 }

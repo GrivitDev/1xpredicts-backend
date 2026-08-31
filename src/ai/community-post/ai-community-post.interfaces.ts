@@ -1,13 +1,11 @@
 // src/ai/community-post/ai-community-post.interfaces.ts
 
-import { CommunityMediaType } from '../../community/enums/community-media-type.enum';
-
 import { CommunityPostType } from '../../community/enums/community-post-type.enum';
 
 import { GeminiSource } from '../gemini/gemini.types';
 
 // ============================================================
-// AI NEWS SOURCE
+// NEWS SOURCE
 // ============================================================
 
 export interface AiCommunityNewsSource {
@@ -34,6 +32,8 @@ export interface AiCommunityPostResult {
   imageNeeded: boolean;
 
   imagePrompt?: string;
+
+  imageUrl: string;
 
   sources: AiCommunityNewsSource[];
 }

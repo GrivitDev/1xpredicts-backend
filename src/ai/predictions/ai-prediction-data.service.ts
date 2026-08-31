@@ -11,7 +11,10 @@ import { FootballDataService } from '../../sports/football-data.service';
 
 import { Match } from '../../sports/interfaces/match.interface';
 
+import { AiLeagueIntelligenceService } from '../league-intelligence/ai-league-intelligence.service';
+
 import {
+  AiLeagueResearch,
   AiPredictionMatchInput,
   AiRecentMatch,
   AiTeamSnapshot,
@@ -21,11 +24,15 @@ import {
 export class AiPredictionDataService {
   private readonly logger = new Logger(AiPredictionDataService.name);
 
-  constructor(private readonly footballDataService: FootballDataService) {}
+  constructor(
+    private readonly footballDataService: FootballDataService,
 
-  // ============================================================
+    private readonly aiLeagueIntelligenceService: AiLeagueIntelligenceService,
+  ) {}
+
+  // ==========================================================
   // BUILD MATCH INPUT
-  // ============================================================
+  // ==========================================================
 
   async buildMatchInput(matchId: string): Promise<AiPredictionMatchInput> {
     if (!matchId?.trim()) {
@@ -41,6 +48,10 @@ export class AiPredictionDataService {
     let homeTeamData: AiTeamSnapshot | undefined;
 
     let awayTeamData: AiTeamSnapshot | undefined;
+
+    // ========================================================
+    // STANDINGS
+    // ========================================================
 
     try {
       const standings = await this.footballDataService.getStandings(
@@ -60,6 +71,10 @@ export class AiPredictionDataService {
       );
     }
 
+    // ========================================================
+    // FINISHED RESULTS
+    // ========================================================
+
     let leagueMatches: Match[] = [];
 
     try {
@@ -69,6 +84,55 @@ export class AiPredictionDataService {
     } catch (error) {
       this.logger.warn(
         `Unable to load league results for ${match.leagueCode}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+
+    // ========================================================
+    // CACHED TAVILY RESEARCH
+    // ========================================================
+
+    let leagueResearch: AiLeagueResearch | undefined;
+
+    try {
+      const cached =
+        await this.aiLeagueIntelligenceService.getLeagueIntelligence(
+          match.leagueCode,
+        );
+
+      if (cached) {
+        leagueResearch = {
+          leagueCode: cached.leagueCode,
+
+          leagueName: cached.leagueName,
+
+          country: cached.country,
+
+          cacheDate: cached.cacheDate,
+
+          searchedAt: cached.searchedAt,
+
+          expiresAt: cached.expiresAt,
+
+          results: cached.results.map((item) => ({
+            title: item.title,
+
+            url: item.url,
+
+            content: item.content,
+
+            publishedDate: item.publishedDate,
+
+            score: item.score,
+          })),
+
+          images: cached.images || [],
+        };
+      }
+    } catch (error) {
+      this.logger.warn(
+        `Unable to load cached league intelligence for ${match.leagueCode}: ${
           error instanceof Error ? error.message : String(error)
         }`,
       );
@@ -115,15 +179,17 @@ export class AiPredictionDataService {
         match.awayTeam,
       ),
 
+      leagueResearch,
+
       additionalNews: [],
 
       additionalContext: '',
     };
   }
 
-  // ============================================================
+  // ==========================================================
   // STANDING TABLE
-  // ============================================================
+  // ==========================================================
 
   private extractStandingTable(standings: any): any[] {
     if (Array.isArray(standings?.table)) {
@@ -139,9 +205,9 @@ export class AiPredictionDataService {
     return [];
   }
 
-  // ============================================================
+  // ==========================================================
   // TEAM SNAPSHOT
-  // ============================================================
+  // ==========================================================
 
   private findTeamSnapshot(
     table: any[],
@@ -188,9 +254,9 @@ export class AiPredictionDataService {
     };
   }
 
-  // ============================================================
+  // ==========================================================
   // RECENT MATCHES
-  // ============================================================
+  // ==========================================================
 
   private getTeamRecentMatches(
     matches: Match[],
@@ -225,9 +291,9 @@ export class AiPredictionDataService {
       }));
   }
 
-  // ============================================================
+  // ==========================================================
   // HEAD TO HEAD
-  // ============================================================
+  // ==========================================================
 
   private getHeadToHead(
     matches: Match[],
@@ -268,9 +334,9 @@ export class AiPredictionDataService {
       }));
   }
 
-  // ============================================================
-  // TEAM NAME NORMALIZATION
-  // ============================================================
+  // ==========================================================
+  // TEAM NAME
+  // ==========================================================
 
   private normalizeTeamName(name: string): string {
     return name
@@ -281,9 +347,9 @@ export class AiPredictionDataService {
       .trim();
   }
 
-  // ============================================================
+  // ==========================================================
   // NUMBER
-  // ============================================================
+  // ==========================================================
 
   private toOptionalNumber(value: unknown): number | undefined {
     const number = Number(value);

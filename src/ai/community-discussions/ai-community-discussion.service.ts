@@ -1,12 +1,15 @@
+// src/ai/community-discussions/ai-community-discussion.service.ts
+
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 
 import { GeminiService } from '../gemini/gemini.service';
 
 import { PredictionsService } from '../../predictions/predictions.service';
 
-import { AiCommunityDiscussionResult } from './ai-community-discussion.interfaces';
+import { TavilyService } from '../../tavily/tavily.service';
 
 import { CommunityPostType } from '../../community/enums/community-post-type.enum';
+import { AiCommunityDiscussionResult } from './ai-community-discussion.interfaces';
 
 @Injectable()
 export class AiCommunityDiscussionService {
@@ -16,6 +19,8 @@ export class AiCommunityDiscussionService {
     private readonly geminiService: GeminiService,
 
     private readonly predictionsService: PredictionsService,
+
+    private readonly tavilyService: TavilyService,
   ) {}
 
   // ==========================================================
@@ -30,18 +35,16 @@ export class AiCommunityDiscussionService {
 
     const selectedPrediction = this.selectPrediction(predictions);
 
+    const research = await this.searchDiscussionResearch(selectedPrediction);
+
     const result =
       await this.geminiService.generateJson<AiCommunityDiscussionResult>({
         task: 'community_discussion',
 
-        prompt: this.buildPrompt(selectedPrediction, context),
+        prompt: this.buildPrompt(selectedPrediction, research, context),
 
         options: {
-          temperature: 0.7,
-
-          maxOutputTokens: 1800,
-
-          useGoogleSearch: true,
+          maxOutputTokens: 1200,
 
           systemInstruction: this.getSystemInstruction(),
         },
@@ -56,15 +59,20 @@ export class AiCommunityDiscussionService {
     return {
       ...discussion,
 
-      sources: this.normalizeSources([
-        ...(result.sources || []),
-        ...discussion.sources,
-      ]),
+      sources: this.mergeSources(
+        research.results.map((item) => ({
+          title: item.title,
+
+          url: item.url,
+        })),
+
+        discussion.sources,
+      ),
     };
   }
 
   // ==========================================================
-  // SELECT
+  // SELECT PREDICTION
   // ==========================================================
 
   private selectPrediction(predictions: any[]) {
@@ -76,26 +84,97 @@ export class AiCommunityDiscussionService {
   }
 
   // ==========================================================
+  // SEARCH CURRENT RESEARCH
+  // ==========================================================
+
+  private async searchDiscussionResearch(prediction: any) {
+    const query = prediction
+      ? `
+${prediction.homeTeam} vs ${prediction.awayTeam}
+latest football news injuries suspensions team news
+lineup manager comments form
+      `.trim()
+      : `
+football latest important match news
+today upcoming matches team news injuries
+      `.trim();
+
+    return this.tavilyService.searchNews(query, {
+      searchDepth: 'basic',
+
+      maxResults: 6,
+
+      timeRange: 'day',
+
+      includeImages: false,
+    });
+  }
+
+  // ==========================================================
   // PROMPT
   // ==========================================================
 
-  private buildPrompt(prediction: any, context?: string): string {
+  private buildPrompt(
+    prediction: any,
+    research: any,
+    context?: string,
+  ): string {
+    const researchText = Array.isArray(research?.results)
+      ? research.results
+          .map((item: any, index: number) =>
+            `
+${index + 1}. ${item.title}
+
+URL:
+${item.url}
+
+Information:
+${item.content || 'No summary supplied.'}
+`.trim(),
+          )
+          .join('\n\n')
+      : 'No current research available.';
+
     if (!prediction) {
       return `
 Create one short football community discussion for 2xPredict.
 
-There is currently no upcoming 2xPredict prediction available.
+There is no current 2xPredict prediction selected.
 
-Use Google Search to find an important football match or
-team situation happening today or within the next few days.
+Use the supplied current football research to create a genuine
+football argument around an important match or team.
 
-Create a genuine football argument.
+============================================================
+CURRENT RESEARCH
+============================================================
+
+${researchText}
+
+============================================================
+STYLE
+============================================================
+
+This is a football debate, not a news article.
+
+Use short direct sentences.
+
+Make the argument interesting.
+
+Encourage users to agree or disagree.
+
+Do not exaggerate.
+
+Do not invent facts.
+
+Do not mention AI.
+
+Maximum message length: 700 characters.
 
 ${context || ''}
 
-Use short sentences.
-
-Do not write an article.
+============================================================
+OUTPUT
+============================================================
 
 Return JSON only:
 
@@ -111,7 +190,7 @@ Return JSON only:
     }
   ]
 }
-      `.trim();
+`.trim();
     }
 
     return `
@@ -155,48 +234,41 @@ ${
 CURRENT RESEARCH
 ============================================================
 
-Use Google Search.
-
-Check:
-
-- latest team news
-- injuries
-- suspensions
-- player availability
-- expected lineups
-- recent form
-- home/away form
-- current team situation
-- credible football analysis
-
-The discussion should react to the current 2xPredict
-prediction.
-
-You may support the prediction or challenge it.
-
-Do not invent facts.
+${researchText}
 
 ============================================================
-STYLE
+DISCUSSION
 ============================================================
 
-This is NOT a news article.
+Start a football argument based on the prediction and current
+research.
 
-It should sound like a football fan starting a debate.
+You may:
+
+- challenge the prediction
+- support the prediction
+- question one important factor
+- highlight a tactical issue
+- highlight team news
+- ask whether the probability is justified
+
+Do not simply repeat the prediction.
+
+Do not write an article.
 
 Use short sentences.
 
-Keep the sentences direct.
+Maximum message length: 700 characters.
+
+Do not invent facts.
 
 Do not mention AI.
-
-Keep the message under 700 characters.
 
 ============================================================
 CONTEXT
 ============================================================
 
-${context || 'Create a natural football debate around the selected prediction.'}
+${context || 'Create a natural football debate around this match.'}
 
 ============================================================
 OUTPUT
@@ -231,7 +303,9 @@ You are the football discussion editor for 2xPredict.
 
 Create short and interesting football debates.
 
-Use Google Search for current football information.
+Current web research has already been supplied by Tavily.
+
+Do not claim to have searched the web yourself.
 
 Never invent:
 
@@ -244,12 +318,14 @@ Never invent:
 - quotations
 - team news
 
+Use supplied research carefully.
+
 Do not write an article.
 
 Use short natural sentences.
 
-The goal is to encourage football fans to
-agree, disagree, or explain their own view.
+The goal is to encourage football fans to agree,
+disagree, or explain their own view.
 
 Return valid JSON only.
 `.trim();
@@ -310,7 +386,7 @@ Return valid JSON only.
   // ==========================================================
 
   private normalizeSources(
-    sources: {
+    sources?: {
       title: string;
       url: string;
     }[],
@@ -332,5 +408,34 @@ Return valid JSON only.
         url: source.url.trim(),
       }))
       .filter((source) => source.title && /^https?:\/\//i.test(source.url));
+  }
+
+  // ==========================================================
+  // MERGE SOURCES
+  // ==========================================================
+
+  private mergeSources(
+    ...groups: {
+      title: string;
+      url: string;
+    }[][]
+  ) {
+    const map = new Map<
+      string,
+      {
+        title: string;
+        url: string;
+      }
+    >();
+
+    for (const group of groups) {
+      for (const source of group) {
+        if (!map.has(source.url)) {
+          map.set(source.url, source);
+        }
+      }
+    }
+
+    return Array.from(map.values());
   }
 }
