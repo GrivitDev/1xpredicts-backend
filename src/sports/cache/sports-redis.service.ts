@@ -24,10 +24,19 @@ export class SportsRedisService implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
+    if (!redisUrl.startsWith('rediss://')) {
+      this.logger.error(
+        'REDIS_URL must use rediss:// for the configured Upstash Redis instance.',
+      );
+
+      return;
+    }
+
     this.redis = new Redis(redisUrl, {
       maxRetriesPerRequest: 2,
       enableReadyCheck: true,
       connectTimeout: 10_000,
+
       retryStrategy: (times) => {
         const delay = Math.min(times * 1_000, 10_000);
 
@@ -64,7 +73,7 @@ export class SportsRedisService implements OnModuleInit, OnModuleDestroy {
     } catch (error) {
       this.logger.error(
         'Initial Redis connection failed',
-        error instanceof Error ? error.stack : String(error),
+        error instanceof Error ? error.message : String(error),
       );
     }
   }
