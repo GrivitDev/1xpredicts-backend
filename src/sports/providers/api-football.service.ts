@@ -27,10 +27,10 @@ export class ApiFootballService implements OnModuleInit {
   constructor(private readonly configService: ConfigService) {}
 
   onModuleInit(): void {
-    const apiKey = this.configService.get<string>('API_FOOTBALL_API_KEY');
+    const apiKey = this.configService.get<string>('API_FOOTBALL_KEY');
 
     if (!apiKey) {
-      throw new Error('API_FOOTBALL_API_KEY is missing');
+      throw new Error('API_FOOTBALL_KEY is missing');
     }
 
     this.http = axios.create({

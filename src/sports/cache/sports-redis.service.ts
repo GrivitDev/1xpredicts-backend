@@ -13,8 +13,6 @@ export class SportsRedisService implements OnModuleInit, OnModuleDestroy {
 
   private redis: Redis | null = null;
 
-  private connectionPromise: Promise<void> | null = null;
-
   async onModuleInit(): Promise<void> {
     const redisUrl = process.env.REDIS_URL?.trim();
 
@@ -27,23 +25,48 @@ export class SportsRedisService implements OnModuleInit, OnModuleDestroy {
     }
 
     this.redis = new Redis(redisUrl, {
-      lazyConnect: true,
       maxRetriesPerRequest: 2,
       enableReadyCheck: true,
       connectTimeout: 10_000,
+      retryStrategy: (times) => {
+        const delay = Math.min(times * 1_000, 10_000);
+
+        this.logger.warn(`Redis reconnect attempt ${times} in ${delay}ms`);
+
+        return delay;
+      },
     });
 
-    this.redis.on('error', (error) => {
-      this.logger.error(`Redis error: ${error.message}`);
+    this.redis.on('connect', () => {
+      this.logger.log('Sports Redis connection established');
     });
 
     this.redis.on('ready', () => {
       this.logger.log('Sports Redis cache is ready');
     });
 
-    this.connectionPromise = this.connect();
+    this.redis.on('error', (error) => {
+      this.logger.error(`Redis error: ${error.message}`);
+    });
 
-    await this.connectionPromise;
+    this.redis.on('close', () => {
+      this.logger.warn('Sports Redis connection closed');
+    });
+
+    this.redis.on('reconnecting', (delay) => {
+      this.logger.warn(`Sports Redis reconnecting in ${delay}ms`);
+    });
+
+    try {
+      await this.redis.ping();
+
+      this.logger.log('Sports Redis PING successful');
+    } catch (error) {
+      this.logger.error(
+        'Initial Redis connection failed',
+        error instanceof Error ? error.stack : String(error),
+      );
+    }
   }
 
   async onModuleDestroy(): Promise<void> {
@@ -52,14 +75,11 @@ export class SportsRedisService implements OnModuleInit, OnModuleDestroy {
     }
 
     try {
-      if (this.redis.status === 'ready') {
-        await this.redis.quit();
-      } else {
-        this.redis.disconnect();
-      }
+      await this.redis.quit();
+    } catch {
+      this.redis.disconnect();
     } finally {
       this.redis = null;
-      this.connectionPromise = null;
     }
   }
 
@@ -67,34 +87,8 @@ export class SportsRedisService implements OnModuleInit, OnModuleDestroy {
   // CONNECTION
   // ============================================================
 
-  private async connect(): Promise<void> {
-    if (!this.redis) {
-      return;
-    }
-
-    if (this.redis.status === 'ready') {
-      return;
-    }
-
-    if (this.redis.status === 'connecting') {
-      return;
-    }
-
-    try {
-      await this.redis.connect();
-    } catch (error) {
-      this.logger.error(
-        'Failed to connect to Redis',
-        error instanceof Error ? error.stack : String(error),
-      );
-
-      this.redis.disconnect();
-      this.redis = null;
-    }
-  }
-
   isAvailable(): boolean {
-    return this.redis !== null && this.redis.status === 'ready';
+    return this.redis?.status === 'ready';
   }
 
   // ============================================================
@@ -180,9 +174,7 @@ export class SportsRedisService implements OnModuleInit, OnModuleDestroy {
     }
 
     try {
-      const result = await this.redis!.exists(key);
-
-      return result === 1;
+      return (await this.redis!.exists(key)) === 1;
     } catch (error) {
       this.logger.error(
         `Redis EXISTS failed for ${key}`,
@@ -238,11 +230,9 @@ export class SportsRedisService implements OnModuleInit, OnModuleDestroy {
 
         cursor = nextCursor;
 
-        if (!keys.length) {
-          continue;
+        if (keys.length > 0) {
+          deleted += await this.redis!.del(...keys);
         }
-
-        deleted += await this.redis!.del(...keys);
       } while (cursor !== '0');
 
       return deleted;
