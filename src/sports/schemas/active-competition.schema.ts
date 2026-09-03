@@ -36,9 +36,10 @@ export class ActiveCompetition {
   priority!: string;
 
   @Prop({
+    type: String,
     index: true,
   })
-  season?: number | string;
+  season?: string;
 
   @Prop({
     type: Date,
