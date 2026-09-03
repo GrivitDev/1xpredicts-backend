@@ -303,9 +303,9 @@ export function getSupportedCompetition(
 }
 
 export function validateSupportedCompetitions(): void {
-  if (SUPPORTED_COMPETITIONS.length !== 57) {
+  if (SUPPORTED_COMPETITIONS.length !== 58) {
     throw new Error(
-      `Expected 57 supported competitions, found ${SUPPORTED_COMPETITIONS.length}`,
+      `Expected 58 supported competitions, found ${SUPPORTED_COMPETITIONS.length}`,
     );
   }
 
