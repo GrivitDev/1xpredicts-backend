@@ -1267,7 +1267,7 @@ export class SportsCollectionService {
           break;
 
         default:
-          throw new Error(`Unsupported API-Football job type: ${job.type}`);
+          throw new Error('Unsupported API-Football job type');
       }
 
       await this.apiFootballQueueService.markCompleted(String(job._id));

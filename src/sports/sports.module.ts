@@ -122,6 +122,11 @@ import {
   OddsApiScoreSchema,
 } from './schemas/odds-api-score.schema';
 
+import {
+  FootballDataCompetition,
+  FootballDataCompetitionSchema,
+} from './schemas/football-data/football-data-competition.schema';
+
 import { ActiveCompetitionService } from './services/active-competition.service';
 
 import { ApiFootballQueueService } from './services/api-football-queue.service';
@@ -165,6 +170,10 @@ import { SportsStartupService } from './services/sports-startup.service';
       {
         name: YoutubeHighlight.name,
         schema: YoutubeHighlightSchema,
+      },
+      {
+        name: FootballDataCompetition.name,
+        schema: FootballDataCompetitionSchema,
       },
 
       // API-Football
