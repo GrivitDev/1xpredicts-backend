@@ -127,6 +127,21 @@ import {
   FootballDataCompetitionSchema,
 } from './schemas/football-data/football-data-competition.schema';
 
+import {
+  FootballDataMatch,
+  FootballDataMatchSchema,
+} from './schemas/football-data/football-data-match.schema';
+
+import {
+  FootballDataStanding,
+  FootballDataStandingSchema,
+} from './schemas/football-data/football-data-standing.schema';
+
+import {
+  FootballDataTeam,
+  FootballDataTeamSchema,
+} from './schemas/football-data/football-data-team.schema';
+
 import { ActiveCompetitionService } from './services/active-competition.service';
 
 import { ApiFootballQueueService } from './services/api-football-queue.service';
@@ -174,6 +189,18 @@ import { SportsStartupService } from './services/sports-startup.service';
       {
         name: FootballDataCompetition.name,
         schema: FootballDataCompetitionSchema,
+      },
+      {
+        name: FootballDataMatch.name,
+        schema: FootballDataMatchSchema,
+      },
+      {
+        name: FootballDataStanding.name,
+        schema: FootballDataStandingSchema,
+      },
+      {
+        name: FootballDataTeam.name,
+        schema: FootballDataTeamSchema,
       },
 
       // API-Football
