@@ -1,8 +1,9 @@
 import {
-  Injectable,
   ForbiddenException,
+  Injectable,
   NotFoundException,
   BadRequestException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 
 import { InjectModel } from '@nestjs/mongoose';
@@ -84,9 +85,7 @@ export class PredictionsService {
 
     const counts = {
       free: 0,
-
       regular: 0,
-
       vip: 0,
     };
 
@@ -210,66 +209,20 @@ export class PredictionsService {
 
   // ==========================================================
   // CREATE
+  //
+  // Temporarily disabled for AI-generated predictions.
+  //
+  // The prediction-generation pipeline is being rebuilt on top
+  // of the new sports data architecture.
+  //
+  // Existing predictions remain readable/editable according
+  // to the rules below.
   // ==========================================================
 
-  async create(dto: CreatePredictionDto) {
-    const existingPrediction = await this.predictionModel.findOne({
-      matchId: dto.matchId,
-
-      deleted: false,
-    });
-
-    if (existingPrediction) {
-      throw new BadRequestException(
-        'A prediction already exists for this match',
-      );
-    }
-
-    this.validateProbabilities(dto);
-
-    const prediction = this.getPredictionFromProbabilities(
-      dto.probabilities.home,
-      dto.probabilities.draw,
-      dto.probabilities.away,
+  async create(_dto: CreatePredictionDto) {
+    throw new ServiceUnavailableException(
+      'Prediction generation is temporarily disabled while the AI prediction pipeline is being rebuilt.',
     );
-
-    const pricing = this.getAccessPricing(dto.accessType);
-
-    return this.predictionModel.create({
-      matchId: dto.matchId,
-
-      leagueCode: dto.leagueCode,
-
-      league: dto.league,
-
-      homeTeam: dto.homeTeam,
-
-      awayTeam: dto.awayTeam,
-
-      homeTeamBadge: dto.homeTeamBadge,
-
-      awayTeamBadge: dto.awayTeamBadge,
-
-      prediction,
-
-      probabilities: dto.probabilities,
-
-      markets: this.normalizeMarkets(dto.markets),
-
-      confidence: dto.confidence,
-
-      accessType: dto.accessType,
-
-      price: pricing.price,
-
-      priceNGN: pricing.priceNGN,
-
-      priceUSD: pricing.priceUSD,
-
-      matchDate: dto.matchDate,
-
-      kickoffTimestamp: new Date(dto.matchDate).getTime(),
-    });
   }
 
   // ==========================================================
@@ -329,12 +282,13 @@ export class PredictionsService {
       updateData.markets = this.normalizeMarkets(dto.markets);
     }
 
-    // Keep price derived from access type.
     if (dto.accessType) {
       const pricing = this.getAccessPricing(dto.accessType);
 
       updateData.price = pricing.price;
+
       updateData.priceNGN = pricing.priceNGN;
+
       updateData.priceUSD = pricing.priceUSD;
     }
 
@@ -378,7 +332,7 @@ export class PredictionsService {
   // USER VIEW
   // ==========================================================
 
-  async getForUser(id: string, user: any) {
+  async getForUser(id: string, _user: any) {
     const prediction = await this.findOne(id);
 
     return {

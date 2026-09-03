@@ -1,14 +1,10 @@
-// src/ai/league-intelligence/ai-league-intelligence.service.ts
-
 import { Injectable, Logger } from '@nestjs/common';
 
 import { InjectModel } from '@nestjs/mongoose';
 
 import { Model } from 'mongoose';
 
-import { League } from '../../sports/interfaces/league.interface';
-
-import { FootballDataService } from '../../sports/football-data.service';
+import { SupportedCompetitionService } from '../../sports/services/supported-competition.service';
 
 import { TavilyService } from '../../tavily/tavily.service';
 
@@ -16,6 +12,15 @@ import {
   AiLeagueIntelligence,
   AiLeagueIntelligenceDocument,
 } from './ai-league-intelligence.schema';
+
+interface AiLeague {
+  id: string;
+  name: string;
+  code: string;
+  country?: string;
+  type?: string;
+  region?: string;
+}
 
 @Injectable()
 export class AiLeagueIntelligenceService {
@@ -25,7 +30,7 @@ export class AiLeagueIntelligenceService {
     @InjectModel(AiLeagueIntelligence.name)
     private readonly model: Model<AiLeagueIntelligenceDocument>,
 
-    private readonly footballDataService: FootballDataService,
+    private readonly supportedCompetitionService: SupportedCompetitionService,
 
     private readonly tavilyService: TavilyService,
   ) {}
@@ -34,8 +39,27 @@ export class AiLeagueIntelligenceService {
   // GET AVAILABLE LEAGUES
   // ==========================================================
 
-  async getAvailableLeagues(): Promise<League[]> {
-    return this.footballDataService.getLeagues();
+  getAvailableLeagues(): Promise<AiLeague[]> {
+    return Promise.resolve(
+      this.supportedCompetitionService
+        .getAll()
+        .filter(
+          (competition) => competition.type === 'LEAGUE' && competition.enabled,
+        )
+        .map((competition) => ({
+          id: competition.id,
+
+          name: competition.name,
+
+          code: competition.providers.footballDataCode ?? competition.id,
+
+          country: competition.region,
+
+          type: competition.type,
+
+          region: competition.region,
+        })),
+    );
   }
 
   // ==========================================================
@@ -45,11 +69,8 @@ export class AiLeagueIntelligenceService {
   private getCacheDate(): string {
     return new Intl.DateTimeFormat('en-CA', {
       timeZone: 'Africa/Lagos',
-
       year: 'numeric',
-
       month: '2-digit',
-
       day: '2-digit',
     }).format(new Date());
   }
@@ -58,7 +79,9 @@ export class AiLeagueIntelligenceService {
   // FIND LEAGUE NEEDING RESEARCH
   // ==========================================================
 
-  async findNextLeagueToResearch(leagues: League[]): Promise<League | null> {
+  async findNextLeagueToResearch(
+    leagues: AiLeague[],
+  ): Promise<AiLeague | null> {
     const cacheDate = this.getCacheDate();
 
     for (const league of leagues) {
@@ -88,7 +111,9 @@ export class AiLeagueIntelligenceService {
   // RESEARCH LEAGUE
   // ==========================================================
 
-  async researchLeague(league: League): Promise<AiLeagueIntelligenceDocument> {
+  async researchLeague(
+    league: AiLeague,
+  ): Promise<AiLeagueIntelligenceDocument> {
     if (!league?.code || !league?.name) {
       throw new Error('League code and name are required for research');
     }
@@ -118,7 +143,7 @@ export class AiLeagueIntelligenceService {
 
           leagueName: league.name,
 
-          country: league.country || 'Unknown',
+          country: league.country ?? 'Unknown',
 
           cacheDate,
 
@@ -194,7 +219,7 @@ export class AiLeagueIntelligenceService {
   // QUERY
   // ==========================================================
 
-  private buildLeagueQuery(league: League): string {
+  private buildLeagueQuery(league: AiLeague): string {
     return `
 ${league.name} ${league.country || ''} football latest news today.
 

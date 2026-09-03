@@ -1,15 +1,19 @@
-// ============================================================
-// LEAGUE / COMPETITION
-// ============================================================
-
-export interface League {
-  code: string;
-
+export interface SportsLeague {
+  id: string;
   name: string;
+  type: string;
+  region: string;
+  priority: string;
 
-  country: string;
+  enabled: boolean;
+  predictionEnabled: boolean;
+  oddsEnabled: boolean;
+  newsEnabled: boolean;
 
-  type?: 'LEAGUE' | 'CUP' | 'PLAYOFFS' | 'LEAGUE_CUP' | string;
-
-  emblem?: string;
+  providers: {
+    apiFootballId?: number;
+    footballDataCode?: string;
+    sportsDbLeagueId?: number;
+    oddsApiSportKey?: string;
+  };
 }

@@ -1,60 +1,72 @@
 import { Injectable } from '@nestjs/common';
 
-import { FootballDataService } from './football-data.service';
+import { SportsDataReadService } from './services/sports-data-read.service';
 
 @Injectable()
 export class SportsService {
-  constructor(private readonly footballDataService: FootballDataService) {}
+  constructor(private readonly sportsDataReadService: SportsDataReadService) {}
 
   // ============================================================
-  // LEAGUES
+  // LIVE
+  //
+  // Live data is supplied by the Odds API provider.
   // ============================================================
 
-  getLeagues() {
-    return this.footballDataService.getLeagues();
-  }
-
-  // ============================================================
-  // LIVE MATCHES
-  // ============================================================
-
-  getLiveMatches() {
-    return this.footballDataService.getLiveMatches();
+  async getLive() {
+    return this.sportsDataReadService.getLive();
   }
 
   // ============================================================
   // FIXTURES
+  //
+  // Read from Redis / MongoDB only.
   // ============================================================
 
-  getFixtures(leagueCode: string) {
-    return this.footballDataService.getFixturesByLeague(leagueCode);
-  }
-
-  // ============================================================
-  // MATCH DETAILS
-  // ============================================================
-
-  getMatchDetails(matchId: string) {
-    return this.footballDataService.getMatchDetails(matchId);
+  async getFixtures(competitionCode: string) {
+    return this.sportsDataReadService.getFixtures(competitionCode);
   }
 
   // ============================================================
   // RESULTS
+  //
+  // Read from Redis / MongoDB only.
   // ============================================================
 
-  getFinishedMatches(leagueCode: string) {
-    return this.footballDataService.getFinishedMatches(leagueCode);
+  async getResults(competitionCode: string) {
+    return this.sportsDataReadService.getResults(competitionCode);
   }
 
   // ============================================================
   // STANDINGS
+  //
+  // Read from Redis / MongoDB only.
   // ============================================================
 
-  getStandings(leagueCode: string) {
-    return this.footballDataService.getStandings(leagueCode);
+  async getStandings(competitionCode: string) {
+    return this.sportsDataReadService.getStandings(competitionCode);
   }
 
-  getFinishedMatchesByIds(matchIds: string[]) {
-    return this.footballDataService.getFinishedMatchesByIds(matchIds);
+  // ============================================================
+  // COMPETITIONS
+  //
+  // Read from Redis / MongoDB only.
+  // ============================================================
+
+  async getCompetitions() {
+    return this.sportsDataReadService.getCompetitions();
+  }
+
+  // ============================================================
+  // TEAMS
+  //
+  // Read from Redis / MongoDB only.
+  // ============================================================
+
+  async getTeams(competitionId: string) {
+    return this.sportsDataReadService.getTeams(competitionId);
+  }
+
+  async getActiveCompetitions() {
+    return this.sportsDataReadService.getActiveCompetitions();
   }
 }

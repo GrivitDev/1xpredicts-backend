@@ -1,4 +1,4 @@
-import { Controller, Get, Param, Query } from '@nestjs/common';
+import { BadRequestException, Controller, Get, Query } from '@nestjs/common';
 
 import { SportsService } from './sports.service';
 
@@ -7,85 +7,129 @@ export class SportsController {
   constructor(private readonly sportsService: SportsService) {}
 
   // ============================================================
-  // LEAGUES
-  // ============================================================
-
-  @Get('leagues')
-  getLeagues() {
-    return this.sportsService.getLeagues();
-  }
-
-  // ============================================================
   // LIVE MATCHES
+  //
+  // This is the only endpoint that uses the
+  // live external data path.
   // ============================================================
 
   @Get('live')
-  getLiveMatches() {
-    return this.sportsService.getLiveMatches();
+  async getLive() {
+    return {
+      success: true,
+      data: await this.sportsService.getLive(),
+    };
   }
 
   // ============================================================
   // FIXTURES
+  //
+  // Cached / database only.
+  // Uses the internal competition ID so the service can
+  // determine the correct provider.
   // ============================================================
 
   @Get('fixtures')
-  getFixtures(
-    @Query('leagueCode')
-    leagueCode: string,
+  async getFixtures(
+    @Query('competitionId')
+    competitionId?: string,
   ) {
-    return this.sportsService.getFixtures(leagueCode);
+    if (!competitionId?.trim()) {
+      throw new BadRequestException('competitionId is required');
+    }
+
+    return {
+      success: true,
+      data: await this.sportsService.getFixtures(competitionId),
+    };
   }
 
   // ============================================================
-  // MATCH DETAILS
-  // ============================================================
-
-  @Get('match/:matchId')
-  getMatch(
-    @Param('matchId')
-    matchId: string,
-  ) {
-    return this.sportsService.getMatchDetails(matchId);
-  }
-
-  // ============================================================
-  // RESULTS BY LEAGUE
+  // RESULTS
+  //
+  // Cached / database only.
   // ============================================================
 
   @Get('results')
-  getResults(
-    @Query('leagueCode')
-    leagueCode: string,
+  async getResults(
+    @Query('competitionId')
+    competitionId?: string,
   ) {
-    return this.sportsService.getFinishedMatches(leagueCode);
-  }
+    if (!competitionId?.trim()) {
+      throw new BadRequestException('competitionId is required');
+    }
 
-  // ============================================================
-  // RESULTS BY MATCH IDS
-  // ============================================================
-
-  @Get('results/by-ids')
-  getResultsByIds(
-    @Query('matchIds')
-    matchIds: string,
-  ) {
-    const ids = matchIds
-      ?.split(',')
-      .map((id) => id.trim())
-      .filter(Boolean);
-
-    return this.sportsService.getFinishedMatchesByIds(ids);
+    return {
+      success: true,
+      data: await this.sportsService.getResults(competitionId),
+    };
   }
 
   // ============================================================
   // STANDINGS
+  //
+  // Cached / database only.
   // ============================================================
 
   @Get('standings')
-  getStandings(
-    @Query('leagueCode')
-    leagueCode: string,
+  async getStandings(
+    @Query('competitionId')
+    competitionId?: string,
   ) {
-    return this.sportsService.getStandings(leagueCode);
+    if (!competitionId?.trim()) {
+      throw new BadRequestException('competitionId is required');
+    }
+
+    return {
+      success: true,
+      data: await this.sportsService.getStandings(competitionId),
+    };
+  }
+
+  // ============================================================
+  // COMPETITIONS
+  //
+  // Internal supported competition registry.
+  // ============================================================
+
+  @Get('competitions')
+  async getCompetitions() {
+    return {
+      success: true,
+      data: await this.sportsService.getCompetitions(),
+    };
+  }
+
+  // ============================================================
+  // ACTIVE COMPETITIONS
+  // ============================================================
+
+  @Get('active-competitions')
+  async getActiveCompetitions() {
+    return {
+      success: true,
+      data: await this.sportsService.getActiveCompetitions(),
+    };
+  }
+
+  // ============================================================
+  // TEAMS
+  //
+  // Cached / database only.
+  // ============================================================
+
+  @Get('teams')
+  async getTeams(
+    @Query('competitionId')
+    competitionId?: string,
+  ) {
+    if (!competitionId?.trim()) {
+      throw new BadRequestException('competitionId is required');
+    }
+
+    return {
+      success: true,
+      data: await this.sportsService.getTeams(competitionId),
+    };
   }
 }

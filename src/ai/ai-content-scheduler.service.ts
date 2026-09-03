@@ -1,18 +1,6 @@
-// src/ai/ai-content-scheduler.service.ts
-
 import { Injectable, Logger } from '@nestjs/common';
 
 import { Cron } from '@nestjs/schedule';
-
-import { CommunityService } from '../community/community.service';
-
-import { AiCommunityPostService } from './community-post/ai-community-post.service';
-
-import { AiCommunityDiscussionService } from './community-discussions/ai-community-discussion.service';
-
-import { AiVideoService } from './videos/ai-video.service';
-
-import { CommunityPostType } from '../community/enums/community-post-type.enum';
 
 @Injectable()
 export class AiContentSchedulerService {
@@ -20,26 +8,16 @@ export class AiContentSchedulerService {
 
   private running = false;
 
-  // ==========================================================
-  // CONTENT WINDOW
-  // ==========================================================
+  // ============================================================
+  // EVERY 15 MINUTES
   //
-  // 06:00 - 10:45
-  //
-  // Every 15 minutes.
-  //
-  // Maximum practical daily output:
-  //
-  // News        3-5
-  // Discussions 3-5
-  // Videos      3-5
-  //
-  // ==========================================================
+  // TEMPORARILY DISABLED
+  // ============================================================
 
   @Cron('*/15 6-10 * * *', {
     timeZone: 'Africa/Lagos',
   })
-  async generateMorningContent(): Promise<void> {
+  generateMorningContent(): void {
     if (this.running) {
       return;
     }
@@ -47,164 +25,11 @@ export class AiContentSchedulerService {
     this.running = true;
 
     try {
-      await this.generateOne();
-    } catch (error) {
-      this.logger.error(
-        'Morning AI content generation failed.',
-        error instanceof Error ? error.stack : String(error),
+      this.logger.debug(
+        'AI content scheduler is disabled during the sports-data migration.',
       );
     } finally {
       this.running = false;
     }
   }
-
-  // ==========================================================
-  // ONE ITEM
-  // ==========================================================
-
-  private async generateOne(): Promise<void> {
-    const counts = await this.communityService.getAiDailyContentCounts();
-
-    const type = this.selectType(counts);
-
-    if (!type) {
-      this.logger.log('Daily AI content limits reached.');
-
-      return;
-    }
-
-    if (type === 'news') {
-      await this.aiCommunityPostService.generateAndPublish({
-        publish: true,
-      });
-
-      return;
-    }
-
-    if (type === 'discussion') {
-      await this.generateDiscussion();
-
-      return;
-    }
-
-    await this.aiVideoService.generateAndPublish();
-  }
-
-  // ==========================================================
-  // SELECT CONTENT TYPE
-  // ==========================================================
-
-  private selectType(counts: {
-    news: number;
-    discussions: number;
-    videos: number;
-  }): 'news' | 'discussion' | 'video' | null {
-    const items = [
-      {
-        type: 'news' as const,
-
-        count: counts.news,
-      },
-
-      {
-        type: 'discussion' as const,
-
-        count: counts.discussions,
-      },
-
-      {
-        type: 'video' as const,
-
-        count: counts.videos,
-      },
-    ];
-
-    // --------------------------------------------------------
-    // Guarantee minimum 3 of each.
-    // --------------------------------------------------------
-
-    const missingMinimum = items
-      .filter((item) => item.count < 3)
-      .sort((a, b) => a.count - b.count);
-
-    if (missingMinimum.length) {
-      return missingMinimum[0].type;
-    }
-
-    // --------------------------------------------------------
-    // Prefer 5 where possible.
-    // --------------------------------------------------------
-
-    const belowMaximum = items
-      .filter((item) => item.count < 5)
-      .sort((a, b) => a.count - b.count);
-
-    if (belowMaximum.length) {
-      return belowMaximum[0].type;
-    }
-
-    return null;
-  }
-
-  // ==========================================================
-  // DISCUSSION
-  // ==========================================================
-
-  private async generateDiscussion(): Promise<void> {
-    const context = `
-Create a short football discussion around an important
-upcoming match or popular football team.
-
-Prefer a match happening today or within the next few days.
-
-Use current information supplied by the research service.
-
-The discussion should be connected to a current 2xPredict
-prediction when one is available.
-
-The purpose is to create an argument that encourages users
-to agree or disagree.
-
-Keep every sentence short.
-
-Do not write an article.
-`.trim();
-
-    const generated =
-      await this.aiCommunityDiscussionService.generateDiscussion(context);
-
-    const userId = process.env.AI_COMMUNITY_USER_ID;
-
-    if (!userId) {
-      throw new Error('AI_COMMUNITY_USER_ID is missing');
-    }
-
-    await this.communityService.createAiPost({
-      userId,
-
-      username: process.env.AI_COMMUNITY_USERNAME || '2xpredict_ai',
-
-      fullName: process.env.AI_COMMUNITY_FULL_NAME || '2xPredict AI',
-
-      type: CommunityPostType.DISCUSSION,
-
-      title: generated.title,
-
-      message: generated.message,
-
-      category: generated.category,
-
-      sources: generated.sources,
-    });
-  }
-
-  constructor(
-    private readonly communityService: CommunityService,
-
-    private readonly aiCommunityPostService: AiCommunityPostService,
-
-    private readonly aiCommunityDiscussionService: AiCommunityDiscussionService,
-
-    private readonly aiVideoService: AiVideoService,
-  ) {}
 }
