@@ -64,6 +64,45 @@ export class ApiFootballQueueBuilderService {
     }
   }
 
+  /**
+   * Lower number = higher queue priority.
+   *
+   * Competition importance remains the primary factor.
+   * Fixture proximity is then used to move imminent fixtures ahead
+   * of fixtures that are further away.
+   */
+  private getFixtureQueuePriority(
+    competitionPriority: CompetitionPriority,
+    fixtureDate: Date,
+  ): number {
+    const basePriority = this.getQueuePriority(competitionPriority);
+
+    const now = Date.now();
+    const fixtureTime = fixtureDate.getTime();
+    const hoursUntilFixture = Math.max(
+      0,
+      (fixtureTime - now) / (1000 * 60 * 60),
+    );
+
+    let urgency = 50;
+
+    if (hoursUntilFixture <= 6) {
+      urgency = 0;
+    } else if (hoursUntilFixture <= 12) {
+      urgency = 5;
+    } else if (hoursUntilFixture <= 24) {
+      urgency = 10;
+    } else if (hoursUntilFixture <= 48) {
+      urgency = 20;
+    } else if (hoursUntilFixture <= 72) {
+      urgency = 30;
+    } else if (hoursUntilFixture <= 120) {
+      urgency = 40;
+    }
+
+    return basePriority * 100 + urgency;
+  }
+
   // ============================================================
   // RESULT HELPERS
   // ============================================================
@@ -100,6 +139,33 @@ export class ApiFootballQueueBuilderService {
   }
 
   // ============================================================
+  // ACTIVE COMPETITIONS
+  // ============================================================
+
+  private async getActiveCompetitions() {
+    return this.activeCompetitionModel
+      .find({
+        status: {
+          $in: [
+            ActiveCompetitionStatus.ACTIVE,
+            ActiveCompetitionStatus.UPCOMING,
+          ],
+        },
+        apiFootballLeagueId: {
+          $exists: true,
+        },
+        season: {
+          $exists: true,
+        },
+      })
+      .sort({
+        priority: 1,
+      })
+      .lean()
+      .exec();
+  }
+
+  // ============================================================
   // FIXTURE QUEUE
   // ============================================================
 
@@ -111,20 +177,7 @@ export class ApiFootballQueueBuilderService {
     const windowEnd = new Date(now);
     windowEnd.setDate(windowEnd.getDate() + this.fixtureWindowDays);
 
-    const competitions = await this.activeCompetitionModel
-      .find({
-        status: {
-          $in: [
-            ActiveCompetitionStatus.ACTIVE,
-            ActiveCompetitionStatus.UPCOMING,
-          ],
-        },
-      })
-      .sort({
-        priority: 1,
-      })
-      .lean()
-      .exec();
+    const competitions = await this.getActiveCompetitions();
 
     for (const competition of competitions) {
       if (
@@ -136,34 +189,16 @@ export class ApiFootballQueueBuilderService {
         continue;
       }
 
-      const existingFixtures = await this.apiFootballFixtureModel
-        .find({
-          leagueId: competition.apiFootballLeagueId,
-          season: Number(competition.season),
-          fixtureDate: {
-            $gte: now,
-            $lte: windowEnd,
-          },
-        })
-        .select({
-          fixtureId: 1,
-        })
-        .lean()
-        .exec();
-
-      const knownFixtureIds = new Set(
-        existingFixtures
-          .map((fixture) => fixture.fixtureId)
-          .filter(
-            (fixtureId): fixtureId is number => typeof fixtureId === 'number',
-          ),
-      );
-
-      if (knownFixtureIds.size > 0) {
-        result.skipped += 1;
-        continue;
-      }
-
+      /**
+       * We deliberately do not use:
+       *
+       *   "if any fixture exists, skip competition"
+       *
+       * because that prevents new fixtures from being collected.
+       *
+       * The queue service handles duplicate jobs. This builder therefore
+       * keeps the competition eligible for a fresh fixture refresh.
+       */
       await this.createJob(
         {
           jobType: ApiFootballQueueJobType.FIXTURES,
@@ -321,6 +356,9 @@ export class ApiFootballQueueBuilderService {
             $gte: now,
             $lte: windowEnd,
           },
+          statusShort: {
+            $nin: ['FT', 'AET', 'PEN'],
+          },
         })
         .select({
           homeTeamId: 1,
@@ -416,6 +454,10 @@ export class ApiFootballQueueBuilderService {
         })
         .select({
           fixtureId: 1,
+          fixtureDate: 1,
+        })
+        .sort({
+          fixtureDate: 1,
         })
         .lean()
         .exec();
@@ -431,6 +473,11 @@ export class ApiFootballQueueBuilderService {
           continue;
         }
 
+        if (!(fixture.fixtureDate instanceof Date)) {
+          result.skipped += 1;
+          continue;
+        }
+
         await this.createJob(
           {
             jobType: ApiFootballQueueJobType.PREDICTION,
@@ -438,12 +485,89 @@ export class ApiFootballQueueBuilderService {
             apiFootballLeagueId: competition.apiFootballLeagueId,
             season: Number(competition.season),
             apiFootballFixtureId: fixture.fixtureId,
-            priority: this.getQueuePriority(competition.priority),
+            priority: this.getFixtureQueuePriority(
+              competition.priority,
+              fixture.fixtureDate,
+            ),
           },
           result,
         );
       }
     }
+
+    return this.finalizeResult(result);
+  }
+
+  // ============================================================
+  // COLLECTION STAGES
+  // ============================================================
+
+  /**
+   * EARLY COLLECTION
+   *
+   * Supporting data is prepared first:
+   *
+   * - team statistics
+   * - injuries
+   */
+  async buildTeamStatisticsAndInjuryJobs(): Promise<ApiFootballQueueBuildResult> {
+    const result = await this.getResult();
+
+    const teamStatisticsResult = await this.buildTeamStatisticsQueue();
+
+    result.queued += teamStatisticsResult.queued;
+    result.skipped += teamStatisticsResult.skipped;
+
+    const injuryResult = await this.buildInjuryQueue();
+
+    result.queued += injuryResult.queued;
+    result.skipped += injuryResult.skipped;
+
+    return this.finalizeResult(result);
+  }
+
+  /**
+   * MID-COLLECTION TARGETED STAGE
+   *
+   * Prepare prediction jobs for upcoming fixtures.
+   */
+  async buildTargetedJobs(): Promise<ApiFootballQueueBuildResult> {
+    const result = await this.getResult();
+
+    const predictionResult = await this.buildPredictionQueue();
+
+    result.queued += predictionResult.queued;
+    result.skipped += predictionResult.skipped;
+
+    return this.finalizeResult(result);
+  }
+
+  /**
+   * LATE COLLECTION STAGE
+   *
+   * Refresh:
+   *
+   * - fixtures
+   * - standings
+   * - predictions
+   */
+  async buildLateStageJobs(): Promise<ApiFootballQueueBuildResult> {
+    const result = await this.getResult();
+
+    const fixtureResult = await this.buildFixtureQueue();
+
+    result.queued += fixtureResult.queued;
+    result.skipped += fixtureResult.skipped;
+
+    const standingsResult = await this.buildStandingsQueue();
+
+    result.queued += standingsResult.queued;
+    result.skipped += standingsResult.skipped;
+
+    const predictionResult = await this.buildPredictionQueue();
+
+    result.queued += predictionResult.queued;
+    result.skipped += predictionResult.skipped;
 
     return this.finalizeResult(result);
   }

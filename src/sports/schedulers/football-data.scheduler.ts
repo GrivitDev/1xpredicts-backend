@@ -23,12 +23,26 @@ export class FootballDataScheduler {
   // ============================================================
   // COMPETITION DATA
   // EVERY 2 HOURS
+  // COLLECTION WINDOW: 1:00 PM - 2:00 AM WAT
   // ============================================================
 
-  @Cron('0 15 */2 * * *', {
-    name: 'football-data-competition-collection',
+  @Cron('0 15 13-23/2 * * *', {
+    name: 'football-data-competition-collection-afternoon',
+    timeZone: 'Africa/Lagos',
   })
-  async collectNextCompetition(): Promise<void> {
+  async collectNextCompetitionAfternoon(): Promise<void> {
+    await this.collectNextCompetition();
+  }
+
+  @Cron('0 15 0-1/2 * * *', {
+    name: 'football-data-competition-collection-night',
+    timeZone: 'Africa/Lagos',
+  })
+  async collectNextCompetitionNight(): Promise<void> {
+    await this.collectNextCompetition();
+  }
+
+  private async collectNextCompetition(): Promise<void> {
     try {
       const available = await this.footballDataService.getCompetitions();
 
@@ -44,9 +58,9 @@ export class FootballDataScheduler {
 
       const hour = new Date().getHours();
 
-      const slot = Math.floor(hour / 2);
+      const collectionSlot = this.getCollectionSlot(hour);
 
-      const competition = relevant[slot % relevant.length];
+      const competition = relevant[collectionSlot % relevant.length];
 
       await this.sportsCollectionService.collectFootballDataCompetition(
         competition.code!,
@@ -65,11 +79,12 @@ export class FootballDataScheduler {
 
   // ============================================================
   // WEEKLY SEASON REFRESH
-  // MONDAY 1:00 AM
+  // MONDAY 1:00 PM WAT
   // ============================================================
 
-  @Cron('0 0 1 * * 1', {
+  @Cron('0 0 13 * * 1', {
     name: 'football-data-season-refresh',
+    timeZone: 'Africa/Lagos',
   })
   async refreshSeason(): Promise<void> {
     try {
@@ -78,14 +93,13 @@ export class FootballDataScheduler {
       const relevant = this.getRelevantCompetitions(available);
 
       if (!relevant.length) {
+        this.logger.warn(
+          'Football-Data season refresh found no relevant competitions',
+        );
+
         return;
       }
 
-      /*
-       * One competition is refreshed per weekly execution.
-       * The normal two-hour collector continues to refresh
-       * competition data during the week.
-       */
       const competition = relevant[0];
 
       await this.sportsCollectionService.collectFootballDataCompetition(
@@ -101,6 +115,33 @@ export class FootballDataScheduler {
         error instanceof Error ? error.stack : String(error),
       );
     }
+  }
+
+  // ============================================================
+  // COLLECTION SLOT
+  // ============================================================
+
+  private getCollectionSlot(hour: number): number {
+    /*
+     * Collection window:
+     *
+     * 13:00 - 14:00 -> slot 0
+     * 15:00 - 16:00 -> slot 1
+     * 17:00 - 18:00 -> slot 2
+     * 19:00 - 20:00 -> slot 3
+     * 21:00 - 22:00 -> slot 4
+     * 23:00 - 00:00 -> slot 5
+     * 01:00 - 02:00 -> slot 6
+     *
+     * This keeps the competition rotation independent
+     * of the absolute hour of the day.
+     */
+
+    if (hour >= 13) {
+      return Math.floor((hour - 13) / 2);
+    }
+
+    return 5 + Math.floor(hour / 2);
   }
 
   // ============================================================

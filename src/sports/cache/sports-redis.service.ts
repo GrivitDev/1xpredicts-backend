@@ -199,6 +199,43 @@ export class SportsRedisService implements OnModuleInit, OnModuleDestroy {
   }
 
   // ============================================================
+  // INCREMENT WITH TTL
+  // ============================================================
+
+  async incrementWithTtl(
+    key: string,
+    ttlSeconds: number,
+  ): Promise<number | null> {
+    if (!this.isAvailable()) {
+      return null;
+    }
+
+    try {
+      const result = await this.redis!.incr(key);
+
+      /*
+       * Only apply the expiry when the key was newly created.
+       *
+       * This preserves the original expiry on subsequent increments
+       * instead of extending the quota window every time a request
+       * is made.
+       */
+      if (result === 1) {
+        await this.redis!.expire(key, ttlSeconds);
+      }
+
+      return result;
+    } catch (error) {
+      this.logger.error(
+        `Redis INCR with TTL failed for ${key}`,
+        error instanceof Error ? error.message : String(error),
+      );
+
+      return null;
+    }
+  }
+
+  // ============================================================
   // DELETE
   // ============================================================
 

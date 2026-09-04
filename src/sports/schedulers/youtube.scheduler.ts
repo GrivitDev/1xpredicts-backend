@@ -12,8 +12,38 @@ export class YoutubeScheduler {
     private readonly youtubeHighlightService: YoutubeHighlightService,
   ) {}
 
-  @Cron('0 * * * * *')
-  async processHighlightQueue(): Promise<void> {
+  // ============================================================
+  // HIGHLIGHT QUEUE WORKER
+  //
+  // YouTube runs only during the final 3 hours of the
+  // daily collection window:
+  //
+  // 11:00 PM - 2:00 AM WAT
+  //
+  // The worker checks the queue every minute.
+  //
+  // The central provider rate limiter controls:
+  // - 1 actual request per 60 seconds
+  // - daily YouTube quota
+  // ============================================================
+
+  @Cron('0 * 23 * * *', {
+    name: 'youtube-highlight-queue-23',
+    timeZone: 'Africa/Lagos',
+  })
+  async processHighlightQueueLate(): Promise<void> {
+    await this.processHighlightQueue();
+  }
+
+  @Cron('0 * 0-1 * * *', {
+    name: 'youtube-highlight-queue-night',
+    timeZone: 'Africa/Lagos',
+  })
+  async processHighlightQueueNight(): Promise<void> {
+    await this.processHighlightQueue();
+  }
+
+  private async processHighlightQueue(): Promise<void> {
     try {
       await this.youtubeHighlightService.processNext();
     } catch (error) {

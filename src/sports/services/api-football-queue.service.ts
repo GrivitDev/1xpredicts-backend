@@ -15,11 +15,17 @@ import {
 
 import { SportsProviderRateLimitService } from './sports-provider-rate-limit.service';
 
+import { SPORTS_DATA_COLLECTION_CONFIG } from '../config/sports-data-collection.config';
+
 @Injectable()
 export class ApiFootballQueueService {
   private readonly logger = new Logger(ApiFootballQueueService.name);
 
-  private readonly maxAttempts = 3;
+  private readonly maxAttempts =
+    SPORTS_DATA_COLLECTION_CONFIG.API_FOOTBALL.queue.maxAttempts;
+
+  private readonly dailyRequestLimit =
+    SPORTS_DATA_COLLECTION_CONFIG.API_FOOTBALL.dailyRequestLimit;
 
   constructor(
     @InjectModel(ApiFootballQueue.name)
@@ -63,6 +69,11 @@ export class ApiFootballQueueService {
       identity.apiFootballFixtureId = job.apiFootballFixtureId;
     }
 
+    /*
+     * A job already pending or processing is still active.
+     *
+     * Do not create another copy.
+     */
     const activeJob = await this.queueModel
       .findOne({
         ...identity,
@@ -82,21 +93,17 @@ export class ApiFootballQueueService {
       return null;
     }
 
-    const successfulJob = await this.queueModel
-      .findOne({
-        ...identity,
-        status: ApiFootballQueueStatus.COMPLETED,
-      })
-      .sort({
-        completedAt: -1,
-        updatedAt: -1,
-      })
-      .exec();
-
-    if (successfulJob) {
-      return null;
-    }
-
+    /*
+     * IMPORTANT:
+     *
+     * We intentionally do NOT reject a job merely because an older
+     * completed job exists.
+     *
+     * API-Football collection is recurring. A completed job from
+     * yesterday must not prevent today's refresh.
+     *
+     * The scheduler/builder controls when a new collection is needed.
+     */
     return this.queueModel.create({
       competitionId: job.competitionId,
       apiFootballLeagueId: job.apiFootballLeagueId,
@@ -123,6 +130,16 @@ export class ApiFootballQueueService {
   // ============================================================
 
   async getNextJob(): Promise<ApiFootballQueueDocument | null> {
+    /*
+     * Never claim another API-Football job once the daily budget
+     * has already been consumed.
+     */
+    const remainingQuota = await this.getRemainingDailyQuota();
+
+    if (remainingQuota <= 0) {
+      return null;
+    }
+
     const now = new Date();
 
     return this.queueModel
@@ -223,10 +240,23 @@ export class ApiFootballQueueService {
     const shouldRetry = attempts < maxAttempts;
 
     if (shouldRetry) {
-      const retryDelay = Math.min(
-        60_000 * Math.pow(2, Math.max(attempts - 1, 0)),
-        15 * 60_000,
-      );
+      /*
+       * Retry scheduling does NOT bypass the provider limiter.
+       *
+       * When this job is processed again:
+       *
+       * retry -> SportsProviderRateLimitService
+       *       -> 60-second provider window
+       *       -> daily quota check
+       *       -> actual API call
+       *
+       * The failed original request has already consumed its quota
+       * because quota accounting happens before the external request.
+       */
+      const retryDelayMinutes =
+        SPORTS_DATA_COLLECTION_CONFIG.API_FOOTBALL.queue.retryDelayMinutes;
+
+      const retryDelay = retryDelayMinutes * 60 * 1000;
 
       await this.queueModel
         .findByIdAndUpdate(
@@ -322,7 +352,14 @@ export class ApiFootballQueueService {
     const remaining =
       await this.rateLimitService.getRemainingDailyRequests('api-football');
 
-    return remaining ?? 0;
+    /*
+     * Fail closed if Redis/quota state is unavailable.
+     */
+    if (remaining === null || remaining === undefined) {
+      return 0;
+    }
+
+    return Math.max(0, Math.min(remaining, this.dailyRequestLimit));
   }
 
   // ============================================================
@@ -332,7 +369,12 @@ export class ApiFootballQueueService {
   async requeueStaleProcessingJobs(staleMinutes = 30): Promise<number> {
     const cutoff = new Date(Date.now() - staleMinutes * 60 * 1000);
 
-    const result = await this.queueModel
+    /*
+     * Jobs that still have attempts available can return to PENDING.
+     *
+     * Jobs already at maxAttempts are permanently failed instead.
+     */
+    const retryResult = await this.queueModel
       .updateMany(
         {
           status: ApiFootballQueueStatus.PROCESSING,
@@ -340,11 +382,16 @@ export class ApiFootballQueueService {
           startedAt: {
             $lt: cutoff,
           },
+
+          $expr: {
+            $lt: ['$attempts', '$maxAttempts'],
+          },
         },
         {
           $set: {
             status: ApiFootballQueueStatus.PENDING,
             nextAttemptAt: new Date(),
+            error: 'Recovered from stale processing state',
           },
 
           $unset: {
@@ -354,7 +401,45 @@ export class ApiFootballQueueService {
       )
       .exec();
 
-    return result.modifiedCount;
+    const failedResult = await this.queueModel
+      .updateMany(
+        {
+          status: ApiFootballQueueStatus.PROCESSING,
+
+          startedAt: {
+            $lt: cutoff,
+          },
+
+          $expr: {
+            $gte: ['$attempts', '$maxAttempts'],
+          },
+        },
+        {
+          $set: {
+            status: ApiFootballQueueStatus.FAILED,
+            completedAt: new Date(),
+            processedAt: new Date(),
+            error: 'Processing became stale after maximum attempts',
+          },
+
+          $unset: {
+            startedAt: 1,
+            nextAttemptAt: 1,
+          },
+        },
+      )
+      .exec();
+
+    const recovered = retryResult.modifiedCount + failedResult.modifiedCount;
+
+    if (recovered > 0) {
+      this.logger.warn(
+        `Recovered ${retryResult.modifiedCount} stale API-Football job(s); ` +
+          `${failedResult.modifiedCount} exceeded maximum attempts`,
+      );
+    }
+
+    return recovered;
   }
 
   // ============================================================

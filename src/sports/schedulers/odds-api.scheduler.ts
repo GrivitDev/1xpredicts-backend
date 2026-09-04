@@ -38,11 +38,12 @@ export class OddsApiScheduler {
 
   // ============================================================
   // SPORTS DISCOVERY
-  // MONDAY 12:05 AM
+  // MONDAY 1:05 PM WAT
   // ============================================================
 
-  @Cron('0 5 0 * * 1', {
+  @Cron('0 5 13 * * 1', {
     name: 'odds-api-sports-discovery',
+    timeZone: 'Africa/Lagos',
   })
   async discoverSports(): Promise<void> {
     try {
@@ -60,17 +61,24 @@ export class OddsApiScheduler {
   // ============================================================
   // EVENTS
   // DAILY
+  // 1:15 PM WAT
+  //
+  // Collects the sport with the highest-priority upcoming
+  // supported competition.
   // ============================================================
 
-  @Cron('0 15 0 * * *', {
+  @Cron('0 15 13 * * *', {
     name: 'odds-api-events',
+    timeZone: 'Africa/Lagos',
   })
   async collectEvents(): Promise<void> {
     try {
       const sportKey = await this.selectSportKey(0);
 
       if (!sportKey) {
-        this.logger.log('No Odds API sport key has an upcoming match');
+        this.logger.log(
+          'No Odds API sport key has an upcoming supported fixture',
+        );
 
         return;
       }
@@ -87,52 +95,45 @@ export class OddsApiScheduler {
   }
 
   // ============================================================
-  // SCORES
-  // DAILY
+  // TARGETED ODDS
+  //
+  // Runs throughout the collection window.
+  //
+  // The scheduler rotates through eligible competitions instead
+  // of repeatedly requesting the same sport.
+  //
+  // Actual API calls remain controlled by the central provider
+  // rate limiter and monthly quota.
   // ============================================================
 
-  @Cron('0 15 6 * * *', {
-    name: 'odds-api-scores',
+  @Cron('0 15 15-23/2 * * *', {
+    name: 'odds-api-targeted-odds-afternoon',
+    timeZone: 'Africa/Lagos',
   })
-  async collectScores(): Promise<void> {
-    try {
-      const sportKey = await this.selectSportKey(3);
-
-      if (!sportKey) {
-        this.logger.log('No Odds API sport key has an upcoming match');
-
-        return;
-      }
-
-      await this.sportsCollectionService.collectOddsScores(sportKey, 1);
-
-      this.logger.log(`Odds API scores collected for ${sportKey}`);
-    } catch (error) {
-      this.logger.error(
-        'Odds API scores collection failed',
-        error instanceof Error ? error.stack : String(error),
-      );
-    }
+  async collectTargetedOddsAfternoon(): Promise<void> {
+    await this.collectTargetedOdds();
   }
 
-  // ============================================================
-  // ODDS
-  // 12 TIMES DAILY
-  // ============================================================
-
-  @Cron('0 15 */2 * * *', {
-    name: 'odds-api-targeted-odds',
+  @Cron('0 15 1 * * *', {
+    name: 'odds-api-targeted-odds-night',
+    timeZone: 'Africa/Lagos',
   })
-  async collectTargetedOdds(): Promise<void> {
+  async collectTargetedOddsNight(): Promise<void> {
+    await this.collectTargetedOdds();
+  }
+
+  private async collectTargetedOdds(): Promise<void> {
     try {
       const hour = new Date().getHours();
 
-      const slot = Math.floor(hour / 2);
+      const slot = this.getCollectionSlot(hour);
 
       const sportKey = await this.selectSportKey(slot);
 
       if (!sportKey) {
-        this.logger.log('No Odds API sport key has an upcoming match');
+        this.logger.log(
+          'No Odds API sport key has an upcoming supported fixture',
+        );
 
         return;
       }
@@ -150,6 +151,74 @@ export class OddsApiScheduler {
         error instanceof Error ? error.stack : String(error),
       );
     }
+  }
+
+  // ============================================================
+  // LATE-STAGE SCORES
+  //
+  // Scores are more useful toward the end of the collection
+  // window, after matches have had time to finish.
+  // ============================================================
+
+  @Cron('0 15 23 * * *', {
+    name: 'odds-api-scores-late',
+    timeZone: 'Africa/Lagos',
+  })
+  async collectScoresLate(): Promise<void> {
+    await this.collectScores();
+  }
+
+  @Cron('0 15 1 * * *', {
+    name: 'odds-api-scores-final',
+    timeZone: 'Africa/Lagos',
+  })
+  async collectScoresFinal(): Promise<void> {
+    await this.collectScores();
+  }
+
+  private async collectScores(): Promise<void> {
+    try {
+      const sportKey = await this.selectSportKey(
+        this.getCollectionSlot(new Date().getHours()),
+      );
+
+      if (!sportKey) {
+        this.logger.log(
+          'No Odds API sport key has an upcoming supported fixture',
+        );
+
+        return;
+      }
+
+      await this.sportsCollectionService.collectOddsScores(sportKey, 1);
+
+      this.logger.log(`Odds API scores collected for ${sportKey}`);
+    } catch (error) {
+      this.logger.error(
+        'Odds API scores collection failed',
+        error instanceof Error ? error.stack : String(error),
+      );
+    }
+  }
+
+  // ============================================================
+  // COLLECTION SLOT
+  //
+  // 13:00 -> 0
+  // 15:00 -> 1
+  // 17:00 -> 2
+  // 19:00 -> 3
+  // 21:00 -> 4
+  // 23:00 -> 5
+  // 01:00 -> 6
+  // ============================================================
+
+  private getCollectionSlot(hour: number): number {
+    if (hour >= 13) {
+      return Math.floor((hour - 13) / 2);
+    }
+
+    return 5 + Math.floor(hour / 2);
   }
 
   // ============================================================

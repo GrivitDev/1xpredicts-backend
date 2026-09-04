@@ -33,8 +33,16 @@ export class ApiFootballScheduler {
   // DAILY
   // ============================================================
 
-  @Cron('0 5 0 * * *', {
+  /**
+   * Refresh API-Football competition information shortly before
+   * the daily collection window starts.
+   *
+   * Collection window:
+   * 13:00 - 02:00 WAT
+   */
+  @Cron('50 12 * * *', {
     name: 'api-football-league-discovery',
+    timeZone: 'Africa/Lagos',
   })
   async refreshCurrentCompetitions(): Promise<void> {
     try {
@@ -56,135 +64,177 @@ export class ApiFootballScheduler {
   }
 
   // ============================================================
-  // FIXTURE QUEUE
-  // EVERY 30 MINUTES
+  // EARLY COLLECTION
+  // 13:00 WAT
   // ============================================================
 
-  @Cron('0 */30 * * * *', {
-    name: 'api-football-fixture-queue',
+  /**
+   * Supporting data comes first:
+   *
+   * - team statistics
+   * - injuries
+   *
+   * These are needed by the prediction pipeline later in the day.
+   */
+  @Cron('10 13 * * *', {
+    name: 'api-football-early-supporting-data',
+    timeZone: 'Africa/Lagos',
   })
-  async buildFixtureQueue(): Promise<void> {
+  async buildEarlySupportingDataQueue(): Promise<void> {
     try {
       const result =
-        await this.apiFootballQueueBuilderService.buildFixtureQueue();
+        await this.apiFootballQueueBuilderService.buildTeamStatisticsAndInjuryJobs();
 
       this.logger.log(
-        `API-Football fixture queue: ` +
+        `API-Football early supporting-data queue: ` +
           `${result.queued} queued, ` +
           `${result.skipped} skipped, ` +
           `${result.remainingQuota} remaining`,
       );
     } catch (error) {
       this.logger.error(
-        'API-Football fixture queue build failed',
+        'API-Football early supporting-data queue build failed',
         error instanceof Error ? error.stack : String(error),
       );
     }
   }
 
   // ============================================================
-  // STANDINGS QUEUE
-  // EVERY HOUR
+  // SECOND SUPPORTING-DATA PASS
+  // 15:30 WAT
   // ============================================================
 
-  @Cron('0 10 * * * *', {
-    name: 'api-football-standings-queue',
+  /**
+   * Gives newly available fixture/team information another chance
+   * to receive supporting data.
+   *
+   * The queue service prevents duplicate active jobs.
+   */
+  @Cron('30 15 * * *', {
+    name: 'api-football-secondary-supporting-data',
+    timeZone: 'Africa/Lagos',
   })
-  async buildStandingsQueue(): Promise<void> {
+  async buildSecondarySupportingDataQueue(): Promise<void> {
     try {
       const result =
-        await this.apiFootballQueueBuilderService.buildStandingsQueue();
+        await this.apiFootballQueueBuilderService.buildTeamStatisticsAndInjuryJobs();
 
       this.logger.log(
-        `API-Football standings queue: ` +
+        `API-Football secondary supporting-data queue: ` +
           `${result.queued} queued, ` +
           `${result.skipped} skipped, ` +
           `${result.remainingQuota} remaining`,
       );
     } catch (error) {
       this.logger.error(
-        'API-Football standings queue build failed',
+        'API-Football secondary supporting-data queue build failed',
         error instanceof Error ? error.stack : String(error),
       );
     }
   }
 
   // ============================================================
-  // TEAM STATISTICS QUEUE
-  // EVERY 6 HOURS
+  // MID-DAY TARGETED COLLECTION
+  // 18:30 WAT
   // ============================================================
 
-  @Cron('0 20 */6 * * *', {
-    name: 'api-football-team-statistics-queue',
+  /**
+   * Targeted prediction preparation.
+   *
+   * This does not continuously poll API-Football. It only creates
+   * prediction jobs for relevant upcoming fixtures already known
+   * in MongoDB.
+   */
+  @Cron('30 18 * * *', {
+    name: 'api-football-targeted-collection',
+    timeZone: 'Africa/Lagos',
   })
-  async buildTeamStatisticsQueue(): Promise<void> {
+  async buildTargetedQueue(): Promise<void> {
     try {
       const result =
-        await this.apiFootballQueueBuilderService.buildTeamStatisticsQueue();
+        await this.apiFootballQueueBuilderService.buildTargetedJobs();
 
       this.logger.log(
-        `API-Football team statistics queue: ` +
+        `API-Football targeted queue: ` +
           `${result.queued} queued, ` +
           `${result.skipped} skipped, ` +
           `${result.remainingQuota} remaining`,
       );
     } catch (error) {
       this.logger.error(
-        'API-Football team statistics queue build failed',
+        'API-Football targeted queue build failed',
         error instanceof Error ? error.stack : String(error),
       );
     }
   }
 
   // ============================================================
-  // INJURIES QUEUE
-  // EVERY 6 HOURS
+  // LATE COLLECTION
+  // 00:05 WAT
   // ============================================================
 
-  @Cron('0 30 */6 * * *', {
-    name: 'api-football-injury-queue',
+  /**
+   * Late-stage collection.
+   *
+   * This is where the system gives priority to:
+   *
+   * - fixtures
+   * - standings
+   * - predictions
+   *
+   * after most of the day's football activity has occurred.
+   */
+  @Cron('5 0 * * *', {
+    name: 'api-football-late-collection',
+    timeZone: 'Africa/Lagos',
   })
-  async buildInjuryQueue(): Promise<void> {
+  async buildLateStageQueue(): Promise<void> {
     try {
       const result =
-        await this.apiFootballQueueBuilderService.buildInjuryQueue();
+        await this.apiFootballQueueBuilderService.buildLateStageJobs();
 
       this.logger.log(
-        `API-Football injury queue: ` +
+        `API-Football late-stage queue: ` +
           `${result.queued} queued, ` +
           `${result.skipped} skipped, ` +
           `${result.remainingQuota} remaining`,
       );
     } catch (error) {
       this.logger.error(
-        'API-Football injury queue build failed',
+        'API-Football late-stage queue build failed',
         error instanceof Error ? error.stack : String(error),
       );
     }
   }
 
   // ============================================================
-  // PREDICTION QUEUE
-  // EVERY 6 HOURS
+  // FINAL COLLECTION PASS
+  // 01:30 WAT
   // ============================================================
 
-  @Cron('0 40 */6 * * *', {
-    name: 'api-football-prediction-queue',
+  /**
+   * Final collection pass before the daily collection window closes.
+   *
+   * Duplicate active jobs are rejected by ApiFootballQueueService.
+   */
+  @Cron('30 1 * * *', {
+    name: 'api-football-final-collection',
+    timeZone: 'Africa/Lagos',
   })
-  async buildPredictionQueue(): Promise<void> {
+  async buildFinalStageQueue(): Promise<void> {
     try {
       const result =
-        await this.apiFootballQueueBuilderService.buildPredictionQueue();
+        await this.apiFootballQueueBuilderService.buildLateStageJobs();
 
       this.logger.log(
-        `API-Football prediction queue: ` +
+        `API-Football final-stage queue: ` +
           `${result.queued} queued, ` +
           `${result.skipped} skipped, ` +
           `${result.remainingQuota} remaining`,
       );
     } catch (error) {
       this.logger.error(
-        'API-Football prediction queue build failed',
+        'API-Football final-stage queue build failed',
         error instanceof Error ? error.stack : String(error),
       );
     }
@@ -192,11 +242,25 @@ export class ApiFootballScheduler {
 
   // ============================================================
   // QUEUE WORKER
-  // EVERY MINUTE
+  // 13:00 - 02:00 WAT
   // ============================================================
 
-  @Cron('0 * * * * *', {
-    name: 'api-football-queue-worker',
+  /**
+   * Processes one API-Football job per worker tick.
+   *
+   * The actual external request is still controlled by:
+   *
+   * SportsProviderRateLimitService
+   *
+   * Therefore the worker does NOT determine the API request rate.
+   */
+  @Cron('0 * 13-23 * * *', {
+    name: 'api-football-queue-worker-day',
+    timeZone: 'Africa/Lagos',
+  })
+  @Cron('0 * 0-1 * * *', {
+    name: 'api-football-queue-worker-night',
+    timeZone: 'Africa/Lagos',
   })
   async processQueue(): Promise<void> {
     try {
@@ -211,11 +275,16 @@ export class ApiFootballScheduler {
 
   // ============================================================
   // STALE JOB RECOVERY
-  // EVERY 10 MINUTES
+  // EVERY 10 MINUTES DURING COLLECTION
   // ============================================================
 
-  @Cron('0 */10 * * * *', {
-    name: 'api-football-stale-jobs',
+  @Cron('0 */10 13-23 * * *', {
+    name: 'api-football-stale-jobs-day',
+    timeZone: 'Africa/Lagos',
+  })
+  @Cron('0 */10 0-1 * * *', {
+    name: 'api-football-stale-jobs-night',
+    timeZone: 'Africa/Lagos',
   })
   async recoverStaleJobs(): Promise<void> {
     try {
@@ -235,11 +304,17 @@ export class ApiFootballScheduler {
 
   // ============================================================
   // QUEUE CLEANUP
-  // DAILY 3:30 AM
+  // DAILY 03:30 WAT
   // ============================================================
 
+  /**
+   * Database maintenance only.
+   *
+   * This does not consume API-Football quota.
+   */
   @Cron('0 30 3 * * *', {
     name: 'api-football-queue-cleanup',
+    timeZone: 'Africa/Lagos',
   })
   async cleanupQueue(): Promise<void> {
     try {
@@ -258,12 +333,16 @@ export class ApiFootballScheduler {
   }
 
   // ============================================================
-  // ACTIVE STATUS
-  // DAILY
+  // ACTIVE COMPETITION STATUS
+  // 23:50 WAT
   // ============================================================
 
+  /**
+   * Database-side competition status maintenance.
+   */
   @Cron('0 50 23 * * *', {
     name: 'api-football-active-status-refresh',
+    timeZone: 'Africa/Lagos',
   })
   async refreshStatuses(): Promise<void> {
     try {

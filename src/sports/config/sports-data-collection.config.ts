@@ -68,9 +68,13 @@ export const SPORTS_DATA_COLLECTION_CONFIG = {
   API_FOOTBALL: {
     enabled: true,
 
+    // Maximum actual API requests per UTC day.
+    // Retries also consume this quota.
     dailyRequestLimit: 95,
 
     rateLimit: {
+      // One actual request every 60 seconds.
+      // Retries use the same limit.
       minIntervalSeconds: 60,
     },
 
@@ -102,9 +106,15 @@ export const SPORTS_DATA_COLLECTION_CONFIG = {
   ODDS_API: {
     enabled: true,
 
-    dailyRequestLimit: 15,
+    // The Odds API is controlled by a monthly request budget.
+    // Keep this below the provider's 500-request monthly limit.
+    //
+    // Every normal request and every retry consumes one request.
+    monthlyRequestLimit: 450,
 
     rateLimit: {
+      // One actual request every 60 seconds.
+      // Retries use the same limit.
       minIntervalSeconds: 60,
     },
 
@@ -124,9 +134,13 @@ export const SPORTS_DATA_COLLECTION_CONFIG = {
   YOUTUBE: {
     enabled: true,
 
+    // Maximum actual API requests per UTC day.
+    // Retries also consume this quota.
     dailyRequestLimit: 30,
 
     rateLimit: {
+      // One actual request every 60 seconds.
+      // Retries use the same limit.
       minIntervalSeconds: 60,
     },
 

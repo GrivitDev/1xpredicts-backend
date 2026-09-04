@@ -34,9 +34,13 @@ export class ThesportsdbScheduler {
 
   // ============================================================
   // WEEKLY SEASON REFRESH
+  // MONDAY 1:30 PM WAT
   // ============================================================
 
-  @Cron('0 30 0 * * 1')
+  @Cron('0 30 13 * * 1', {
+    name: 'thesportsdb-season-refresh',
+    timeZone: 'Africa/Lagos',
+  })
   async refreshSeasons(): Promise<void> {
     const competitions = await this.getEligibleCompetitions();
 
@@ -66,9 +70,13 @@ export class ThesportsdbScheduler {
 
   // ============================================================
   // DAILY SEASON EVENTS
+  // 2:00 PM WAT
   // ============================================================
 
-  @Cron('0 0 1 * * *')
+  @Cron('0 0 14 * * *', {
+    name: 'thesportsdb-season-events',
+    timeZone: 'Africa/Lagos',
+  })
   async refreshSeasonEvents(): Promise<void> {
     const competitions = await this.getEligibleCompetitions();
 
@@ -98,9 +106,13 @@ export class ThesportsdbScheduler {
 
   // ============================================================
   // WEEKLY TEAMS
+  // MONDAY 3:00 PM WAT
   // ============================================================
 
-  @Cron('0 30 2 * * 1')
+  @Cron('0 0 15 * * 1', {
+    name: 'thesportsdb-team-refresh',
+    timeZone: 'Africa/Lagos',
+  })
   async refreshTeams(): Promise<void> {
     const competitions = await this.getEligibleCompetitions();
 
@@ -125,13 +137,32 @@ export class ThesportsdbScheduler {
   // ============================================================
   // TARGETED COMPLETED EVENTS
   //
-  // Refresh a small batch of recently completed
-  // events. The provider rate limiter controls the
-  // actual one-request-per-60-seconds spacing.
+  // Every 6 hours during the collection window.
+  //
+  // 3:00 PM
+  // 9:00 PM
+  // 1:00 AM
+  //
+  // Recently completed events receive detailed refreshes.
   // ============================================================
 
-  @Cron('0 0 */6 * * *')
-  async refreshCompletedEvents(): Promise<void> {
+  @Cron('0 0 15,21 * * *', {
+    name: 'thesportsdb-completed-events-day',
+    timeZone: 'Africa/Lagos',
+  })
+  async refreshCompletedEventsDay(): Promise<void> {
+    await this.refreshCompletedEvents();
+  }
+
+  @Cron('0 0 1 * * *', {
+    name: 'thesportsdb-completed-events-night',
+    timeZone: 'Africa/Lagos',
+  })
+  async refreshCompletedEventsNight(): Promise<void> {
+    await this.refreshCompletedEvents();
+  }
+
+  private async refreshCompletedEvents(): Promise<void> {
     const now = new Date();
 
     const from = new Date(now.getTime() - 24 * 60 * 60 * 1000);
@@ -169,14 +200,31 @@ export class ThesportsdbScheduler {
   }
 
   // ============================================================
-  // LIVE EVENT DETAILS
+  // RECENT / LIVE EVENT DETAILS
   //
-  // Target recently scheduled/live events so the
-  // detailed event data stays reasonably fresh.
+  // Every 30 minutes during the collection window.
+  //
+  // This keeps event and timeline information fresh without
+  // making requests outside the collection period.
   // ============================================================
 
-  @Cron('0 */30 * * * *')
-  async refreshRecentEvents(): Promise<void> {
+  @Cron('0 */30 13-23 * * *', {
+    name: 'thesportsdb-recent-events-day',
+    timeZone: 'Africa/Lagos',
+  })
+  async refreshRecentEventsDay(): Promise<void> {
+    await this.refreshRecentEvents();
+  }
+
+  @Cron('0 */30 0-1 * * *', {
+    name: 'thesportsdb-recent-events-night',
+    timeZone: 'Africa/Lagos',
+  })
+  async refreshRecentEventsNight(): Promise<void> {
+    await this.refreshRecentEvents();
+  }
+
+  private async refreshRecentEvents(): Promise<void> {
     const now = new Date();
 
     const from = new Date(now.getTime() - 3 * 60 * 60 * 1000);
@@ -220,12 +268,14 @@ export class ThesportsdbScheduler {
   }
 
   // ============================================================
-  // WEEKLY PLAYER / VENUE REFRESH
-  //
-  // Uses already-known teams and players from MongoDB.
+  // WEEKLY PLAYER REFRESH
+  // MONDAY 4:00 PM WAT
   // ============================================================
 
-  @Cron('0 30 3 * * 1')
+  @Cron('0 0 16 * * 1', {
+    name: 'thesportsdb-player-refresh',
+    timeZone: 'Africa/Lagos',
+  })
   async refreshPlayersAndVenues(): Promise<void> {
     const teams = await this.getTeamsForEligibleCompetitions();
 

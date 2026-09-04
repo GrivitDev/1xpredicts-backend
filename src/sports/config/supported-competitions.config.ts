@@ -47,11 +47,6 @@ const API_FOOTBALL_MAPPINGS: Record<
     country: 'England',
   },
 
-  LEAGUE_ONE: {
-    name: 'League One',
-    country: 'England',
-  },
-
   LA_LIGA: {
     name: 'La Liga',
     country: 'Spain',
@@ -97,36 +92,6 @@ const API_FOOTBALL_MAPPINGS: Record<
     country: 'Turkey',
   },
 
-  GREEK_SUPER_LEAGUE: {
-    name: 'Super League 1',
-    country: 'Greece',
-  },
-
-  AUSTRIAN_BUNDESLIGA: {
-    name: 'Bundesliga',
-    country: 'Austria',
-  },
-
-  SWISS_SUPER_LEAGUE: {
-    name: 'Super League',
-    country: 'Switzerland',
-  },
-
-  DANISH_SUPERLIGA: {
-    name: 'Superliga',
-    country: 'Denmark',
-  },
-
-  ELITESERIEN: {
-    name: 'Eliteserien',
-    country: 'Norway',
-  },
-
-  ALLSVENSKAN: {
-    name: 'Allsvenskan',
-    country: 'Sweden',
-  },
-
   NPFL: {
     name: 'NPFL',
     country: 'Nigeria',
@@ -145,16 +110,6 @@ const API_FOOTBALL_MAPPINGS: Record<
   BOTOLA_PRO: {
     name: 'Botola Pro',
     country: 'Morocco',
-  },
-
-  GHANA_PREMIER_LEAGUE: {
-    name: 'Premier League',
-    country: 'Ghana',
-  },
-
-  KENYA_PREMIER_LEAGUE: {
-    name: 'FKF Premier League',
-    country: 'Kenya',
   },
 
   BRAZIL_SERIE_A: {
@@ -190,28 +145,23 @@ const API_FOOTBALL_MAPPINGS: Record<
 const DISPLAY_NAMES: Record<string, string> = {
   PREMIER_LEAGUE: 'Premier League',
   CHAMPIONSHIP: 'Championship',
-  LEAGUE_ONE: 'League One',
+
   LA_LIGA: 'La Liga',
   SERIE_A: 'Serie A',
   BUNDESLIGA: 'Bundesliga',
   LIGUE_1: 'Ligue 1',
+
   EREDIVISIE: 'Eredivisie',
   PRIMEIRA_LIGA: 'Primeira Liga',
   SCOTTISH_PREMIERSHIP: 'Scottish Premiership',
   BELGIAN_PRO_LEAGUE: 'Belgian Pro League',
   TURKISH_SUPER_LIG: 'Turkish Super Lig',
-  GREEK_SUPER_LEAGUE: 'Greek Super League',
-  AUSTRIAN_BUNDESLIGA: 'Austrian Bundesliga',
-  SWISS_SUPER_LEAGUE: 'Swiss Super League',
-  DANISH_SUPERLIGA: 'Danish Superliga',
-  ELITESERIEN: 'Eliteserien',
-  ALLSVENSKAN: 'Allsvenskan',
+
   NPFL: 'Nigeria Premier Football League',
   SOUTH_AFRICA_PREMIER_DIVISION: 'South African Premier Division',
   EGYPTIAN_PREMIER_LEAGUE: 'Egyptian Premier League',
   BOTOLA_PRO: 'Botola Pro',
-  GHANA_PREMIER_LEAGUE: 'Ghana Premier League',
-  KENYA_PREMIER_LEAGUE: 'Kenya Premier League',
+
   BRAZIL_SERIE_A: 'Brazil Serie A',
   ARGENTINA_PRIMERA: 'Argentina Primera Division',
   LIGA_MX: 'Liga MX',
@@ -234,6 +184,32 @@ const DISPLAY_NAME_OVERRIDES: Record<string, string> = {
 
   EURO: 'UEFA European Championship',
   UEFA_EURO: 'UEFA European Championship',
+
+  WORLD_CUP_QUALIFIERS: 'FIFA World Cup Qualifiers',
+  FIFA_WORLD_CUP_QUALIFIERS: 'FIFA World Cup Qualifiers',
+
+  AFCON: 'Africa Cup of Nations',
+  AFCON_QUALIFIERS: 'Africa Cup of Nations Qualifiers',
+
+  EURO_QUALIFIERS: 'UEFA European Championship Qualifiers',
+  UEFA_EURO_QUALIFIERS: 'UEFA European Championship Qualifiers',
+
+  UEFA_NATIONS_LEAGUE: 'UEFA Nations League',
+
+  COPA_AMERICA: 'Copa America',
+
+  CONCACAF_GOLD_CUP: 'CONCACAF Gold Cup',
+  CONCACAF_NATIONS_LEAGUE: 'CONCACAF Nations League',
+
+  AFC_ASIAN_CUP: 'AFC Asian Cup',
+
+  CAF_CHAMPIONS_LEAGUE: 'CAF Champions League',
+  CAF_CONFEDERATION_CUP: 'CAF Confederation Cup',
+
+  COPA_LIBERTADORES: 'Copa Libertadores',
+  COPA_SUDAMERICANA: 'Copa Sudamericana',
+
+  CONCACAF_CHAMPIONS_CUP: 'CONCACAF Champions Cup',
 };
 
 // ============================================================
@@ -368,21 +344,18 @@ const DOMESTIC_LEAGUES: SupportedCompetitionConfig[] = Object.values(
 
     league === SupportedLeague.NPFL
       ? CompetitionRegion.NIGERIA
-      : league === SupportedLeague.BRAZIL_SERIE_A
+      : league === SupportedLeague.BRAZIL_SERIE_A ||
+          league === SupportedLeague.ARGENTINA_PRIMERA
         ? CompetitionRegion.SOUTH_AMERICA
-        : league === SupportedLeague.ARGENTINA_PRIMERA
-          ? CompetitionRegion.SOUTH_AMERICA
-          : league === SupportedLeague.LIGA_MX || league === SupportedLeague.MLS
-            ? CompetitionRegion.NORTH_AMERICA
-            : league === SupportedLeague.SAUDI_PRO_LEAGUE
-              ? CompetitionRegion.ASIA
-              : league === SupportedLeague.SOUTH_AFRICA_PREMIER_DIVISION ||
-                  league === SupportedLeague.EGYPTIAN_PREMIER_LEAGUE ||
-                  league === SupportedLeague.BOTOLA_PRO ||
-                  league === SupportedLeague.GHANA_PREMIER_LEAGUE ||
-                  league === SupportedLeague.KENYA_PREMIER_LEAGUE
-                ? CompetitionRegion.AFRICA
-                : CompetitionRegion.EUROPE,
+        : league === SupportedLeague.LIGA_MX || league === SupportedLeague.MLS
+          ? CompetitionRegion.NORTH_AMERICA
+          : league === SupportedLeague.SAUDI_PRO_LEAGUE
+            ? CompetitionRegion.ASIA
+            : league === SupportedLeague.SOUTH_AFRICA_PREMIER_DIVISION ||
+                league === SupportedLeague.EGYPTIAN_PREMIER_LEAGUE ||
+                league === SupportedLeague.BOTOLA_PRO
+              ? CompetitionRegion.AFRICA
+              : CompetitionRegion.EUROPE,
 
     [
       SupportedLeague.PREMIER_LEAGUE,
@@ -396,8 +369,15 @@ const DOMESTIC_LEAGUES: SupportedCompetitionConfig[] = Object.values(
             SupportedLeague.CHAMPIONSHIP,
             SupportedLeague.EREDIVISIE,
             SupportedLeague.PRIMEIRA_LIGA,
+            SupportedLeague.SCOTTISH_PREMIERSHIP,
+            SupportedLeague.BELGIAN_PRO_LEAGUE,
+            SupportedLeague.TURKISH_SUPER_LIG,
+            SupportedLeague.NPFL,
             SupportedLeague.BRAZIL_SERIE_A,
             SupportedLeague.ARGENTINA_PRIMERA,
+            SupportedLeague.LIGA_MX,
+            SupportedLeague.MLS,
+            SupportedLeague.SAUDI_PRO_LEAGUE,
           ].includes(league)
         ? CompetitionPriority.HIGH
         : CompetitionPriority.REGIONAL,
@@ -418,9 +398,19 @@ const CLUB_COMPETITIONS: SupportedCompetitionConfig[] = Object.values(
 
     CompetitionType.CLUB_COMPETITION,
 
-    CompetitionRegion.EUROPE,
+    competition === SupportedClubCompetition.CAF_CHAMPIONS_LEAGUE ||
+      competition === SupportedClubCompetition.CAF_CONFEDERATION_CUP
+      ? CompetitionRegion.AFRICA
+      : competition === SupportedClubCompetition.COPA_LIBERTADORES ||
+          competition === SupportedClubCompetition.COPA_SUDAMERICANA
+        ? CompetitionRegion.SOUTH_AMERICA
+        : competition === SupportedClubCompetition.CONCACAF_CHAMPIONS_CUP
+          ? CompetitionRegion.NORTH_AMERICA
+          : CompetitionRegion.EUROPE,
 
-    competition.includes('CHAMPIONS')
+    competition === SupportedClubCompetition.UEFA_CHAMPIONS_LEAGUE ||
+      competition === SupportedClubCompetition.CAF_CHAMPIONS_LEAGUE ||
+      competition === SupportedClubCompetition.COPA_LIBERTADORES
       ? CompetitionPriority.ELITE
       : CompetitionPriority.HIGH,
 
@@ -444,9 +434,23 @@ const INTERNATIONAL_COMPETITIONS: SupportedCompetitionConfig[] = Object.values(
 
     CompetitionType.INTERNATIONAL,
 
-    CompetitionRegion.WORLD,
+    competition === SupportedInternationalCompetition.AFCON ||
+      competition === SupportedInternationalCompetition.AFCON_QUALIFIERS
+      ? CompetitionRegion.AFRICA
+      : competition === SupportedInternationalCompetition.COPA_AMERICA
+        ? CompetitionRegion.SOUTH_AMERICA
+        : competition === SupportedInternationalCompetition.CONCACAF_GOLD_CUP ||
+            competition ===
+              SupportedInternationalCompetition.CONCACAF_NATIONS_LEAGUE
+          ? CompetitionRegion.NORTH_AMERICA
+          : competition === SupportedInternationalCompetition.AFC_ASIAN_CUP
+            ? CompetitionRegion.ASIA
+            : CompetitionRegion.WORLD,
 
-    competition.includes('WORLD_CUP')
+    competition === SupportedInternationalCompetition.FIFA_WORLD_CUP ||
+      competition ===
+        SupportedInternationalCompetition.FIFA_WORLD_CUP_QUALIFIERS ||
+      competition === SupportedInternationalCompetition.AFCON
       ? CompetitionPriority.ELITE
       : CompetitionPriority.HIGH,
 
@@ -488,10 +492,16 @@ export function getSupportedCompetition(
   return SUPPORTED_COMPETITIONS_BY_ID.get(competitionId.trim().toLowerCase());
 }
 
+// ============================================================
+// VALIDATION
+// ============================================================
+
 export function validateSupportedCompetitions(): void {
-  if (SUPPORTED_COMPETITIONS.length !== 58) {
+  const expectedCompetitionCount = 39;
+
+  if (SUPPORTED_COMPETITIONS.length !== expectedCompetitionCount) {
     throw new Error(
-      `Expected 58 supported competitions, found ${SUPPORTED_COMPETITIONS.length}`,
+      `Expected ${expectedCompetitionCount} supported competitions, found ${SUPPORTED_COMPETITIONS.length}`,
     );
   }
 
