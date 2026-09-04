@@ -3,6 +3,7 @@ import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument } from 'mongoose';
 
 import { ActiveCompetitionStatus } from '../interfaces/active-competition.interface';
+import { CompetitionPriority } from '../enums/competition-priority.enum';
 
 export type ActiveCompetitionDocument = HydratedDocument<ActiveCompetition>;
 
@@ -38,10 +39,11 @@ export class ActiveCompetition {
 
   @Prop({
     required: true,
-    type: Number,
+    type: String,
+    enum: Object.values(CompetitionPriority),
     index: true,
   })
-  priority!: number;
+  priority!: CompetitionPriority;
 
   @Prop({
     type: Number,

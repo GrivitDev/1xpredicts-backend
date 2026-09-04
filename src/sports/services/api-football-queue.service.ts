@@ -34,20 +34,18 @@ export class ApiFootballQueueService {
 
   async addJob(job: {
     jobType: ApiFootballQueueJobType;
-    competitionId?: string;
+    competitionId: string;
     apiFootballLeagueId?: number;
     season?: number;
     apiFootballTeamId?: number;
     apiFootballFixtureId?: number;
     priority?: number;
+    scheduledFor?: Date;
   }): Promise<ApiFootballQueueDocument | null> {
     const identity: Record<string, unknown> = {
       type: job.jobType,
+      competitionId: job.competitionId,
     };
-
-    if (job.competitionId !== undefined) {
-      identity.competitionId = job.competitionId;
-    }
 
     if (job.apiFootballLeagueId !== undefined) {
       identity.apiFootballLeagueId = job.apiFootballLeagueId;
@@ -64,10 +62,6 @@ export class ApiFootballQueueService {
     if (job.apiFootballFixtureId !== undefined) {
       identity.apiFootballFixtureId = job.apiFootballFixtureId;
     }
-
-    // ------------------------------------------------------------
-    // Do not duplicate pending/processing jobs.
-    // ------------------------------------------------------------
 
     const activeJob = await this.queueModel
       .findOne({
@@ -88,10 +82,6 @@ export class ApiFootballQueueService {
       return null;
     }
 
-    // ------------------------------------------------------------
-    // Do not immediately recreate a completed job.
-    // ------------------------------------------------------------
-
     const successfulJob = await this.queueModel
       .findOne({
         ...identity,
@@ -107,10 +97,8 @@ export class ApiFootballQueueService {
       return null;
     }
 
-    const now = new Date();
-
     return this.queueModel.create({
-      competitionId: job.competitionId ?? '',
+      competitionId: job.competitionId,
       apiFootballLeagueId: job.apiFootballLeagueId,
       season: job.season,
       apiFootballTeamId: job.apiFootballTeamId,
@@ -126,7 +114,7 @@ export class ApiFootballQueueService {
 
       maxAttempts: this.maxAttempts,
 
-      scheduledFor: now,
+      scheduledFor: job.scheduledFor ?? new Date(),
     });
   }
 
@@ -202,6 +190,7 @@ export class ApiFootballQueueService {
           $unset: {
             error: 1,
             nextAttemptAt: 1,
+            startedAt: 1,
           },
         },
         {
@@ -210,10 +199,6 @@ export class ApiFootballQueueService {
       )
       .exec();
   }
-
-  // ============================================================
-  // COMPATIBILITY ALIAS
-  // ============================================================
 
   async markCompleted(jobId: string): Promise<void> {
     await this.completeJob(jobId);
@@ -232,11 +217,14 @@ export class ApiFootballQueueService {
 
     const message = error instanceof Error ? error.message : String(error);
 
-    const shouldRetry = job.attempts < job.maxAttempts;
+    const attempts = job.attempts ?? 0;
+    const maxAttempts = job.maxAttempts ?? this.maxAttempts;
+
+    const shouldRetry = attempts < maxAttempts;
 
     if (shouldRetry) {
       const retryDelay = Math.min(
-        60_000 * Math.pow(2, Math.max(job.attempts - 1, 0)),
+        60_000 * Math.pow(2, Math.max(attempts - 1, 0)),
         15 * 60_000,
       );
 
@@ -291,10 +279,6 @@ export class ApiFootballQueueService {
       }: ${message}`,
     );
   }
-
-  // ============================================================
-  // COMPATIBILITY ALIAS
-  // ============================================================
 
   async markFailed(jobId: string, error: unknown): Promise<void> {
     await this.failJob(jobId, error);
@@ -408,7 +392,7 @@ export class ApiFootballQueueService {
       })
       .exec();
 
-    return result.deletedCount;
+    return result.deletedCount ?? 0;
   }
 
   // ============================================================

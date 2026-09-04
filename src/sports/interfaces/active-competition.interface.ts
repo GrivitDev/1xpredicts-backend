@@ -1,3 +1,5 @@
+import { CompetitionPriority } from '../enums/competition-priority.enum';
+
 export enum ActiveCompetitionStatus {
   UPCOMING = 'UPCOMING',
   ACTIVE = 'ACTIVE',
@@ -10,13 +12,12 @@ export interface ActiveCompetition {
   name: string;
   type: string;
   region: string;
-  priority: number;
+  priority: CompetitionPriority;
 
   apiFootballLeagueId?: number;
   sportsDbLeagueId?: number;
 
   season?: string;
-
   seasonStartDate?: Date;
   seasonEndDate?: Date;
 
