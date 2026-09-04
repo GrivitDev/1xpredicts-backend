@@ -148,7 +148,7 @@ export class SportsSourceScheduler {
         const seasonEnd = new Date(season.endDate);
 
         await this.activeCompetitionService.upsert(competition, {
-          season: season.id,
+          season: String(season.id),
 
           seasonStartDate: seasonStart,
 

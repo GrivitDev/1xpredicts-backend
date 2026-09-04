@@ -1,15 +1,21 @@
 import { Module } from '@nestjs/common';
+
 import { MongooseModule } from '@nestjs/mongoose';
 
 import { SportsController } from './sports.controller';
+
 import { SportsService } from './sports.service';
 
 import { SportsCacheModule } from './cache/sports-cache.module';
 
 import { ApiFootballService } from './providers/api-football.service';
+
 import { FootballDataService } from './providers/football-data.service';
+
 import { TheOddsApiService } from './providers/the-odds-api.service';
+
 import { TheSportsDbService } from './providers/thesportsdb.service';
+
 import { YoutubeService } from './providers/youtube.service';
 
 import {
@@ -144,6 +150,8 @@ import {
 
 import { ActiveCompetitionService } from './services/active-competition.service';
 
+import { ApiFootballActiveCompetitionService } from './services/api-football-active-competition.service';
+
 import { ApiFootballQueueService } from './services/api-football-queue.service';
 
 import { ApiFootballQueueBuilderService } from './services/api-football-queue-builder.service';
@@ -163,6 +171,7 @@ import { YoutubeHighlightService } from './services/youtube-highlight.service';
 import { SportsSourceScheduler } from './schedulers/sports-source.scheduler';
 
 import { SportsTargetedRefreshScheduler } from './schedulers/sports-targeted-refresh.scheduler';
+
 import { SportsStartupService } from './services/sports-startup.service';
 
 @Module({
@@ -174,30 +183,37 @@ import { SportsStartupService } from './services/sports-startup.service';
         name: ActiveCompetition.name,
         schema: ActiveCompetitionSchema,
       },
+
       {
         name: ApiFootballQueue.name,
         schema: ApiFootballQueueSchema,
       },
+
       {
         name: SportsOddsSnapshot.name,
         schema: SportsOddsSnapshotSchema,
       },
+
       {
         name: YoutubeHighlight.name,
         schema: YoutubeHighlightSchema,
       },
+
       {
         name: FootballDataCompetition.name,
         schema: FootballDataCompetitionSchema,
       },
+
       {
         name: FootballDataMatch.name,
         schema: FootballDataMatchSchema,
       },
+
       {
         name: FootballDataStanding.name,
         schema: FootballDataStandingSchema,
       },
+
       {
         name: FootballDataTeam.name,
         schema: FootballDataTeamSchema,
@@ -208,18 +224,22 @@ import { SportsStartupService } from './services/sports-startup.service';
         name: ApiFootballFixture.name,
         schema: ApiFootballFixtureSchema,
       },
+
       {
         name: ApiFootballStanding.name,
         schema: ApiFootballStandingSchema,
       },
+
       {
         name: ApiFootballTeamStatistics.name,
         schema: ApiFootballTeamStatisticsSchema,
       },
+
       {
         name: ApiFootballInjury.name,
         schema: ApiFootballInjurySchema,
       },
+
       {
         name: ApiFootballPrediction.name,
         schema: ApiFootballPredictionSchema,
@@ -230,38 +250,47 @@ import { SportsStartupService } from './services/sports-startup.service';
         name: TheSportsDbSeason.name,
         schema: TheSportsDbSeasonSchema,
       },
+
       {
         name: TheSportsDbEvent.name,
         schema: TheSportsDbEventSchema,
       },
+
       {
         name: TheSportsDbEventResult.name,
         schema: TheSportsDbEventResultSchema,
       },
+
       {
         name: TheSportsDbTimeline.name,
         schema: TheSportsDbTimelineSchema,
       },
+
       {
         name: TheSportsDbLineup.name,
         schema: TheSportsDbLineupSchema,
       },
+
       {
         name: TheSportsDbStatistics.name,
         schema: TheSportsDbStatisticsSchema,
       },
+
       {
         name: TheSportsDbTeam.name,
         schema: TheSportsDbTeamSchema,
       },
+
       {
         name: TheSportsDbPlayer.name,
         schema: TheSportsDbPlayerSchema,
       },
+
       {
         name: TheSportsDbPlayerStatistics.name,
         schema: TheSportsDbPlayerStatisticsSchema,
       },
+
       {
         name: TheSportsDbVenue.name,
         schema: TheSportsDbVenueSchema,
@@ -272,10 +301,12 @@ import { SportsStartupService } from './services/sports-startup.service';
         name: OddsApiSport.name,
         schema: OddsApiSportSchema,
       },
+
       {
         name: OddsApiEvent.name,
         schema: OddsApiEventSchema,
       },
+
       {
         name: OddsApiScore.name,
         schema: OddsApiScoreSchema,
@@ -299,6 +330,7 @@ import { SportsStartupService } from './services/sports-startup.service';
     // Competition
     SupportedCompetitionService,
     ActiveCompetitionService,
+    ApiFootballActiveCompetitionService,
 
     // Queue
     ApiFootballQueueService,

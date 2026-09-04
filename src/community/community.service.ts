@@ -182,7 +182,7 @@ export class CommunityService {
       },
 
       {
-        new: true,
+        returnDocument: 'after',
       },
     );
   }

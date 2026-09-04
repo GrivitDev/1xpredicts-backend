@@ -102,7 +102,3 @@ YoutubeHighlightSchema.index({
   competitionId: 1,
   status: 1,
 });
-
-YoutubeHighlightSchema.index({
-  fixtureId: 1,
-});

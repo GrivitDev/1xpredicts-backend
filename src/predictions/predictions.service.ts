@@ -298,7 +298,7 @@ export class PredictionsService {
         $set: updateData,
       },
       {
-        new: true,
+        returnDocument: 'after',
         runValidators: true,
       },
     );
@@ -323,7 +323,7 @@ export class PredictionsService {
         },
       },
       {
-        new: true,
+        returnDocument: 'after',
       },
     );
   }

@@ -29,7 +29,8 @@ export class ActiveCompetitionService {
   async upsert(
     competition: SupportedCompetitionConfig,
     data: {
-      season?: number | string;
+      apiFootballLeagueId?: number;
+      season?: string;
       seasonStartDate?: Date;
       seasonEndDate?: Date;
       status: ActiveCompetitionStatus;
@@ -54,6 +55,8 @@ export class ActiveCompetitionService {
 
             priority: competition.priority,
 
+            apiFootballLeagueId: data.apiFootballLeagueId,
+
             season: data.season,
 
             seasonStartDate: data.seasonStartDate,
@@ -71,7 +74,7 @@ export class ActiveCompetitionService {
         },
         {
           upsert: true,
-          new: true,
+          returnDocument: 'after',
           setDefaultsOnInsert: true,
         },
       )
@@ -238,8 +241,6 @@ export class ActiveCompetitionService {
       if (competition.status !== status) {
         competition.status = status;
 
-        competition.checkedAt = now;
-
         await competition.save();
       }
     }
@@ -283,8 +284,6 @@ export class ActiveCompetitionService {
       competition.nextFixtureDate,
       now,
     );
-
-    competition.checkedAt = now;
 
     await competition.save();
   }

@@ -326,23 +326,22 @@ export class SportsDataReadService {
     }
 
     // API-Football
-    if (competition.providers.apiFootballId) {
-      const activeCompetition = await this.activeCompetitionModel
-        .findOne({
-          competitionId: competition.id,
-        })
-        .lean()
-        .exec();
+    const activeCompetition = await this.activeCompetitionModel
+      .findOne({
+        competitionId: competition.id,
+      })
+      .lean()
+      .exec();
 
-      if (
-        activeCompetition?.season !== undefined &&
-        activeCompetition.season !== null
-      ) {
-        return this.getApiFootballFixtures(
-          competition.providers.apiFootballId,
-          Number(activeCompetition.season),
-        );
-      }
+    if (
+      activeCompetition?.apiFootballLeagueId !== undefined &&
+      activeCompetition.season !== undefined &&
+      activeCompetition.season !== null
+    ) {
+      return this.getApiFootballFixtures(
+        activeCompetition.apiFootballLeagueId,
+        Number(activeCompetition.season),
+      );
     }
 
     return [];
@@ -393,23 +392,22 @@ export class SportsDataReadService {
     }
 
     // API-Football
-    if (competition.providers.apiFootballId) {
-      const activeCompetition = await this.activeCompetitionModel
-        .findOne({
-          competitionId: competition.id,
-        })
-        .lean()
-        .exec();
+    const activeCompetition = await this.activeCompetitionModel
+      .findOne({
+        competitionId: competition.id,
+      })
+      .lean()
+      .exec();
 
-      if (
-        activeCompetition?.season !== undefined &&
-        activeCompetition.season !== null
-      ) {
-        return this.getApiFootballFinishedFixtures(
-          competition.providers.apiFootballId,
-          Number(activeCompetition.season),
-        );
-      }
+    if (
+      activeCompetition?.apiFootballLeagueId !== undefined &&
+      activeCompetition.season !== undefined &&
+      activeCompetition.season !== null
+    ) {
+      return this.getApiFootballFinishedFixtures(
+        activeCompetition.apiFootballLeagueId,
+        Number(activeCompetition.season),
+      );
     }
 
     return [];
@@ -456,23 +454,22 @@ export class SportsDataReadService {
     }
 
     // API-Football
-    if (competition.providers.apiFootballId) {
-      const activeCompetition = await this.activeCompetitionModel
-        .findOne({
-          competitionId: competition.id,
-        })
-        .lean()
-        .exec();
+    const activeCompetition = await this.activeCompetitionModel
+      .findOne({
+        competitionId: competition.id,
+      })
+      .lean()
+      .exec();
 
-      if (
-        activeCompetition?.season !== undefined &&
-        activeCompetition.season !== null
-      ) {
-        return this.getApiFootballStandings(
-          competition.providers.apiFootballId,
-          Number(activeCompetition.season),
-        );
-      }
+    if (
+      activeCompetition?.apiFootballLeagueId !== undefined &&
+      activeCompetition.season !== undefined &&
+      activeCompetition.season !== null
+    ) {
+      return this.getApiFootballStandings(
+        activeCompetition.apiFootballLeagueId,
+        Number(activeCompetition.season),
+      );
     }
 
     // TheSportsDB does not become an artificial standings provider.

@@ -228,15 +228,17 @@ export class TheOddsApiService implements OnModuleInit {
   private logApiError(error: unknown, endpoint: string): void {
     if (axios.isAxiosError(error)) {
       const axiosError = error as AxiosError;
+      const headers = axiosError.response?.headers as
+        | Record<string, string | string[] | undefined>
+        | undefined;
 
       console.error('The Odds API error', {
         endpoint,
         status: axiosError.response?.status,
         data: axiosError.response?.data,
-        remainingRequests:
-          axiosError.response?.headers?.['x-requests-remaining'],
-        usedRequests: axiosError.response?.headers?.['x-requests-used'],
-        lastRequestCost: axiosError.response?.headers?.['x-requests-last'],
+        remainingRequests: headers?.['x-requests-remaining'],
+        usedRequests: headers?.['x-requests-used'],
+        lastRequestCost: headers?.['x-requests-last'],
       });
 
       return;

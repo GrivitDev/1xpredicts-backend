@@ -172,7 +172,7 @@ export class AiLeagueIntelligenceService {
       {
         upsert: true,
 
-        new: true,
+        returnDocument: 'after',
 
         setDefaultsOnInsert: true,
       },

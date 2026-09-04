@@ -7,82 +7,170 @@
 
 export interface ApiFootballResponse<T> {
   get?: string;
+
   parameters?: Record<string, string | number | boolean | null>;
+
   errors?: Record<string, unknown> | string[];
+
   results?: number;
+
   paging?: {
     current?: number;
     total?: number;
   };
+
   response?: T;
 }
+
+// ============================================================
+// LEAGUES
+// ============================================================
+
+export interface ApiFootballLeagueResponse {
+  league?: {
+    id?: number;
+    name?: string;
+    type?: string;
+    logo?: string;
+  };
+
+  country?: {
+    name?: string;
+    code?: string;
+    flag?: string;
+  };
+
+  seasons?: ApiFootballLeagueSeason[];
+}
+
+export interface ApiFootballLeagueSeason {
+  year?: number;
+
+  start?: string | null;
+
+  end?: string | null;
+
+  current?: boolean;
+
+  coverage?: {
+    fixtures?: {
+      events?: boolean;
+      lineups?: boolean;
+      statistics_fixtures?: boolean;
+      statistics_players?: boolean;
+    };
+
+    standings?: boolean;
+
+    players?: boolean;
+
+    top_scorers?: boolean;
+
+    top_assists?: boolean;
+
+    top_cards?: boolean;
+
+    injuries?: boolean;
+
+    predictions?: boolean;
+
+    odds?: boolean;
+  };
+}
+
+// ============================================================
+// FIXTURES
+// ============================================================
 
 export interface ApiFootballFixture {
   fixture: {
     id: number;
+
     referee?: string | null;
+
     timezone?: string | null;
+
     date?: string | null;
+
     timestamp?: number | null;
 
     periods?: {
       first?: number | null;
+
       second?: number | null;
     };
 
     venue?: {
       id?: number | null;
+
       name?: string | null;
+
       city?: string | null;
     };
 
     status?: {
       long?: string | null;
+
       short?: string | null;
+
       elapsed?: number | null;
+
       extra?: number | null;
     };
   };
 
   league: {
     id: number;
+
     name?: string | null;
+
     country?: string | null;
+
     logo?: string | null;
+
     flag?: string | null;
+
     season?: number | null;
+
     round?: string | null;
+
     standings?: boolean | null;
   };
 
   teams: {
     home: ApiFootballTeam;
+
     away: ApiFootballTeam;
   };
 
   goals?: {
     home?: number | null;
+
     away?: number | null;
   };
 
   score?: {
     halftime?: {
       home?: number | null;
+
       away?: number | null;
     };
 
     fulltime?: {
       home?: number | null;
+
       away?: number | null;
     };
 
     extratime?: {
       home?: number | null;
+
       away?: number | null;
     };
 
     penalty?: {
       home?: number | null;
+
       away?: number | null;
     };
   };
@@ -98,49 +186,64 @@ export interface ApiFootballFixture {
 
 export interface ApiFootballTeam {
   id: number;
+
   name?: string | null;
+
   logo?: string | null;
+
   winner?: boolean | null;
 }
 
 export interface ApiFootballEvent {
   time?: {
     elapsed?: number | null;
+
     extra?: number | null;
   };
 
   team?: {
     id?: number | null;
+
     name?: string | null;
+
     logo?: string | null;
   };
 
   player?: {
     id?: number | null;
+
     name?: string | null;
   };
 
   assist?: {
     id?: number | null;
+
     name?: string | null;
   };
 
   type?: string | null;
+
   detail?: string | null;
+
   comments?: string | null;
 }
 
 export interface ApiFootballLineup {
   team?: {
     id?: number | null;
+
     name?: string | null;
+
     logo?: string | null;
+
     colors?: Record<string, unknown> | null;
   };
 
   coach?: {
     id?: number | null;
+
     name?: string | null;
+
     photo?: string | null;
   };
 
@@ -154,9 +257,13 @@ export interface ApiFootballLineup {
 export interface ApiFootballLineupPlayer {
   player?: {
     id?: number | null;
+
     name?: string | null;
+
     number?: number | null;
+
     pos?: string | null;
+
     grid?: string | null;
   };
 }
@@ -164,12 +271,15 @@ export interface ApiFootballLineupPlayer {
 export interface ApiFootballMatchStatistics {
   team?: {
     id?: number | null;
+
     name?: string | null;
+
     logo?: string | null;
   };
 
   statistics?: Array<{
     type?: string | null;
+
     value?: string | number | null;
   }>;
 }
@@ -177,14 +287,18 @@ export interface ApiFootballMatchStatistics {
 export interface ApiFootballFixturePlayer {
   team?: {
     id?: number | null;
+
     name?: string | null;
+
     logo?: string | null;
   };
 
   players?: Array<{
     player?: {
       id?: number | null;
+
       name?: string | null;
+
       photo?: string | null;
     };
 
@@ -192,13 +306,22 @@ export interface ApiFootballFixturePlayer {
   }>;
 }
 
+// ============================================================
+// STANDINGS
+// ============================================================
+
 export interface ApiFootballStandingResponse {
   league?: {
     id?: number;
+
     name?: string;
+
     country?: string;
+
     logo?: string;
+
     flag?: string;
+
     season?: number;
 
     standings?: ApiFootballStanding[][];
@@ -207,42 +330,62 @@ export interface ApiFootballStandingResponse {
 
 export interface ApiFootballStanding {
   rank?: number;
+
   team?: {
     id?: number;
+
     name?: string;
+
     logo?: string;
   };
 
   points?: number;
+
   goalsDiff?: number;
 
   group?: string | null;
+
   form?: string | null;
+
   status?: string | null;
+
   description?: string | null;
 
   all?: ApiFootballStandingPerformance;
+
   home?: ApiFootballStandingPerformance;
+
   away?: ApiFootballStandingPerformance;
 }
 
 export interface ApiFootballStandingPerformance {
   played?: number;
+
   win?: number;
+
   draw?: number;
+
   lose?: number;
 
   goals?: {
     for?: number;
+
     against?: number;
   };
 }
 
+// ============================================================
+// TEAM STATISTICS
+// ============================================================
+
 export interface ApiFootballTeamStatisticsResponse {
   league?: {
     id?: number;
+
     name?: string;
+
     country?: string;
+
     season?: number;
   };
 
@@ -250,8 +393,11 @@ export interface ApiFootballTeamStatisticsResponse {
 
   fixtures?: {
     played?: ApiFootballHomeAwayTotal;
+
     wins?: ApiFootballHomeAwayTotal;
+
     draws?: ApiFootballHomeAwayTotal;
+
     losses?: ApiFootballHomeAwayTotal;
   };
 
@@ -274,52 +420,77 @@ export interface ApiFootballTeamStatisticsResponse {
 
 export interface ApiFootballHomeAwayTotal {
   home?: number;
+
   away?: number;
+
   total?: number;
 }
+
+// ============================================================
+// INJURIES
+// ============================================================
 
 export interface ApiFootballInjury {
   player?: {
     id?: number;
+
     name?: string;
+
     photo?: string | null;
+
     type?: string | null;
+
     reason?: string | null;
   };
 
   team?: {
     id?: number;
+
     name?: string;
+
     logo?: string;
   };
 
   fixture?: {
     id?: number;
+
     timezone?: string;
+
     date?: string;
+
     timestamp?: number;
   };
 
   league?: {
     id?: number;
+
     name?: string;
+
     season?: number;
   };
 }
+
+// ============================================================
+// PREDICTIONS
+// ============================================================
 
 export interface ApiFootballPrediction {
   predictions?: {
     winner?: {
       id?: number | null;
+
       name?: string | null;
+
       comment?: string | null;
     };
 
     win_or_draw?: boolean | null;
+
     under_over?: string | null;
 
     goals?: {
       home?: string | null;
+
       away?: string | null;
     };
 
@@ -327,28 +498,38 @@ export interface ApiFootballPrediction {
 
     percent?: {
       home?: string | null;
+
       draw?: string | null;
+
       away?: string | null;
     };
   };
 
   league?: {
     id?: number;
+
     name?: string;
+
     country?: string;
+
     season?: number;
   };
 
   teams?: {
     home?: ApiFootballPredictionTeam;
+
     away?: ApiFootballPredictionTeam;
   };
 }
 
 export interface ApiFootballPredictionTeam {
   id?: number;
+
   name?: string;
+
   logo?: string;
+
   last_5?: Record<string, unknown>;
+
   league?: Record<string, unknown>;
 }

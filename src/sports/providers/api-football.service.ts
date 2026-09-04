@@ -12,6 +12,7 @@ import axios, { AxiosError, AxiosInstance } from 'axios';
 import {
   ApiFootballFixture,
   ApiFootballInjury,
+  ApiFootballLeagueResponse,
   ApiFootballPrediction,
   ApiFootballResponse,
   ApiFootballStandingResponse,
@@ -41,6 +42,20 @@ export class ApiFootballService implements OnModuleInit {
         Accept: 'application/json',
       },
     });
+  }
+
+  // ============================================================
+  // CURRENT LEAGUES
+  // ============================================================
+
+  async getCurrentLeagues(): Promise<ApiFootballLeagueResponse[]> {
+    const data = await this.request<
+      ApiFootballResponse<ApiFootballLeagueResponse[]>
+    >('/leagues', {
+      current: true,
+    });
+
+    return data.response ?? [];
   }
 
   // ============================================================

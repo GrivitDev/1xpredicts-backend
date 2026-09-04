@@ -279,7 +279,7 @@ export class SportsCollectionService {
         },
         {
           upsert: true,
-          new: true,
+          returnDocument: 'after',
         },
       )
       .exec();
@@ -486,7 +486,7 @@ export class SportsCollectionService {
         },
         {
           upsert: true,
-          new: true,
+          returnDocument: 'after',
         },
       )
       .exec();
@@ -594,7 +594,7 @@ export class SportsCollectionService {
         },
         {
           upsert: true,
-          new: true,
+          returnDocument: 'after',
         },
       )
       .exec();
@@ -743,7 +743,7 @@ export class SportsCollectionService {
         },
         {
           upsert: true,
-          new: true,
+          returnDocument: 'after',
         },
       )
       .exec();
@@ -834,7 +834,7 @@ export class SportsCollectionService {
         },
         {
           upsert: true,
-          new: true,
+          returnDocument: 'after',
         },
       )
       .exec();
@@ -925,7 +925,7 @@ export class SportsCollectionService {
         },
         {
           upsert: true,
-          new: true,
+          returnDocument: 'after',
         },
       )
       .exec();
@@ -969,7 +969,7 @@ export class SportsCollectionService {
         },
         {
           upsert: true,
-          new: true,
+          returnDocument: 'after',
         },
       )
       .exec();
@@ -1014,7 +1014,7 @@ export class SportsCollectionService {
         },
         {
           upsert: true,
-          new: true,
+          returnDocument: 'after',
         },
       )
       .exec();
@@ -1523,7 +1523,7 @@ export class SportsCollectionService {
         },
         {
           upsert: true,
-          new: true,
+          returnDocument: 'after',
         },
       )
       .exec();
@@ -1658,7 +1658,7 @@ export class SportsCollectionService {
 
         {
           upsert: true,
-          new: true,
+          returnDocument: 'after',
         },
       )
       .exec();

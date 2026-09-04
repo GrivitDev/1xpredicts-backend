@@ -1,10 +1,15 @@
 import { CollectionFrequency } from '../enums/collection-frequency.enum';
+
 import { CompetitionPriority } from '../enums/competition-priority.enum';
+
 import { CompetitionRegion } from '../enums/competition-region.enum';
+
 import { CompetitionType } from '../enums/competition-type.enum';
 
 import { SupportedLeague } from '../enums/supported-league.enum';
+
 import { SupportedClubCompetition } from '../enums/supported-club-competition.enum';
+
 import { SupportedInternationalCompetition } from '../enums/supported-international-competition.enum';
 
 import { SupportedCompetitionConfig } from '../interfaces/supported-competition-config.interface';
@@ -18,8 +23,165 @@ import { FOOTBALL_DATA_COVERAGE } from './football-data-coverage.config';
 const FOOTBALL_DATA_CODES: Record<string, string> = {};
 
 for (const coverage of FOOTBALL_DATA_COVERAGE) {
-  FOOTBALL_DATA_CODES[coverage.competition] = coverage.code;
+  FOOTBALL_DATA_CODES[coverage.internalCompetitionId] = coverage.code;
 }
+
+// ============================================================
+// API-FOOTBALL MAPPINGS
+// ============================================================
+
+const API_FOOTBALL_MAPPINGS: Record<
+  string,
+  {
+    name: string;
+    country: string;
+  }
+> = {
+  PREMIER_LEAGUE: {
+    name: 'Premier League',
+    country: 'England',
+  },
+
+  CHAMPIONSHIP: {
+    name: 'Championship',
+    country: 'England',
+  },
+
+  LEAGUE_ONE: {
+    name: 'League One',
+    country: 'England',
+  },
+
+  LA_LIGA: {
+    name: 'La Liga',
+    country: 'Spain',
+  },
+
+  SERIE_A: {
+    name: 'Serie A',
+    country: 'Italy',
+  },
+
+  BUNDESLIGA: {
+    name: 'Bundesliga',
+    country: 'Germany',
+  },
+
+  LIGUE_1: {
+    name: 'Ligue 1',
+    country: 'France',
+  },
+
+  EREDIVISIE: {
+    name: 'Eredivisie',
+    country: 'Netherlands',
+  },
+
+  PRIMEIRA_LIGA: {
+    name: 'Primeira Liga',
+    country: 'Portugal',
+  },
+
+  SCOTTISH_PREMIERSHIP: {
+    name: 'Premiership',
+    country: 'Scotland',
+  },
+
+  BELGIAN_PRO_LEAGUE: {
+    name: 'Jupiler Pro League',
+    country: 'Belgium',
+  },
+
+  TURKISH_SUPER_LIG: {
+    name: 'Süper Lig',
+    country: 'Turkey',
+  },
+
+  GREEK_SUPER_LEAGUE: {
+    name: 'Super League 1',
+    country: 'Greece',
+  },
+
+  AUSTRIAN_BUNDESLIGA: {
+    name: 'Bundesliga',
+    country: 'Austria',
+  },
+
+  SWISS_SUPER_LEAGUE: {
+    name: 'Super League',
+    country: 'Switzerland',
+  },
+
+  DANISH_SUPERLIGA: {
+    name: 'Superliga',
+    country: 'Denmark',
+  },
+
+  ELITESERIEN: {
+    name: 'Eliteserien',
+    country: 'Norway',
+  },
+
+  ALLSVENSKAN: {
+    name: 'Allsvenskan',
+    country: 'Sweden',
+  },
+
+  NPFL: {
+    name: 'NPFL',
+    country: 'Nigeria',
+  },
+
+  SOUTH_AFRICA_PREMIER_DIVISION: {
+    name: 'Premier Division',
+    country: 'South-Africa',
+  },
+
+  EGYPTIAN_PREMIER_LEAGUE: {
+    name: 'Premier League',
+    country: 'Egypt',
+  },
+
+  BOTOLA_PRO: {
+    name: 'Botola Pro',
+    country: 'Morocco',
+  },
+
+  GHANA_PREMIER_LEAGUE: {
+    name: 'Premier League',
+    country: 'Ghana',
+  },
+
+  KENYA_PREMIER_LEAGUE: {
+    name: 'FKF Premier League',
+    country: 'Kenya',
+  },
+
+  BRAZIL_SERIE_A: {
+    name: 'Serie A',
+    country: 'Brazil',
+  },
+
+  ARGENTINA_PRIMERA: {
+    name: 'Liga Profesional Argentina',
+    country: 'Argentina',
+  },
+
+  LIGA_MX: {
+    name: 'Liga MX',
+    country: 'Mexico',
+  },
+
+  MLS: {
+    name: 'Major League Soccer',
+    country: 'USA',
+  },
+
+  SAUDI_PRO_LEAGUE: {
+    name: 'Pro League',
+    country: 'Saudi-Arabia',
+  },
+};
 
 // ============================================================
 // DISPLAY NAMES
@@ -44,14 +206,14 @@ const DISPLAY_NAMES: Record<string, string> = {
   DANISH_SUPERLIGA: 'Danish Superliga',
   ELITESERIEN: 'Eliteserien',
   ALLSVENSKAN: 'Allsvenskan',
-  NIGERIA_PREMIER_FOOTBALL_LEAGUE: 'Nigeria Premier Football League',
-  SOUTH_AFRICAN_PREMIER_DIVISION: 'South African Premier Division',
+  NPFL: 'Nigeria Premier Football League',
+  SOUTH_AFRICA_PREMIER_DIVISION: 'South African Premier Division',
   EGYPTIAN_PREMIER_LEAGUE: 'Egyptian Premier League',
   BOTOLA_PRO: 'Botola Pro',
   GHANA_PREMIER_LEAGUE: 'Ghana Premier League',
   KENYA_PREMIER_LEAGUE: 'Kenya Premier League',
   BRAZIL_SERIE_A: 'Brazil Serie A',
-  ARGENTINA_PRIMERA_DIVISION: 'Argentina Primera Division',
+  ARGENTINA_PRIMERA: 'Argentina Primera Division',
   LIGA_MX: 'Liga MX',
   MLS: 'MLS',
   SAUDI_PRO_LEAGUE: 'Saudi Pro League',
@@ -112,6 +274,22 @@ function getFootballDataMapping(value: string): {
   };
 }
 
+function getApiFootballMapping(value: string): {
+  apiFootballName?: string;
+  apiFootballCountry?: string;
+} {
+  const mapping = API_FOOTBALL_MAPPINGS[value];
+
+  if (!mapping) {
+    return {};
+  }
+
+  return {
+    apiFootballName: mapping.name,
+    apiFootballCountry: mapping.country,
+  };
+}
+
 function buildCompetition(
   value: string,
   type: CompetitionType,
@@ -120,10 +298,14 @@ function buildCompetition(
   collectionFrequency: CollectionFrequency,
   options?: {
     predictionEnabled?: boolean;
+
     oddsEnabled?: boolean;
+
     newsEnabled?: boolean;
 
     providers?: {
+      apiFootballName?: string;
+      apiFootballCountry?: string;
       apiFootballId?: number;
       footballDataCode?: string;
       sportsDbLeagueId?: number;
@@ -160,6 +342,7 @@ function buildCompetition(
 
     providers: {
       ...getFootballDataMapping(value),
+      ...getApiFootballMapping(value),
       ...options?.providers,
     },
 
@@ -180,6 +363,7 @@ const DOMESTIC_LEAGUES: SupportedCompetitionConfig[] = Object.values(
 ).map((league) =>
   buildCompetition(
     league,
+
     CompetitionType.LEAGUE,
 
     league === SupportedLeague.NPFL
@@ -219,12 +403,6 @@ const DOMESTIC_LEAGUES: SupportedCompetitionConfig[] = Object.values(
         : CompetitionPriority.REGIONAL,
 
     CollectionFrequency.DAILY,
-
-    {
-      providers: {
-        ...getFootballDataMapping(league),
-      },
-    },
   ),
 );
 
@@ -237,7 +415,9 @@ const CLUB_COMPETITIONS: SupportedCompetitionConfig[] = Object.values(
 ).map((competition) =>
   buildCompetition(
     competition,
+
     CompetitionType.CLUB_COMPETITION,
+
     CompetitionRegion.EUROPE,
 
     competition.includes('CHAMPIONS')
@@ -261,7 +441,9 @@ const INTERNATIONAL_COMPETITIONS: SupportedCompetitionConfig[] = Object.values(
 ).map((competition) =>
   buildCompetition(
     competition,
+
     CompetitionType.INTERNATIONAL,
+
     CompetitionRegion.WORLD,
 
     competition.includes('WORLD_CUP')
@@ -272,7 +454,9 @@ const INTERNATIONAL_COMPETITIONS: SupportedCompetitionConfig[] = Object.values(
 
     {
       seasonal: true,
+
       oddsEnabled: true,
+
       predictionEnabled: true,
     },
   ),
@@ -284,7 +468,9 @@ const INTERNATIONAL_COMPETITIONS: SupportedCompetitionConfig[] = Object.values(
 
 export const SUPPORTED_COMPETITIONS: SupportedCompetitionConfig[] = [
   ...DOMESTIC_LEAGUES,
+
   ...CLUB_COMPETITIONS,
+
   ...INTERNATIONAL_COMPETITIONS,
 ];
 

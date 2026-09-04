@@ -61,7 +61,6 @@ export class ApiFootballQueueBuilderService {
           config: NonNullable<typeof item.config>;
         } => Boolean(item.config),
       )
-      .filter(({ config }) => Boolean(config.providers.apiFootballId))
       .sort(
         (a, b) =>
           this.getPriority(a.config.priority) -
@@ -77,24 +76,24 @@ export class ApiFootballQueueBuilderService {
         break;
       }
 
+      if (activeCompetition.apiFootballLeagueId === undefined) {
+        skipped += 1;
+        continue;
+      }
+
       if (activeCompetition.season === undefined) {
         skipped += 1;
         continue;
       }
 
-      const season = Number(activeCompetition.season);
+      const season = Number.parseInt(activeCompetition.season, 10);
 
-      if (!Number.isInteger(season)) {
+      if (!Number.isInteger(season) || season <= 0) {
         skipped += 1;
         continue;
       }
 
-      const leagueId = config.providers.apiFootballId;
-
-      if (leagueId === undefined) {
-        skipped += 1;
-        continue;
-      }
+      const leagueId = activeCompetition.apiFootballLeagueId;
 
       const priority = this.getPriority(config.priority);
 
@@ -280,6 +279,10 @@ export class ApiFootballQueueBuilderService {
 
     return queued;
   }
+
+  // ============================================================
+  // PRIORITY
+  // ============================================================
 
   private getPriority(priority: CompetitionPriority): number {
     switch (priority) {

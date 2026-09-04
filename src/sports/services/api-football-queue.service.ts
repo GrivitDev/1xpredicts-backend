@@ -188,7 +188,7 @@ export class ApiFootballQueueService {
             createdAt: 1,
           },
 
-          new: true,
+          returnDocument: 'after',
         },
       )
       .exec();

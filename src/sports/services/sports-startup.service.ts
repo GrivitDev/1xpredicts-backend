@@ -1,9 +1,15 @@
 import { Injectable, Logger } from '@nestjs/common';
 
 import { SupportedCompetitionService } from './supported-competition.service';
+
 import { SportsCollectionService } from './sports-collection.service';
+
 import { ApiFootballQueueBuilderService } from './api-football-queue-builder.service';
+
 import { ActiveCompetitionService } from './active-competition.service';
+
+import { ApiFootballActiveCompetitionService } from './api-football-active-competition.service';
+
 import { YoutubeHighlightService } from './youtube-highlight.service';
 
 @Injectable()
@@ -14,9 +20,15 @@ export class SportsStartupService {
 
   constructor(
     private readonly supportedCompetitionService: SupportedCompetitionService,
+
     private readonly sportsCollectionService: SportsCollectionService,
+
     private readonly apiFootballQueueBuilderService: ApiFootballQueueBuilderService,
+
     private readonly activeCompetitionService: ActiveCompetitionService,
+
+    private readonly apiFootballActiveCompetitionService: ApiFootballActiveCompetitionService,
+
     private readonly youtubeHighlightService: YoutubeHighlightService,
   ) {}
 
@@ -31,9 +43,15 @@ export class SportsStartupService {
       this.logger.log('Sports startup bootstrap started');
 
       await this.initializeCompetitionData();
+
+      await this.initializeApiFootballCompetitions();
+
       await this.initializeOddsData();
+
       await this.initializeApiFootballQueue();
+
       await this.initializeApiFootballWorker();
+
       await this.initializeYoutubeWorker();
 
       this.logger.log('Sports startup bootstrap completed');
@@ -45,7 +63,7 @@ export class SportsStartupService {
   }
 
   // ============================================================
-  // COMPETITIONS
+  // FOOTBALL-DATA / GENERAL COMPETITION DATA
   // ============================================================
 
   private async initializeCompetitionData(): Promise<void> {
@@ -85,6 +103,30 @@ export class SportsStartupService {
       const message = error instanceof Error ? error.message : String(error);
 
       this.logger.warn(`Initial competition status refresh failed: ${message}`);
+    }
+  }
+
+  // ============================================================
+  // API-FOOTBALL ACTIVE COMPETITIONS
+  // ============================================================
+
+  private async initializeApiFootballCompetitions(): Promise<void> {
+    try {
+      const result =
+        await this.apiFootballActiveCompetitionService.refreshCurrentCompetitions();
+
+      this.logger.log(
+        `API-Football competition discovery completed: ` +
+          `${result.discovered} discovered, ` +
+          `${result.matched} matched, ` +
+          `${result.updated} active competitions initialized`,
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+
+      this.logger.warn(
+        `Initial API-Football competition discovery failed: ${message}`,
+      );
     }
   }
 
@@ -171,9 +213,15 @@ export class SportsStartupService {
 
   private async initializeApiFootballQueue(): Promise<void> {
     try {
-      await this.apiFootballQueueBuilderService.buildDailyQueue();
+      const result =
+        await this.apiFootballQueueBuilderService.buildDailyQueue();
 
-      this.logger.log('Initial API-Football queue built');
+      this.logger.log(
+        `Initial API-Football queue built: ` +
+          `${result.queued} queued, ` +
+          `${result.skipped} skipped, ` +
+          `${result.remainingQuota} requests remaining`,
+      );
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
 
@@ -192,6 +240,10 @@ export class SportsStartupService {
 
       if (processed) {
         this.logger.log('Initial API-Football queue job processed');
+      } else {
+        this.logger.log(
+          'No API-Football queue job available for initial processing',
+        );
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

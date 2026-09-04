@@ -20,6 +20,7 @@ export class ActiveCompetition {
 
   @Prop({
     required: true,
+    trim: true,
   })
   name!: string;
 
@@ -33,7 +34,19 @@ export class ActiveCompetition {
     required: true,
     index: true,
   })
-  priority!: string;
+  region!: string;
+
+  @Prop({
+    required: true,
+    index: true,
+  })
+  priority!: number;
+
+  @Prop({
+    type: Number,
+    index: true,
+  })
+  apiFootballLeagueId?: number;
 
   @Prop({
     type: String,
@@ -43,57 +56,37 @@ export class ActiveCompetition {
 
   @Prop({
     type: Date,
-    index: true,
   })
   seasonStartDate?: Date;
 
   @Prop({
     type: Date,
-    index: true,
   })
   seasonEndDate?: Date;
 
   @Prop({
-    required: true,
-    enum: Object.values(ActiveCompetitionStatus),
-    index: true,
-  })
-  status: ActiveCompetitionStatus = ActiveCompetitionStatus.UPCOMING;
-
-  @Prop({
     type: Date,
-    index: true,
   })
   lastFixtureDate?: Date;
 
   @Prop({
     type: Date,
-    index: true,
   })
   nextFixtureDate?: Date;
 
   @Prop({
-    required: true,
-    type: Date,
+    type: String,
+    enum: ActiveCompetitionStatus,
+    default: ActiveCompetitionStatus.INACTIVE,
     index: true,
   })
-  checkedAt!: Date;
+  status!: ActiveCompetitionStatus;
+
+  @Prop({
+    type: Date,
+  })
+  lastUpdatedAt?: Date;
 }
 
 export const ActiveCompetitionSchema =
   SchemaFactory.createForClass(ActiveCompetition);
-
-ActiveCompetitionSchema.index({
-  status: 1,
-  priority: 1,
-});
-
-ActiveCompetitionSchema.index({
-  status: 1,
-  seasonStartDate: 1,
-});
-
-ActiveCompetitionSchema.index({
-  status: 1,
-  nextFixtureDate: 1,
-});
