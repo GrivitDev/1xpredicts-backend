@@ -151,6 +151,54 @@ export class SportsRedisService implements OnModuleInit, OnModuleDestroy {
   }
 
   // ============================================================
+  // SET IF NOT EXISTS
+  // ============================================================
+
+  async setIfNotExists(
+    key: string,
+    value: string,
+    ttlSeconds: number,
+  ): Promise<boolean> {
+    if (!this.isAvailable()) {
+      return false;
+    }
+
+    try {
+      const result = await this.redis!.set(key, value, 'EX', ttlSeconds, 'NX');
+
+      return result === 'OK';
+    } catch (error) {
+      this.logger.error(
+        `Redis SET NX failed for ${key}`,
+        error instanceof Error ? error.message : String(error),
+      );
+
+      return false;
+    }
+  }
+
+  // ============================================================
+  // INCREMENT
+  // ============================================================
+
+  async increment(key: string): Promise<number | null> {
+    if (!this.isAvailable()) {
+      return null;
+    }
+
+    try {
+      return await this.redis!.incr(key);
+    } catch (error) {
+      this.logger.error(
+        `Redis INCR failed for ${key}`,
+        error instanceof Error ? error.message : String(error),
+      );
+
+      return null;
+    }
+  }
+
+  // ============================================================
   // DELETE
   // ============================================================
 

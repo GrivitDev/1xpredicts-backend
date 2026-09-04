@@ -1,31 +1,79 @@
 export const SPORTS_CACHE_PREFIX = '2xpredict:sports';
 
 export const SPORTS_CACHE_TTL = {
+  // ============================================================
+  // GENERAL
+  // ============================================================
+
   LIVE: 30,
 
-  FIXTURES: 300,
+  FIXTURES: 6 * 60 * 60,
 
-  RESULTS: 900,
+  RESULTS: 24 * 60 * 60,
 
-  STANDINGS: 900,
+  STANDINGS: 6 * 60 * 60,
 
-  COMPETITIONS: 3600,
+  COMPETITIONS: 24 * 60 * 60,
 
-  TEAMS: 3600,
+  TEAMS: 24 * 60 * 60,
 
-  ACTIVE_COMPETITIONS: 1800,
+  ACTIVE_COMPETITIONS: 24 * 60 * 60,
 
-  API_FOOTBALL: 3600,
+  // ============================================================
+  // API-FOOTBALL
+  // ============================================================
 
-  THESPORTSDB: 3600,
+  API_FOOTBALL_FIXTURES: 6 * 60 * 60,
 
-  ODDS_SPORTS: 86400,
+  API_FOOTBALL_STANDINGS: 6 * 60 * 60,
 
-  ODDS_EVENTS: 300,
+  API_FOOTBALL_TEAM_STATISTICS: 12 * 60 * 60,
 
-  ODDS: 60,
+  API_FOOTBALL_INJURIES: 6 * 60 * 60,
 
-  YOUTUBE: 3600,
+  API_FOOTBALL_PREDICTION: 6 * 60 * 60,
+
+  // ============================================================
+  // THE SPORTS DB
+  // ============================================================
+
+  THESPORTSDB_SEASON: 24 * 60 * 60,
+
+  THESPORTSDB_EVENTS: 6 * 60 * 60,
+
+  THESPORTSDB_EVENT: 12 * 60 * 60,
+
+  THESPORTSDB_TIMELINE: 30,
+
+  THESPORTSDB_LINEUP: 60 * 60,
+
+  THESPORTSDB_STATISTICS: 5 * 60,
+
+  THESPORTSDB_TEAMS: 24 * 60 * 60,
+
+  THESPORTSDB_PLAYERS: 24 * 60 * 60,
+
+  THESPORTSDB_PLAYER_STATISTICS: 12 * 60 * 60,
+
+  THESPORTSDB_VENUE: 7 * 24 * 60 * 60,
+
+  // ============================================================
+  // ODDS API
+  // ============================================================
+
+  ODDS_SPORTS: 24 * 60 * 60,
+
+  ODDS_EVENTS: 6 * 60 * 60,
+
+  ODDS_SCORES: 5 * 60,
+
+  ODDS: 2 * 60,
+
+  // ============================================================
+  // YOUTUBE
+  // ============================================================
+
+  YOUTUBE: 24 * 60 * 60,
 } as const;
 
 export const SPORTS_CACHE_KEYS = {

@@ -247,15 +247,21 @@ export class SportsCollectionService {
 
     const collectedAt = new Date();
 
-    const [competition, matches, standings, teams] = await Promise.all([
-      this.footballDataService.getCompetition(competitionCode),
+    /*
+     * Football-Data requests are deliberately sequential.
+     * The provider service also enforces the global 60-second
+     * request interval, so this method never starts several
+     * Football-Data requests at the same time.
+     */
+    const competition =
+      await this.footballDataService.getCompetition(competitionCode);
 
-      this.footballDataService.getMatches(competitionCode),
+    const matches = await this.footballDataService.getMatches(competitionCode);
 
-      this.footballDataService.getStandings(competitionCode),
+    const standings =
+      await this.footballDataService.getStandings(competitionCode);
 
-      this.footballDataService.getTeams(competitionCode),
-    ]);
+    const teams = await this.footballDataService.getTeams(competitionCode);
 
     await this.footballDataCompetitionModel
       .findOneAndUpdate(
@@ -279,6 +285,7 @@ export class SportsCollectionService {
         },
         {
           upsert: true,
+
           returnDocument: 'after',
         },
       )
@@ -371,33 +378,46 @@ export class SportsCollectionService {
       standing.table.map((row) => {
         const filter: Record<string, unknown> = {
           competitionId,
+
           seasonId,
+
           stage: standing.stage,
+
           type: standing.type,
+
           'payload.team.id': row.team.id,
         };
 
         const update: Record<string, unknown> = {
           competitionId,
+
           competitionCode,
+
           seasonId,
+
           stage: standing.stage,
+
           type: standing.type,
+
           payload: row,
+
           collectedAt,
         };
 
         if (standing.group !== undefined && standing.group !== null) {
           filter.group = standing.group;
+
           update.group = standing.group;
         }
 
         return {
           updateOne: {
             filter,
+
             update: {
               $set: update,
             },
+
             upsert: true,
           },
         };
@@ -472,11 +492,13 @@ export class SportsCollectionService {
       .findOneAndUpdate(
         {
           leagueId,
+
           season,
         },
         {
           $set: {
             leagueId,
+
             season,
 
             payload: response as unknown as Record<string, unknown>,
@@ -486,6 +508,7 @@ export class SportsCollectionService {
         },
         {
           upsert: true,
+
           returnDocument: 'after',
         },
       )
@@ -594,6 +617,7 @@ export class SportsCollectionService {
         },
         {
           upsert: true,
+
           returnDocument: 'after',
         },
       )
@@ -743,6 +767,7 @@ export class SportsCollectionService {
         },
         {
           upsert: true,
+
           returnDocument: 'after',
         },
       )
@@ -834,6 +859,7 @@ export class SportsCollectionService {
         },
         {
           upsert: true,
+
           returnDocument: 'after',
         },
       )
@@ -925,6 +951,7 @@ export class SportsCollectionService {
         },
         {
           upsert: true,
+
           returnDocument: 'after',
         },
       )
@@ -952,6 +979,7 @@ export class SportsCollectionService {
       .findOneAndUpdate(
         {
           playerId,
+
           teamId,
         },
         {
@@ -969,6 +997,7 @@ export class SportsCollectionService {
         },
         {
           upsert: true,
+
           returnDocument: 'after',
         },
       )
@@ -1014,6 +1043,7 @@ export class SportsCollectionService {
         },
         {
           upsert: true,
+
           returnDocument: 'after',
         },
       )
@@ -1304,17 +1334,16 @@ export class SportsCollectionService {
       return;
     }
 
-    const validFixtures = fixtures.filter((fixture) => {
-      return (
+    const validFixtures = fixtures.filter(
+      (fixture) =>
         fixture.fixture?.id != null &&
         fixture.fixture?.date != null &&
         fixture.fixture?.status?.short != null &&
         fixture.league?.id != null &&
         fixture.league?.season != null &&
         fixture.teams?.home?.id != null &&
-        fixture.teams?.away?.id != null
-      );
-    });
+        fixture.teams?.away?.id != null,
+    );
 
     if (!validFixtures.length) {
       return;
@@ -1325,11 +1354,17 @@ export class SportsCollectionService {
     const fixtureOperations = validFixtures
       .map((fixture) => {
         const fixtureId = fixture.fixture?.id;
+
         const fixtureDate = fixture.fixture?.date;
+
         const statusShort = fixture.fixture?.status?.short;
+
         const leagueId = fixture.league?.id;
+
         const season = fixture.league?.season;
+
         const homeTeamId = fixture.teams?.home?.id;
+
         const awayTeamId = fixture.teams?.away?.id;
 
         if (
@@ -1353,13 +1388,21 @@ export class SportsCollectionService {
             update: {
               $set: {
                 fixtureId,
+
                 leagueId,
+
                 season: Number(season),
+
                 fixtureDate: new Date(fixtureDate),
+
                 statusShort,
+
                 homeTeamId,
+
                 awayTeamId,
+
                 payload: fixture as unknown as Record<string, unknown>,
+
                 collectedAt,
               },
             },
@@ -1423,6 +1466,7 @@ export class SportsCollectionService {
     const standingOperations = groups
       .map((standing) => {
         const teamId = standing.team?.id;
+
         const rank = standing.rank;
 
         if (teamId == null || rank == null) {
@@ -1433,17 +1477,24 @@ export class SportsCollectionService {
           updateOne: {
             filter: {
               leagueId: job.apiFootballLeagueId,
+
               season: job.season,
+
               teamId,
             },
 
             update: {
               $set: {
                 leagueId: job.apiFootballLeagueId,
+
                 season: job.season,
+
                 teamId,
+
                 rank,
+
                 payload: standing as unknown as Record<string, unknown>,
+
                 collectedAt,
               },
             },
@@ -1523,6 +1574,7 @@ export class SportsCollectionService {
         },
         {
           upsert: true,
+
           returnDocument: 'after',
         },
       )
@@ -1606,6 +1658,7 @@ export class SportsCollectionService {
       validInjuries,
     );
   }
+
   // ============================================================
   // API-FOOTBALL — PREDICTION
   // ============================================================
@@ -1658,6 +1711,7 @@ export class SportsCollectionService {
 
         {
           upsert: true,
+
           returnDocument: 'after',
         },
       )

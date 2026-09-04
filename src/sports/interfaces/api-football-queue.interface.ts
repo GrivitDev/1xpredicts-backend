@@ -19,7 +19,6 @@ export interface ApiFootballQueueJob {
 
   apiFootballLeagueId?: number;
   season?: number;
-
   apiFootballTeamId?: number;
   apiFootballFixtureId?: number;
 
@@ -30,9 +29,13 @@ export interface ApiFootballQueueJob {
   status: ApiFootballQueueStatus;
 
   attempts: number;
+  maxAttempts: number;
 
   scheduledFor: Date;
 
+  startedAt?: Date;
+  nextAttemptAt?: Date;
+  completedAt?: Date;
   processedAt?: Date;
 
   error?: string;

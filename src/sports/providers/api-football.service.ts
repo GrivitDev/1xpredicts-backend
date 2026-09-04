@@ -19,13 +19,19 @@ import {
   ApiFootballTeamStatisticsResponse,
 } from './api-football.interfaces';
 
+import { SportsProviderRateLimitService } from '../services/sports-provider-rate-limit.service';
+
 @Injectable()
 export class ApiFootballService implements OnModuleInit {
   private readonly baseUrl = 'https://v3.football.api-sports.io';
 
   private http!: AxiosInstance;
 
-  constructor(private readonly configService: ConfigService) {}
+  constructor(
+    private readonly configService: ConfigService,
+
+    private readonly providerRateLimitService: SportsProviderRateLimitService,
+  ) {}
 
   onModuleInit(): void {
     const apiKey = this.configService.get<string>('API_FOOTBALL_KEY');
@@ -36,7 +42,7 @@ export class ApiFootballService implements OnModuleInit {
 
     this.http = axios.create({
       baseURL: this.baseUrl,
-      timeout: 15000,
+      timeout: 15_000,
       headers: {
         'x-apisports-key': apiKey,
         Accept: 'application/json',
@@ -173,28 +179,30 @@ export class ApiFootballService implements OnModuleInit {
     endpoint: string,
     params: Record<string, string | number | boolean>,
   ): Promise<T> {
-    try {
-      const response = await this.http.get<T>(endpoint, {
-        params,
-      });
+    return this.providerRateLimitService.execute('api-football', async () => {
+      try {
+        const response = await this.http.get<T>(endpoint, {
+          params,
+        });
 
-      this.assertApiResponse(
-        response.data as unknown as ApiFootballResponse<unknown>,
-        endpoint,
-      );
+        this.assertApiResponse(
+          response.data as unknown as ApiFootballResponse<unknown>,
+          endpoint,
+        );
 
-      return response.data;
-    } catch (error) {
-      this.logApiError(error, endpoint);
+        return response.data;
+      } catch (error) {
+        this.logApiError(error, endpoint);
 
-      if (error instanceof InternalServerErrorException) {
-        throw error;
+        if (error instanceof InternalServerErrorException) {
+          throw error;
+        }
+
+        throw new InternalServerErrorException(
+          `API-Football request failed: ${endpoint}`,
+        );
       }
-
-      throw new InternalServerErrorException(
-        `API-Football request failed: ${endpoint}`,
-      );
-    }
+    });
   }
 
   // ============================================================

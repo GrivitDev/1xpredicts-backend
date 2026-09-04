@@ -1,7 +1,6 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 
 import { InjectModel } from '@nestjs/mongoose';
-
 import { Model } from 'mongoose';
 
 import {
@@ -14,15 +13,19 @@ import {
   ApiFootballQueueStatus,
 } from '../interfaces/api-football-queue.interface';
 
+import { SportsProviderRateLimitService } from './sports-provider-rate-limit.service';
+
 @Injectable()
 export class ApiFootballQueueService {
-  private readonly dailyRequestLimit = 100;
+  private readonly logger = new Logger(ApiFootballQueueService.name);
 
   private readonly maxAttempts = 3;
 
   constructor(
     @InjectModel(ApiFootballQueue.name)
     private readonly queueModel: Model<ApiFootballQueueDocument>,
+
+    private readonly rateLimitService: SportsProviderRateLimitService,
   ) {}
 
   // ============================================================
@@ -30,32 +33,45 @@ export class ApiFootballQueueService {
   // ============================================================
 
   async addJob(job: {
-    competitionId: string;
+    jobType: ApiFootballQueueJobType;
+    competitionId?: string;
     apiFootballLeagueId?: number;
     season?: number;
     apiFootballTeamId?: number;
     apiFootballFixtureId?: number;
-    type: ApiFootballQueueJobType;
-    priority: number;
-    scheduledFor?: Date;
-  }): Promise<{
-    job: ApiFootballQueueDocument;
-    isNew: boolean;
-  }> {
-    const existing = await this.queueModel
+    priority?: number;
+  }): Promise<ApiFootballQueueDocument | null> {
+    const identity: Record<string, unknown> = {
+      type: job.jobType,
+    };
+
+    if (job.competitionId !== undefined) {
+      identity.competitionId = job.competitionId;
+    }
+
+    if (job.apiFootballLeagueId !== undefined) {
+      identity.apiFootballLeagueId = job.apiFootballLeagueId;
+    }
+
+    if (job.season !== undefined) {
+      identity.season = job.season;
+    }
+
+    if (job.apiFootballTeamId !== undefined) {
+      identity.apiFootballTeamId = job.apiFootballTeamId;
+    }
+
+    if (job.apiFootballFixtureId !== undefined) {
+      identity.apiFootballFixtureId = job.apiFootballFixtureId;
+    }
+
+    // ------------------------------------------------------------
+    // Do not duplicate pending/processing jobs.
+    // ------------------------------------------------------------
+
+    const activeJob = await this.queueModel
       .findOne({
-        competitionId: job.competitionId,
-
-        apiFootballLeagueId: job.apiFootballLeagueId,
-
-        season: job.season,
-
-        apiFootballTeamId: job.apiFootballTeamId,
-
-        apiFootballFixtureId: job.apiFootballFixtureId,
-
-        type: job.type,
-
+        ...identity,
         status: {
           $in: [
             ApiFootballQueueStatus.PENDING,
@@ -63,89 +79,55 @@ export class ApiFootballQueueService {
           ],
         },
       })
+      .sort({
+        createdAt: -1,
+      })
       .exec();
 
-    if (existing) {
-      return {
-        job: existing,
-        isNew: false,
-      };
+    if (activeJob) {
+      return null;
     }
 
-    const created = await this.queueModel.create({
-      ...job,
+    // ------------------------------------------------------------
+    // Do not immediately recreate a completed job.
+    // ------------------------------------------------------------
+
+    const successfulJob = await this.queueModel
+      .findOne({
+        ...identity,
+        status: ApiFootballQueueStatus.COMPLETED,
+      })
+      .sort({
+        completedAt: -1,
+        updatedAt: -1,
+      })
+      .exec();
+
+    if (successfulJob) {
+      return null;
+    }
+
+    const now = new Date();
+
+    return this.queueModel.create({
+      competitionId: job.competitionId ?? '',
+      apiFootballLeagueId: job.apiFootballLeagueId,
+      season: job.season,
+      apiFootballTeamId: job.apiFootballTeamId,
+      apiFootballFixtureId: job.apiFootballFixtureId,
+
+      type: job.jobType,
+
+      priority: job.priority ?? 100,
 
       status: ApiFootballQueueStatus.PENDING,
 
       attempts: 0,
 
-      scheduledFor: job.scheduledFor ?? new Date(),
+      maxAttempts: this.maxAttempts,
+
+      scheduledFor: now,
     });
-
-    return {
-      job: created,
-      isNew: true,
-    };
-  }
-
-  // ============================================================
-  // ADD MANY
-  // ============================================================
-
-  async addJobs(
-    jobs: Array<{
-      competitionId: string;
-      apiFootballLeagueId?: number;
-      season?: number;
-      apiFootballTeamId?: number;
-      apiFootballFixtureId?: number;
-      type: ApiFootballQueueJobType;
-      priority: number;
-      scheduledFor?: Date;
-    }>,
-  ): Promise<number> {
-    let added = 0;
-
-    for (const job of jobs) {
-      const existing = await this.queueModel.exists({
-        competitionId: job.competitionId,
-
-        apiFootballLeagueId: job.apiFootballLeagueId,
-
-        season: job.season,
-
-        apiFootballTeamId: job.apiFootballTeamId,
-
-        apiFootballFixtureId: job.apiFootballFixtureId,
-
-        type: job.type,
-
-        status: {
-          $in: [
-            ApiFootballQueueStatus.PENDING,
-            ApiFootballQueueStatus.PROCESSING,
-          ],
-        },
-      });
-
-      if (existing) {
-        continue;
-      }
-
-      await this.queueModel.create({
-        ...job,
-
-        status: ApiFootballQueueStatus.PENDING,
-
-        attempts: 0,
-
-        scheduledFor: job.scheduledFor ?? new Date(),
-      });
-
-      added += 1;
-    }
-
-    return added;
   }
 
   // ============================================================
@@ -153,11 +135,7 @@ export class ApiFootballQueueService {
   // ============================================================
 
   async getNextJob(): Promise<ApiFootballQueueDocument | null> {
-    const remaining = await this.getRemainingDailyQuota();
-
-    if (remaining <= 0) {
-      return null;
-    }
+    const now = new Date();
 
     return this.queueModel
       .findOneAndUpdate(
@@ -165,16 +143,26 @@ export class ApiFootballQueueService {
           status: ApiFootballQueueStatus.PENDING,
 
           scheduledFor: {
-            $lte: new Date(),
+            $lte: now,
           },
 
-          attempts: {
-            $lt: this.maxAttempts,
-          },
+          $or: [
+            {
+              nextAttemptAt: {
+                $exists: false,
+              },
+            },
+            {
+              nextAttemptAt: {
+                $lte: now,
+              },
+            },
+          ],
         },
         {
           $set: {
             status: ApiFootballQueueStatus.PROCESSING,
+            startedAt: now,
           },
 
           $inc: {
@@ -188,110 +176,173 @@ export class ApiFootballQueueService {
             createdAt: 1,
           },
 
-          returnDocument: 'after',
+          new: true,
         },
       )
       .exec();
   }
 
   // ============================================================
-  // COMPLETE
+  // COMPLETE JOB
   // ============================================================
 
-  async markCompleted(jobId: string): Promise<void> {
+  async completeJob(jobId: string): Promise<void> {
+    const now = new Date();
+
     await this.queueModel
-      .updateOne(
-        {
-          _id: jobId,
-        },
+      .findByIdAndUpdate(
+        jobId,
         {
           $set: {
             status: ApiFootballQueueStatus.COMPLETED,
-
-            processedAt: new Date(),
-
-            error: null,
+            completedAt: now,
+            processedAt: now,
           },
+
+          $unset: {
+            error: 1,
+            nextAttemptAt: 1,
+          },
+        },
+        {
+          new: true,
         },
       )
       .exec();
   }
 
   // ============================================================
-  // FAILED
+  // COMPATIBILITY ALIAS
   // ============================================================
 
-  async markFailed(jobId: string, error: string): Promise<void> {
+  async markCompleted(jobId: string): Promise<void> {
+    await this.completeJob(jobId);
+  }
+
+  // ============================================================
+  // FAIL JOB
+  // ============================================================
+
+  async failJob(jobId: string, error: unknown): Promise<void> {
     const job = await this.queueModel.findById(jobId).exec();
 
     if (!job) {
       return;
     }
 
-    if (job.attempts >= this.maxAttempts) {
+    const message = error instanceof Error ? error.message : String(error);
+
+    const shouldRetry = job.attempts < job.maxAttempts;
+
+    if (shouldRetry) {
+      const retryDelay = Math.min(
+        60_000 * Math.pow(2, Math.max(job.attempts - 1, 0)),
+        15 * 60_000,
+      );
+
       await this.queueModel
-        .updateOne(
-          {
-            _id: jobId,
-          },
+        .findByIdAndUpdate(
+          jobId,
           {
             $set: {
-              status: ApiFootballQueueStatus.FAILED,
-
-              error,
-
-              processedAt: new Date(),
+              status: ApiFootballQueueStatus.PENDING,
+              error: message,
+              nextAttemptAt: new Date(Date.now() + retryDelay),
             },
+
+            $unset: {
+              startedAt: 1,
+            },
+          },
+          {
+            new: true,
           },
         )
         .exec();
+    } else {
+      const now = new Date();
 
-      return;
+      await this.queueModel
+        .findByIdAndUpdate(
+          jobId,
+          {
+            $set: {
+              status: ApiFootballQueueStatus.FAILED,
+              error: message,
+              completedAt: now,
+              processedAt: now,
+            },
+
+            $unset: {
+              startedAt: 1,
+              nextAttemptAt: 1,
+            },
+          },
+          {
+            new: true,
+          },
+        )
+        .exec();
     }
 
-    await this.queueModel
-      .updateOne(
-        {
-          _id: jobId,
-        },
-        {
-          $set: {
-            status: ApiFootballQueueStatus.PENDING,
-
-            scheduledFor: new Date(Date.now() + 15 * 60 * 1000),
-
-            error,
-          },
-        },
-      )
-      .exec();
+    this.logger.warn(
+      `API-Football job ${jobId} ${
+        shouldRetry ? 'will retry' : 'failed permanently'
+      }: ${message}`,
+    );
   }
 
   // ============================================================
-  // SKIP
+  // COMPATIBILITY ALIAS
   // ============================================================
 
-  async markSkipped(jobId: string, reason: string): Promise<void> {
-    await this.queueModel
-      .updateOne(
-        {
-          _id: jobId,
-        },
-        {
-          $set: {
-            status: ApiFootballQueueStatus.SKIPPED,
-
-            error: reason,
-
-            processedAt: new Date(),
-          },
-        },
-      )
-      .exec();
+  async markFailed(jobId: string, error: unknown): Promise<void> {
+    await this.failJob(jobId, error);
   }
 
   // ============================================================
-  // RECOVER STALE JOBS
+  // PROCESS NEXT JOB
+  // ============================================================
+
+  async processNextJob(
+    processor: (job: ApiFootballQueueDocument) => Promise<void>,
+  ): Promise<boolean> {
+    const job = await this.getNextJob();
+
+    if (!job) {
+      return false;
+    }
+
+    try {
+      await processor(job);
+
+      await this.completeJob(job._id.toString());
+
+      return true;
+    } catch (error) {
+      await this.failJob(job._id.toString(), error);
+
+      return false;
+    }
+  }
+
+  // ============================================================
+  // DAILY QUOTA
+  // ============================================================
+
+  async getDailyProcessedCount(): Promise<number> {
+    return this.rateLimitService.getDailyUsage('api-football');
+  }
+
+  async getRemainingDailyQuota(): Promise<number> {
+    const remaining =
+      await this.rateLimitService.getRemainingDailyRequests('api-football');
+
+    return remaining ?? 0;
+  }
+
+  // ============================================================
+  // STALE JOB RECOVERY
   // ============================================================
 
   async requeueStaleProcessingJobs(staleMinutes = 30): Promise<number> {
@@ -302,17 +353,18 @@ export class ApiFootballQueueService {
         {
           status: ApiFootballQueueStatus.PROCESSING,
 
-          updatedAt: {
+          startedAt: {
             $lt: cutoff,
           },
         },
         {
           $set: {
             status: ApiFootballQueueStatus.PENDING,
+            nextAttemptAt: new Date(),
+          },
 
-            scheduledFor: new Date(),
-
-            error: 'Requeued after stale processing state',
+          $unset: {
+            startedAt: 1,
           },
         },
       )
@@ -322,99 +374,56 @@ export class ApiFootballQueueService {
   }
 
   // ============================================================
-  // DAILY QUOTA
+  // OLD JOB CLEANUP
   // ============================================================
 
-  async getDailyProcessedCount(date = new Date()): Promise<number> {
-    const start = new Date(date);
-
-    start.setHours(0, 0, 0, 0);
-
-    const end = new Date(start);
-
-    end.setDate(end.getDate() + 1);
-
-    return this.queueModel
-      .countDocuments({
-        status: ApiFootballQueueStatus.COMPLETED,
-
-        processedAt: {
-          $gte: start,
-          $lt: end,
-        },
-      })
-      .exec();
-  }
-
-  async getRemainingDailyQuota(): Promise<number> {
-    const used = await this.getDailyProcessedCount();
-
-    return Math.max(this.dailyRequestLimit - used, 0);
-  }
-
-  // ============================================================
-  // COUNTS
-  // ============================================================
-
-  async getCounts() {
-    const [
-      pending,
-      processing,
-      completed,
-      failed,
-      skipped,
-      remainingDailyQuota,
-    ] = await Promise.all([
-      this.queueModel.countDocuments({
-        status: ApiFootballQueueStatus.PENDING,
-      }),
-
-      this.queueModel.countDocuments({
-        status: ApiFootballQueueStatus.PROCESSING,
-      }),
-
-      this.queueModel.countDocuments({
-        status: ApiFootballQueueStatus.COMPLETED,
-      }),
-
-      this.queueModel.countDocuments({
-        status: ApiFootballQueueStatus.FAILED,
-      }),
-
-      this.queueModel.countDocuments({
-        status: ApiFootballQueueStatus.SKIPPED,
-      }),
-
-      this.getRemainingDailyQuota(),
-    ]);
-
-    return {
-      pending,
-      processing,
-      completed,
-      failed,
-      skipped,
-      remainingDailyQuota,
-    };
-  }
-
-  // ============================================================
-  // CLEAN OLD JOBS
-  // ============================================================
-
-  async removeOldCompletedJobs(days = 30): Promise<number> {
-    const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+  async removeOldCompletedJobs(olderThanDays = 30): Promise<number> {
+    const cutoff = new Date(Date.now() - olderThanDays * 24 * 60 * 60 * 1000);
 
     const result = await this.queueModel
       .deleteMany({
-        status: ApiFootballQueueStatus.COMPLETED,
-
-        processedAt: {
-          $lt: cutoff,
+        status: {
+          $in: [
+            ApiFootballQueueStatus.COMPLETED,
+            ApiFootballQueueStatus.FAILED,
+          ],
         },
+
+        $or: [
+          {
+            completedAt: {
+              $lt: cutoff,
+            },
+          },
+          {
+            completedAt: {
+              $exists: false,
+            },
+
+            updatedAt: {
+              $lt: cutoff,
+            },
+          },
+        ],
       })
       .exec();
 
-    return result.deletedCount ?? 0;
+    return result.deletedCount;
+  }
+
+  // ============================================================
+  // LEGACY CLEANUP
+  // ============================================================
+
+  async cleanupCompletedJobs(): Promise<void> {
+    await this.removeOldCompletedJobs(7);
+  }
+
+  // ============================================================
+  // LEGACY STALE RECOVERY
+  // ============================================================
+
+  async recoverStaleJobs(): Promise<void> {
+    await this.requeueStaleProcessingJobs(10);
   }
 }

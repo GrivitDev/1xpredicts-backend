@@ -1,305 +1,446 @@
 import { Injectable } from '@nestjs/common';
 
-import { SupportedCompetitionService } from './supported-competition.service';
-
-import { ActiveCompetitionService } from './active-competition.service';
-
-import { ApiFootballQueueService } from './api-football-queue.service';
+import { InjectModel } from '@nestjs/mongoose';
+import { Model } from 'mongoose';
 
 import { ApiFootballQueueJobType } from '../interfaces/api-football-queue.interface';
 
-import { CompetitionPriority } from '../enums/competition-priority.enum';
+import {
+  ActiveCompetition,
+  ActiveCompetitionDocument,
+} from '../schemas/active-competition.schema';
+
+import { ActiveCompetitionStatus } from '../interfaces/active-competition.interface';
+
+import {
+  ApiFootballFixture,
+  ApiFootballFixtureDocument,
+} from '../schemas/api-football/api-football-fixture.schema';
+
+import { ApiFootballQueueService } from './api-football-queue.service';
+
+export interface ApiFootballQueueBuildResult {
+  queued: number;
+  skipped: number;
+  remainingQuota: number;
+}
 
 @Injectable()
 export class ApiFootballQueueBuilderService {
+  private readonly fixtureWindowDays = 10;
+
   constructor(
-    private readonly supportedCompetitionService: SupportedCompetitionService,
-
-    private readonly activeCompetitionService: ActiveCompetitionService,
-
     private readonly apiFootballQueueService: ApiFootballQueueService,
+
+    @InjectModel(ActiveCompetition.name)
+    private readonly activeCompetitionModel: Model<ActiveCompetitionDocument>,
+
+    @InjectModel(ApiFootballFixture.name)
+    private readonly apiFootballFixtureModel: Model<ApiFootballFixtureDocument>,
   ) {}
 
   // ============================================================
-  // BUILD DAILY COLLECTION QUEUE
+  // RESULT HELPER
   // ============================================================
 
-  async buildDailyQueue(): Promise<{
-    queued: number;
-    skipped: number;
-    remainingQuota: number;
-  }> {
-    let remainingQuota =
-      await this.apiFootballQueueService.getRemainingDailyQuota();
+  private async createJob(
+    job: Parameters<ApiFootballQueueService['addJob']>[0],
+    result: ApiFootballQueueBuildResult,
+  ): Promise<void> {
+    const created = await this.apiFootballQueueService.addJob(job);
 
-    if (remainingQuota <= 0) {
-      return {
-        queued: 0,
-        skipped: 0,
-        remainingQuota: 0,
-      };
+    if (created) {
+      result.queued += 1;
+    } else {
+      result.skipped += 1;
     }
+  }
 
-    const active = await this.activeCompetitionService.getActive();
-
-    const configured = this.supportedCompetitionService.getAll();
-
-    const configuredMap = new Map(
-      configured.map((competition) => [competition.id, competition]),
-    );
-
-    const competitions = active
-      .map((activeCompetition) => ({
-        activeCompetition,
-        config: configuredMap.get(activeCompetition.competitionId),
-      }))
-      .filter(
-        (
-          item,
-        ): item is {
-          activeCompetition: NonNullable<typeof item.activeCompetition>;
-          config: NonNullable<typeof item.config>;
-        } => Boolean(item.config),
-      )
-      .sort(
-        (a, b) =>
-          this.getPriority(a.config.priority) -
-          this.getPriority(b.config.priority),
-      );
-
-    let queued = 0;
-    let skipped = 0;
-
-    for (const { activeCompetition, config } of competitions) {
-      if (remainingQuota <= 0) {
-        skipped += 1;
-        break;
-      }
-
-      if (activeCompetition.apiFootballLeagueId === undefined) {
-        skipped += 1;
-        continue;
-      }
-
-      if (activeCompetition.season === undefined) {
-        skipped += 1;
-        continue;
-      }
-
-      const season = Number.parseInt(activeCompetition.season, 10);
-
-      if (!Number.isInteger(season) || season <= 0) {
-        skipped += 1;
-        continue;
-      }
-
-      const leagueId = activeCompetition.apiFootballLeagueId;
-
-      const priority = this.getPriority(config.priority);
-
-      const fixtureJob = await this.apiFootballQueueService.addJob({
-        competitionId: config.id,
-
-        apiFootballLeagueId: leagueId,
-
-        season,
-
-        type: ApiFootballQueueJobType.FIXTURES,
-
-        priority,
-
-        scheduledFor: new Date(),
-      });
-
-      /*
-       * If this job already existed,
-       * it does not consume another API
-       * request. We still continue building
-       * the rest of the queue.
-       */
-      if (fixtureJob.isNew) {
-        queued += 1;
-        remainingQuota -= 1;
-      }
-
-      if (remainingQuota <= 0) {
-        break;
-      }
-
-      const standingsJob = await this.apiFootballQueueService.addJob({
-        competitionId: config.id,
-
-        apiFootballLeagueId: leagueId,
-
-        season,
-
-        type: ApiFootballQueueJobType.STANDINGS,
-
-        priority: priority + 1,
-
-        scheduledFor: new Date(Date.now() + 60 * 1000),
-      });
-
-      if (standingsJob.isNew) {
-        queued += 1;
-        remainingQuota -= 1;
-      }
-
-      if (remainingQuota <= 0) {
-        break;
-      }
-
-      const injuriesJob = await this.apiFootballQueueService.addJob({
-        competitionId: config.id,
-
-        apiFootballLeagueId: leagueId,
-
-        season,
-
-        type: ApiFootballQueueJobType.INJURIES,
-
-        priority: priority + 2,
-
-        scheduledFor: new Date(Date.now() + 2 * 60 * 1000),
-      });
-
-      if (injuriesJob.isNew) {
-        queued += 1;
-        remainingQuota -= 1;
-      }
-    }
-
+  private async getResult(): Promise<ApiFootballQueueBuildResult> {
     return {
-      queued,
-      skipped,
-      remainingQuota,
+      queued: 0,
+      skipped: 0,
+      remainingQuota:
+        await this.apiFootballQueueService.getRemainingDailyQuota(),
     };
   }
 
-  // ============================================================
-  // QUEUE TEAM STATISTICS
-  // ============================================================
-
-  async queueTeamStatistics(
-    jobs: Array<{
-      competitionId: string;
-      leagueId: number;
-      season: number;
-      teamId: number;
-      priority: number;
-    }>,
-  ): Promise<number> {
-    let remainingQuota =
+  private async finalizeResult(
+    result: ApiFootballQueueBuildResult,
+  ): Promise<ApiFootballQueueBuildResult> {
+    result.remainingQuota =
       await this.apiFootballQueueService.getRemainingDailyQuota();
 
-    if (remainingQuota <= 0) {
-      return 0;
-    }
-
-    let queued = 0;
-
-    for (const job of jobs) {
-      if (remainingQuota <= 0) {
-        break;
-      }
-
-      const result = await this.apiFootballQueueService.addJob({
-        competitionId: job.competitionId,
-
-        apiFootballLeagueId: job.leagueId,
-
-        season: job.season,
-
-        apiFootballTeamId: job.teamId,
-
-        type: ApiFootballQueueJobType.TEAM_STATISTICS,
-
-        priority: job.priority,
-
-        scheduledFor: new Date(),
-      });
-
-      if (result.isNew) {
-        queued += 1;
-        remainingQuota -= 1;
-      }
-    }
-
-    return queued;
+    return result;
   }
 
   // ============================================================
-  // QUEUE PREDICTIONS
+  // FIXTURE QUEUE
   // ============================================================
 
-  async queuePredictions(
-    jobs: Array<{
-      competitionId: string;
-      leagueId: number;
-      season: number;
-      fixtureId: number;
-      priority: number;
-    }>,
-  ): Promise<number> {
-    let remainingQuota =
-      await this.apiFootballQueueService.getRemainingDailyQuota();
+  async buildFixtureQueue(): Promise<ApiFootballQueueBuildResult> {
+    const result = await this.getResult();
 
-    if (remainingQuota <= 0) {
-      return 0;
-    }
+    const now = new Date();
 
-    let queued = 0;
+    const windowEnd = new Date(now);
+    windowEnd.setDate(windowEnd.getDate() + this.fixtureWindowDays);
 
-    for (const job of jobs) {
-      if (remainingQuota <= 0) {
-        break;
+    const competitions = await this.activeCompetitionModel
+      .find({
+        status: {
+          $in: [
+            ActiveCompetitionStatus.ACTIVE,
+            ActiveCompetitionStatus.UPCOMING,
+          ],
+        },
+      })
+      .sort({
+        priority: 1,
+      })
+      .lean()
+      .exec();
+
+    for (const competition of competitions) {
+      if (
+        competition.apiFootballLeagueId === undefined ||
+        competition.season === undefined ||
+        competition.season === null
+      ) {
+        continue;
       }
 
-      const result = await this.apiFootballQueueService.addJob({
-        competitionId: job.competitionId,
+      const existingFixtures = await this.apiFootballFixtureModel
+        .find({
+          leagueId: competition.apiFootballLeagueId,
 
-        apiFootballLeagueId: job.leagueId,
+          season: Number(competition.season),
 
-        season: job.season,
+          fixtureDate: {
+            $gte: now,
+            $lte: windowEnd,
+          },
+        })
+        .select({
+          fixtureId: 1,
+        })
+        .lean()
+        .exec();
 
-        apiFootballFixtureId: job.fixtureId,
+      const knownFixtureIds = new Set(
+        existingFixtures
+          .map((fixture) => fixture.fixtureId)
+          .filter(
+            (fixtureId): fixtureId is number => typeof fixtureId === 'number',
+          ),
+      );
 
-        type: ApiFootballQueueJobType.PREDICTION,
-
-        priority: job.priority,
-
-        scheduledFor: new Date(),
-      });
-
-      if (result.isNew) {
-        queued += 1;
-        remainingQuota -= 1;
+      if (knownFixtureIds.size > 0) {
+        result.skipped += 1;
+        continue;
       }
+
+      await this.createJob(
+        {
+          jobType: ApiFootballQueueJobType.FIXTURES,
+
+          competitionId: competition.competitionId,
+
+          apiFootballLeagueId: competition.apiFootballLeagueId,
+
+          season: Number(competition.season),
+
+          priority: competition.priority,
+        },
+        result,
+      );
     }
 
-    return queued;
+    return this.finalizeResult(result);
   }
 
   // ============================================================
-  // PRIORITY
+  // STANDINGS
   // ============================================================
 
-  private getPriority(priority: CompetitionPriority): number {
-    switch (priority) {
-      case CompetitionPriority.ELITE:
-        return 1;
+  async buildStandingsQueue(): Promise<ApiFootballQueueBuildResult> {
+    const result = await this.getResult();
 
-      case CompetitionPriority.HIGH:
-        return 2;
+    const competitions = await this.activeCompetitionModel
+      .find({
+        status: ActiveCompetitionStatus.ACTIVE,
 
-      case CompetitionPriority.REGIONAL:
-        return 3;
+        apiFootballLeagueId: {
+          $exists: true,
+        },
 
-      case CompetitionPriority.SELECTIVE:
-        return 4;
+        season: {
+          $exists: true,
+        },
+      })
+      .sort({
+        priority: 1,
+      })
+      .lean()
+      .exec();
 
-      default:
-        return 99;
+    for (const competition of competitions) {
+      if (
+        competition.apiFootballLeagueId === undefined ||
+        competition.season === undefined ||
+        competition.season === null
+      ) {
+        continue;
+      }
+
+      await this.createJob(
+        {
+          jobType: ApiFootballQueueJobType.STANDINGS,
+
+          competitionId: competition.competitionId,
+
+          apiFootballLeagueId: competition.apiFootballLeagueId,
+
+          season: Number(competition.season),
+
+          priority: competition.priority,
+        },
+        result,
+      );
     }
+
+    return this.finalizeResult(result);
+  }
+
+  // ============================================================
+  // INJURIES
+  // ============================================================
+
+  async buildInjuryQueue(): Promise<ApiFootballQueueBuildResult> {
+    const result = await this.getResult();
+
+    const competitions = await this.activeCompetitionModel
+      .find({
+        status: ActiveCompetitionStatus.ACTIVE,
+
+        apiFootballLeagueId: {
+          $exists: true,
+        },
+
+        season: {
+          $exists: true,
+        },
+      })
+      .sort({
+        priority: 1,
+      })
+      .lean()
+      .exec();
+
+    for (const competition of competitions) {
+      if (
+        competition.apiFootballLeagueId === undefined ||
+        competition.season === undefined ||
+        competition.season === null
+      ) {
+        continue;
+      }
+
+      await this.createJob(
+        {
+          jobType: ApiFootballQueueJobType.INJURIES,
+
+          competitionId: competition.competitionId,
+
+          apiFootballLeagueId: competition.apiFootballLeagueId,
+
+          season: Number(competition.season),
+
+          priority: competition.priority,
+        },
+        result,
+      );
+    }
+
+    return this.finalizeResult(result);
+  }
+
+  // ============================================================
+  // TEAM STATISTICS
+  // ============================================================
+
+  async buildTeamStatisticsQueue(): Promise<ApiFootballQueueBuildResult> {
+    const result = await this.getResult();
+
+    const now = new Date();
+
+    const windowEnd = new Date(now);
+    windowEnd.setDate(windowEnd.getDate() + this.fixtureWindowDays);
+
+    const competitions = await this.activeCompetitionModel
+      .find({
+        status: ActiveCompetitionStatus.ACTIVE,
+
+        apiFootballLeagueId: {
+          $exists: true,
+        },
+
+        season: {
+          $exists: true,
+        },
+      })
+      .sort({
+        priority: 1,
+      })
+      .lean()
+      .exec();
+
+    for (const competition of competitions) {
+      if (
+        competition.apiFootballLeagueId === undefined ||
+        competition.season === undefined ||
+        competition.season === null
+      ) {
+        continue;
+      }
+
+      const fixtures = await this.apiFootballFixtureModel
+        .find({
+          leagueId: competition.apiFootballLeagueId,
+
+          season: Number(competition.season),
+
+          fixtureDate: {
+            $gte: now,
+            $lte: windowEnd,
+          },
+        })
+        .select({
+          homeTeamId: 1,
+          awayTeamId: 1,
+        })
+        .lean()
+        .exec();
+
+      const teamIds = new Set<number>();
+
+      for (const fixture of fixtures) {
+        if (typeof fixture.homeTeamId === 'number') {
+          teamIds.add(fixture.homeTeamId);
+        }
+
+        if (typeof fixture.awayTeamId === 'number') {
+          teamIds.add(fixture.awayTeamId);
+        }
+      }
+
+      for (const teamId of teamIds) {
+        await this.createJob(
+          {
+            jobType: ApiFootballQueueJobType.TEAM_STATISTICS,
+
+            competitionId: competition.competitionId,
+
+            apiFootballLeagueId: competition.apiFootballLeagueId,
+
+            season: Number(competition.season),
+
+            apiFootballTeamId: teamId,
+
+            priority: competition.priority,
+          },
+          result,
+        );
+      }
+    }
+
+    return this.finalizeResult(result);
+  }
+
+  // ============================================================
+  // PREDICTIONS
+  // ============================================================
+
+  async buildPredictionQueue(): Promise<ApiFootballQueueBuildResult> {
+    const result = await this.getResult();
+
+    const now = new Date();
+
+    const windowEnd = new Date(now);
+    windowEnd.setDate(windowEnd.getDate() + this.fixtureWindowDays);
+
+    const competitions = await this.activeCompetitionModel
+      .find({
+        status: ActiveCompetitionStatus.ACTIVE,
+
+        apiFootballLeagueId: {
+          $exists: true,
+        },
+
+        season: {
+          $exists: true,
+        },
+      })
+      .sort({
+        priority: 1,
+      })
+      .lean()
+      .exec();
+
+    for (const competition of competitions) {
+      if (
+        competition.apiFootballLeagueId === undefined ||
+        competition.season === undefined ||
+        competition.season === null
+      ) {
+        continue;
+      }
+
+      const fixtures = await this.apiFootballFixtureModel
+        .find({
+          leagueId: competition.apiFootballLeagueId,
+
+          season: Number(competition.season),
+
+          fixtureDate: {
+            $gte: now,
+            $lte: windowEnd,
+          },
+
+          statusShort: {
+            $nin: ['FT', 'AET', 'PEN'],
+          },
+        })
+        .select({
+          fixtureId: 1,
+        })
+        .lean()
+        .exec();
+
+      for (const fixture of fixtures) {
+        if (typeof fixture.fixtureId !== 'number') {
+          continue;
+        }
+
+        await this.createJob(
+          {
+            jobType: ApiFootballQueueJobType.PREDICTION,
+
+            competitionId: competition.competitionId,
+
+            apiFootballLeagueId: competition.apiFootballLeagueId,
+
+            season: Number(competition.season),
+
+            apiFootballFixtureId: fixture.fixtureId,
+
+            priority: competition.priority,
+          },
+          result,
+        );
+      }
+    }
+
+    return this.finalizeResult(result);
   }
 }

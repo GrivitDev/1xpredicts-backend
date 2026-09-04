@@ -20,6 +20,10 @@ export const SPORTS_DATA_COLLECTION_CONFIG = {
       results: CollectionFrequency.DAILY,
     },
 
+    rateLimit: {
+      minIntervalSeconds: 60,
+    },
+
     schedule: {
       hour: 23,
       minute: 0,
@@ -47,6 +51,10 @@ export const SPORTS_DATA_COLLECTION_CONFIG = {
 
     venueData: CollectionFrequency.WEEKLY,
 
+    rateLimit: {
+      minIntervalSeconds: 60,
+    },
+
     schedule: {
       hour: 23,
       minute: 30,
@@ -60,7 +68,11 @@ export const SPORTS_DATA_COLLECTION_CONFIG = {
   API_FOOTBALL: {
     enabled: true,
 
-    dailyRequestLimit: 100,
+    dailyRequestLimit: 95,
+
+    rateLimit: {
+      minIntervalSeconds: 60,
+    },
 
     fixtures: CollectionFrequency.DAILY,
 
@@ -90,6 +102,12 @@ export const SPORTS_DATA_COLLECTION_CONFIG = {
   ODDS_API: {
     enabled: true,
 
+    dailyRequestLimit: 15,
+
+    rateLimit: {
+      minIntervalSeconds: 60,
+    },
+
     sports: CollectionFrequency.WEEKLY,
 
     events: CollectionFrequency.DAILY,
@@ -105,6 +123,12 @@ export const SPORTS_DATA_COLLECTION_CONFIG = {
 
   YOUTUBE: {
     enabled: true,
+
+    dailyRequestLimit: 30,
+
+    rateLimit: {
+      minIntervalSeconds: 60,
+    },
 
     queue: {
       enabled: true,

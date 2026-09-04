@@ -9,20 +9,30 @@ import axios, { AxiosError, AxiosInstance, AxiosRequestConfig } from 'axios';
 
 import {
   FootballDataCompetition,
+  FootballDataCompetitionListResponse,
   FootballDataMatch,
   FootballDataMatchListResponse,
   FootballDataStandingsResponse,
   FootballDataTeamListResponse,
 } from './football-data.interfaces';
 
+import { SportsProviderRateLimitService } from '../services/sports-provider-rate-limit.service';
+
 export interface FootballDataMatchQuery {
   dateFrom?: string;
+
   dateTo?: string;
+
   season?: number;
+
   status?: string;
+
   stage?: string;
+
   group?: string;
+
   matchday?: number;
+
   limit?: number;
 }
 
@@ -36,7 +46,9 @@ export class FootballDataService implements OnModuleInit {
 
   private readonly client: AxiosInstance;
 
-  constructor() {
+  constructor(
+    private readonly providerRateLimitService: SportsProviderRateLimitService,
+  ) {
     this.client = axios.create({
       baseURL: this.baseUrl,
       timeout: 15_000,
@@ -62,20 +74,31 @@ export class FootballDataService implements OnModuleInit {
     this.logger.log('Football-Data.org provider initialized');
   }
 
-  /**
-   * Get competition information and season catalogue.
-   */
+  // ============================================================
+  // AVAILABLE COMPETITIONS
+  // ============================================================
+
+  async getCompetitions(): Promise<FootballDataCompetition[]> {
+    const data =
+      await this.request<FootballDataCompetitionListResponse>('/competitions');
+
+    return data.competitions ?? [];
+  }
+
+  // ============================================================
+  // COMPETITION
+  // ============================================================
+
   async getCompetition(code: string): Promise<FootballDataCompetition> {
     return this.request<FootballDataCompetition>(
       `/competitions/${this.normalizeCompetitionCode(code)}`,
     );
   }
 
-  /**
-   * Get all matches available for a competition.
-   *
-   * This is the raw Football-Data.org dataset.
-   */
+  // ============================================================
+  // MATCHES
+  // ============================================================
+
   async getMatches(
     code: string,
     query: FootballDataMatchQuery = {},
@@ -88,44 +111,50 @@ export class FootballDataService implements OnModuleInit {
     );
   }
 
-  /**
-   * Get scheduled/upcoming matches.
-   */
+  // ============================================================
+  // SCHEDULED MATCHES
+  // ============================================================
+
   async getScheduledMatches(
     code: string,
     query: Omit<FootballDataMatchQuery, 'status'> = {},
   ): Promise<FootballDataMatchListResponse> {
     return this.getMatches(code, {
       ...query,
+
       status: 'SCHEDULED,TIMED',
     });
   }
 
-  /**
-   * Get completed matches/results.
-   */
+  // ============================================================
+  // FINISHED MATCHES
+  // ============================================================
+
   async getFinishedMatches(
     code: string,
     query: Omit<FootballDataMatchQuery, 'status'> = {},
   ): Promise<FootballDataMatchListResponse> {
     return this.getMatches(code, {
       ...query,
+
       status: 'FINISHED',
     });
   }
 
-  /**
-   * Get one match directly by Football-Data.org match ID.
-   */
+  // ============================================================
+  // MATCH
+  // ============================================================
+
   async getMatch(matchId: number): Promise<FootballDataMatch> {
     this.assertPositiveInteger(matchId, 'matchId');
 
     return this.request<FootballDataMatch>(`/matches/${matchId}`);
   }
 
-  /**
-   * Get teams participating in a competition season.
-   */
+  // ============================================================
+  // TEAMS
+  // ============================================================
+
   async getTeams(
     code: string,
     season?: number,
@@ -143,9 +172,10 @@ export class FootballDataService implements OnModuleInit {
     );
   }
 
-  /**
-   * Get the current competition standings.
-   */
+  // ============================================================
+  // STANDINGS
+  // ============================================================
+
   async getStandings(
     code: string,
     season?: number,
@@ -163,6 +193,10 @@ export class FootballDataService implements OnModuleInit {
     );
   }
 
+  // ============================================================
+  // REQUEST
+  // ============================================================
+
   private async request<T>(
     path: string,
     config: AxiosRequestConfig = {},
@@ -173,14 +207,20 @@ export class FootballDataService implements OnModuleInit {
       );
     }
 
-    try {
-      const response = await this.client.get<T>(path, config);
+    return this.providerRateLimitService.execute('football-data', async () => {
+      try {
+        const response = await this.client.get<T>(path, config);
 
-      return response.data;
-    } catch (error) {
-      this.handleRequestError(error, path);
-    }
+        return response.data;
+      } catch (error) {
+        this.handleRequestError(error, path);
+      }
+    });
   }
+
+  // ============================================================
+  // QUERY CLEANING
+  // ============================================================
 
   private cleanQuery(
     query: FootballDataMatchQuery,
@@ -222,6 +262,10 @@ export class FootballDataService implements OnModuleInit {
     return params;
   }
 
+  // ============================================================
+  // NORMALIZE COMPETITION CODE
+  // ============================================================
+
   private normalizeCompetitionCode(code: string): string {
     const normalized = code.trim().toUpperCase();
 
@@ -232,15 +276,25 @@ export class FootballDataService implements OnModuleInit {
     return encodeURIComponent(normalized);
   }
 
+  // ============================================================
+  // VALIDATION
+  // ============================================================
+
   private assertPositiveInteger(value: number, field: string): void {
     if (!Number.isInteger(value) || value <= 0) {
       throw new Error(`${field} must be a positive integer`);
     }
   }
 
+  // ============================================================
+  // ERROR HANDLING
+  // ============================================================
+
   private handleRequestError(error: unknown, path: string): never {
     if (axios.isAxiosError(error)) {
-      const axiosError = error as AxiosError<{ message?: string }>;
+      const axiosError = error as AxiosError<{
+        message?: string;
+      }>;
 
       const status = axiosError.response?.status;
 

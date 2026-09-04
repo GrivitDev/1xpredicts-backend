@@ -38,6 +38,7 @@ export class ActiveCompetition {
 
   @Prop({
     required: true,
+    type: Number,
     index: true,
   })
   priority!: number;
@@ -47,6 +48,12 @@ export class ActiveCompetition {
     index: true,
   })
   apiFootballLeagueId?: number;
+
+  @Prop({
+    type: Number,
+    index: true,
+  })
+  sportsDbLeagueId?: number;
 
   @Prop({
     type: String,
@@ -76,7 +83,7 @@ export class ActiveCompetition {
 
   @Prop({
     type: String,
-    enum: ActiveCompetitionStatus,
+    enum: Object.values(ActiveCompetitionStatus),
     default: ActiveCompetitionStatus.INACTIVE,
     index: true,
   })

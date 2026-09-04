@@ -18,6 +18,8 @@ import {
   OddsApiSport,
 } from './the-odds-api.interfaces';
 
+import { SportsProviderRateLimitService } from '../services/sports-provider-rate-limit.service';
+
 @Injectable()
 export class TheOddsApiService implements OnModuleInit {
   private readonly baseUrl = 'https://api.the-odds-api.com/v4';
@@ -26,7 +28,11 @@ export class TheOddsApiService implements OnModuleInit {
 
   private http!: AxiosInstance;
 
-  constructor(private readonly configService: ConfigService) {}
+  constructor(
+    private readonly configService: ConfigService,
+
+    private readonly providerRateLimitService: SportsProviderRateLimitService,
+  ) {}
 
   onModuleInit(): void {
     const apiKey = this.configService.get<string>('THE_ODDS_API_KEY');
@@ -39,7 +45,7 @@ export class TheOddsApiService implements OnModuleInit {
 
     this.http = axios.create({
       baseURL: this.baseUrl,
-      timeout: 15000,
+      timeout: 15_000,
       headers: {
         Accept: 'application/json',
       },
@@ -193,22 +199,24 @@ export class TheOddsApiService implements OnModuleInit {
     endpoint: string,
     params?: Record<string, string | number | boolean>,
   ): Promise<T> {
-    try {
-      const response = await this.http.get<T>(endpoint, {
-        params: {
-          ...params,
-          apiKey: this.apiKey,
-        },
-      });
+    return this.providerRateLimitService.execute('odds-api', async () => {
+      try {
+        const response = await this.http.get<T>(endpoint, {
+          params: {
+            ...params,
+            apiKey: this.apiKey,
+          },
+        });
 
-      return response.data;
-    } catch (error) {
-      this.logApiError(error, endpoint);
+        return response.data;
+      } catch (error) {
+        this.logApiError(error, endpoint);
 
-      throw new InternalServerErrorException(
-        `The Odds API request failed: ${endpoint}`,
-      );
-    }
+        throw new InternalServerErrorException(
+          `The Odds API request failed: ${endpoint}`,
+        );
+      }
+    });
   }
 
   // ============================================================
@@ -228,6 +236,7 @@ export class TheOddsApiService implements OnModuleInit {
   private logApiError(error: unknown, endpoint: string): void {
     if (axios.isAxiosError(error)) {
       const axiosError = error as AxiosError;
+
       const headers = axiosError.response?.headers as
         | Record<string, string | string[] | undefined>
         | undefined;

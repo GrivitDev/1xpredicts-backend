@@ -9,6 +9,7 @@ import { SupportedCompetitionService } from './supported-competition.service';
 import { ActiveCompetitionService } from './active-competition.service';
 
 import { SupportedCompetitionConfig } from '../interfaces/supported-competition-config.interface';
+
 import { ActiveCompetitionStatus } from '../interfaces/active-competition.interface';
 
 @Injectable()
@@ -29,10 +30,15 @@ export class ApiFootballActiveCompetitionService {
     updated: number;
     skipped: number;
   }> {
-    const supportedCompetitions = this.supportedCompetitionService.getAll();
+    const supportedCompetitions = this.supportedCompetitionService.getEnabled();
 
     const apiFootballLeagues =
       await this.apiFootballService.getCurrentLeagues();
+
+    const supportedByNameAndCountry = new Map<
+      string,
+      SupportedCompetitionConfig
+    >();
 
     const supportedByName = new Map<string, SupportedCompetitionConfig>();
 
@@ -45,7 +51,19 @@ export class ApiFootballActiveCompetitionService {
         continue;
       }
 
-      supportedByName.set(this.normalizeName(configuredName), competition);
+      const normalizedName = this.normalizeName(configuredName);
+
+      supportedByName.set(normalizedName, competition);
+
+      const configuredCountry =
+        competition.providers.apiFootballCountry?.trim();
+
+      if (configuredCountry) {
+        supportedByNameAndCountry.set(
+          this.buildNameCountryKey(normalizedName, configuredCountry),
+          competition,
+        );
+      }
     }
 
     let matched = 0;
@@ -54,14 +72,28 @@ export class ApiFootballActiveCompetitionService {
 
     for (const providerLeague of apiFootballLeagues) {
       const leagueId = providerLeague.league?.id;
+
       const leagueName = providerLeague.league?.name;
 
-      if (leagueId === undefined || !leagueName || leagueName.trim() === '') {
+      const countryName = providerLeague.country?.name;
+
+      if (
+        leagueId === undefined ||
+        !leagueName ||
+        leagueName.trim().length === 0
+      ) {
         skipped++;
         continue;
       }
 
-      const competition = supportedByName.get(this.normalizeName(leagueName));
+      const normalizedName = this.normalizeName(leagueName);
+
+      const competition =
+        (countryName
+          ? supportedByNameAndCountry.get(
+              this.buildNameCountryKey(normalizedName, countryName),
+            )
+          : undefined) ?? supportedByName.get(normalizedName);
 
       if (!competition) {
         continue;
@@ -138,5 +170,9 @@ export class ApiFootballActiveCompetitionService {
       .trim()
       .toLowerCase()
       .replace(/\s+/g, ' ');
+  }
+
+  private buildNameCountryKey(name: string, country: string): string {
+    return `${name}::${this.normalizeName(country)}`;
   }
 }

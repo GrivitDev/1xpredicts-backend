@@ -21,13 +21,18 @@ import {
   SportsDbVenue,
 } from './thesportsdb.interfaces';
 
+import { SportsProviderRateLimitService } from '../services/sports-provider-rate-limit.service';
+
 @Injectable()
 export class TheSportsDbService implements OnModuleInit {
   private readonly baseUrl = 'https://www.thesportsdb.com/api/v1/json';
 
   private http!: AxiosInstance;
 
-  constructor(private readonly configService: ConfigService) {}
+  constructor(
+    private readonly configService: ConfigService,
+    private readonly providerRateLimitService: SportsProviderRateLimitService,
+  ) {}
 
   onModuleInit(): void {
     const apiKey =
@@ -35,7 +40,7 @@ export class TheSportsDbService implements OnModuleInit {
 
     this.http = axios.create({
       baseURL: `${this.baseUrl}/${apiKey}`,
-      timeout: 15000,
+      timeout: 15_000,
       headers: {
         Accept: 'application/json',
       },
@@ -298,17 +303,21 @@ export class TheSportsDbService implements OnModuleInit {
     endpoint: string,
     params: Record<string, string | number>,
   ): Promise<T> {
-    try {
-      const response = await this.http.get<T>(endpoint, { params });
+    return this.providerRateLimitService.execute('thesportsdb', async () => {
+      try {
+        const response = await this.http.get<T>(endpoint, {
+          params,
+        });
 
-      return response.data;
-    } catch (error) {
-      this.logApiError(error, endpoint);
+        return response.data;
+      } catch (error) {
+        this.logApiError(error, endpoint);
 
-      throw new InternalServerErrorException(
-        `TheSportsDB request failed: ${endpoint}`,
-      );
-    }
+        throw new InternalServerErrorException(
+          `TheSportsDB request failed: ${endpoint}`,
+        );
+      }
+    });
   }
 
   // ============================================================

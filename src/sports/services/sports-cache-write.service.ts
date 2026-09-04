@@ -91,7 +91,7 @@ export class SportsCacheWriteService {
     await this.set(
       SPORTS_CACHE_KEYS.apiFootballFixtures(leagueId, season),
       value,
-      SPORTS_CACHE_TTL.API_FOOTBALL,
+      SPORTS_CACHE_TTL.API_FOOTBALL_FIXTURES,
     );
   }
 
@@ -103,7 +103,7 @@ export class SportsCacheWriteService {
     await this.set(
       SPORTS_CACHE_KEYS.apiFootballStandings(leagueId, season),
       value,
-      SPORTS_CACHE_TTL.API_FOOTBALL,
+      SPORTS_CACHE_TTL.API_FOOTBALL_STANDINGS,
     );
   }
 
@@ -116,7 +116,7 @@ export class SportsCacheWriteService {
     await this.set(
       SPORTS_CACHE_KEYS.apiFootballTeamStatistics(leagueId, season, teamId),
       value,
-      SPORTS_CACHE_TTL.API_FOOTBALL,
+      SPORTS_CACHE_TTL.API_FOOTBALL_TEAM_STATISTICS,
     );
   }
 
@@ -128,7 +128,7 @@ export class SportsCacheWriteService {
     await this.set(
       SPORTS_CACHE_KEYS.apiFootballInjuries(leagueId, season),
       value,
-      SPORTS_CACHE_TTL.API_FOOTBALL,
+      SPORTS_CACHE_TTL.API_FOOTBALL_INJURIES,
     );
   }
 
@@ -139,7 +139,7 @@ export class SportsCacheWriteService {
     await this.set(
       SPORTS_CACHE_KEYS.apiFootballPrediction(fixtureId),
       value,
-      SPORTS_CACHE_TTL.API_FOOTBALL,
+      SPORTS_CACHE_TTL.API_FOOTBALL_PREDICTION,
     );
   }
 
@@ -151,7 +151,7 @@ export class SportsCacheWriteService {
     await this.set(
       SPORTS_CACHE_KEYS.theSportsDbEvent(eventId),
       value,
-      SPORTS_CACHE_TTL.THESPORTSDB,
+      SPORTS_CACHE_TTL.THESPORTSDB_EVENT,
     );
   }
 
@@ -159,7 +159,7 @@ export class SportsCacheWriteService {
     await this.set(
       SPORTS_CACHE_KEYS.theSportsDbEvents(leagueId),
       value,
-      SPORTS_CACHE_TTL.THESPORTSDB,
+      SPORTS_CACHE_TTL.THESPORTSDB_EVENTS,
     );
   }
 
@@ -167,7 +167,7 @@ export class SportsCacheWriteService {
     await this.set(
       SPORTS_CACHE_KEYS.theSportsDbTimeline(eventId),
       value,
-      SPORTS_CACHE_TTL.THESPORTSDB,
+      SPORTS_CACHE_TTL.THESPORTSDB_TIMELINE,
     );
   }
 
@@ -175,7 +175,7 @@ export class SportsCacheWriteService {
     await this.set(
       SPORTS_CACHE_KEYS.theSportsDbLineup(eventId),
       value,
-      SPORTS_CACHE_TTL.THESPORTSDB,
+      SPORTS_CACHE_TTL.THESPORTSDB_LINEUP,
     );
   }
 
@@ -183,7 +183,7 @@ export class SportsCacheWriteService {
     await this.set(
       SPORTS_CACHE_KEYS.theSportsDbStatistics(eventId),
       value,
-      SPORTS_CACHE_TTL.THESPORTSDB,
+      SPORTS_CACHE_TTL.THESPORTSDB_STATISTICS,
     );
   }
 
@@ -191,7 +191,7 @@ export class SportsCacheWriteService {
     await this.set(
       SPORTS_CACHE_KEYS.theSportsDbTeams(leagueId),
       value,
-      SPORTS_CACHE_TTL.THESPORTSDB,
+      SPORTS_CACHE_TTL.THESPORTSDB_TEAMS,
     );
   }
 
@@ -199,7 +199,7 @@ export class SportsCacheWriteService {
     await this.set(
       SPORTS_CACHE_KEYS.theSportsDbPlayers(teamId),
       value,
-      SPORTS_CACHE_TTL.THESPORTSDB,
+      SPORTS_CACHE_TTL.THESPORTSDB_PLAYERS,
     );
   }
 
@@ -211,7 +211,7 @@ export class SportsCacheWriteService {
     await this.set(
       SPORTS_CACHE_KEYS.theSportsDbPlayerStatistics(playerId, teamId),
       value,
-      SPORTS_CACHE_TTL.THESPORTSDB,
+      SPORTS_CACHE_TTL.THESPORTSDB_PLAYER_STATISTICS,
     );
   }
 
@@ -219,7 +219,7 @@ export class SportsCacheWriteService {
     await this.set(
       SPORTS_CACHE_KEYS.theSportsDbVenue(venueId),
       value,
-      SPORTS_CACHE_TTL.THESPORTSDB,
+      SPORTS_CACHE_TTL.THESPORTSDB_VENUE,
     );
   }
 
@@ -231,7 +231,7 @@ export class SportsCacheWriteService {
     await this.set(
       SPORTS_CACHE_KEYS.theSportsDbSeason(leagueId, season),
       value,
-      SPORTS_CACHE_TTL.THESPORTSDB,
+      SPORTS_CACHE_TTL.THESPORTSDB_SEASON,
     );
   }
 
@@ -259,7 +259,7 @@ export class SportsCacheWriteService {
     await this.set(
       SPORTS_CACHE_KEYS.oddsScores(sportKey),
       value,
-      SPORTS_CACHE_TTL.LIVE,
+      SPORTS_CACHE_TTL.ODDS_SCORES,
     );
   }
 

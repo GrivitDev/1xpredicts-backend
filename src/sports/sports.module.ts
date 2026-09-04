@@ -164,15 +164,23 @@ import { SportsCollectionService } from './services/sports-collection.service';
 
 import { SportsDataReadService } from './services/sports-data-read.service';
 
+import { SportsProviderRateLimitService } from './services/sports-provider-rate-limit.service';
+
 import { SupportedCompetitionService } from './services/supported-competition.service';
 
 import { YoutubeHighlightService } from './services/youtube-highlight.service';
 
-import { SportsSourceScheduler } from './schedulers/sports-source.scheduler';
-
-import { SportsTargetedRefreshScheduler } from './schedulers/sports-targeted-refresh.scheduler';
-
 import { SportsStartupService } from './services/sports-startup.service';
+
+import { ApiFootballScheduler } from './schedulers/api-football.scheduler';
+
+import { OddsApiScheduler } from './schedulers/odds-api.scheduler';
+
+import { FootballDataScheduler } from './schedulers/football-data.scheduler';
+
+import { ThesportsdbScheduler } from './schedulers/thesportsdb.scheduler';
+
+import { YoutubeScheduler } from './schedulers/youtube.scheduler';
 
 @Module({
   imports: [
@@ -199,6 +207,7 @@ import { SportsStartupService } from './services/sports-startup.service';
         schema: YoutubeHighlightSchema,
       },
 
+      // Football-Data
       {
         name: FootballDataCompetition.name,
         schema: FootballDataCompetitionSchema,
@@ -327,12 +336,15 @@ import { SportsStartupService } from './services/sports-startup.service';
     TheOddsApiService,
     YoutubeService,
 
+    // Provider rate limiting
+    SportsProviderRateLimitService,
+
     // Competition
     SupportedCompetitionService,
     ActiveCompetitionService,
     ApiFootballActiveCompetitionService,
 
-    // Queue
+    // API-Football queue
     ApiFootballQueueService,
     ApiFootballQueueBuilderService,
 
@@ -345,12 +357,15 @@ import { SportsStartupService } from './services/sports-startup.service';
     // YouTube
     YoutubeHighlightService,
 
-    // Schedulers
-    SportsSourceScheduler,
-    SportsTargetedRefreshScheduler,
-
-    // One-time startup bootstrap
+    // Startup
     SportsStartupService,
+
+    // Provider schedulers
+    ApiFootballScheduler,
+    OddsApiScheduler,
+    FootballDataScheduler,
+    ThesportsdbScheduler,
+    YoutubeScheduler,
   ],
 
   exports: [
@@ -359,6 +374,11 @@ import { SportsStartupService } from './services/sports-startup.service';
     ActiveCompetitionService,
     SportsDataReadService,
     SportsCollectionService,
+    ApiFootballService,
+    FootballDataService,
+    TheOddsApiService,
+    TheSportsDbService,
+    YoutubeService,
   ],
 })
 export class SportsModule {}

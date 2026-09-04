@@ -277,8 +277,11 @@ export class SportsDataReadService {
   /**
    * Public fixture read.
    *
-   * The competition registry decides which stored provider dataset
-   * should be used. No external provider is called here.
+   * API-Football is the primary source.
+   * TheSportsDB is the secondary source.
+   * Football-Data is the fallback source.
+   *
+   * No external provider is called here.
    */
   async getFixtures(competitionId?: string): Promise<unknown[]> {
     if (!competitionId) {
@@ -291,7 +294,42 @@ export class SportsDataReadService {
       return [];
     }
 
-    // Football-Data
+    // ============================================================
+    // API-FOOTBALL — PRIMARY
+    // ============================================================
+
+    const activeCompetition = await this.activeCompetitionModel
+      .findOne({
+        competitionId: competition.id,
+      })
+      .lean()
+      .exec();
+
+    if (
+      activeCompetition?.apiFootballLeagueId !== undefined &&
+      activeCompetition.season !== undefined &&
+      activeCompetition.season !== null
+    ) {
+      return this.getApiFootballFixtures(
+        Number(activeCompetition.apiFootballLeagueId),
+        Number(activeCompetition.season),
+      );
+    }
+
+    // ============================================================
+    // THE SPORTS DB — SECONDARY
+    // ============================================================
+
+    if (competition.providers.sportsDbLeagueId) {
+      return this.getTheSportsDbUpcomingEvents(
+        competition.providers.sportsDbLeagueId,
+      );
+    }
+
+    // ============================================================
+    // FOOTBALL-DATA — FALLBACK
+    // ============================================================
+
     if (competition.providers.footballDataCode) {
       const code = competition.providers.footballDataCode.trim().toUpperCase();
 
@@ -318,37 +356,15 @@ export class SportsDataReadService {
         .exec();
     }
 
-    // TheSportsDB
-    if (competition.providers.sportsDbLeagueId) {
-      return this.getTheSportsDbUpcomingEvents(
-        competition.providers.sportsDbLeagueId,
-      );
-    }
-
-    // API-Football
-    const activeCompetition = await this.activeCompetitionModel
-      .findOne({
-        competitionId: competition.id,
-      })
-      .lean()
-      .exec();
-
-    if (
-      activeCompetition?.apiFootballLeagueId !== undefined &&
-      activeCompetition.season !== undefined &&
-      activeCompetition.season !== null
-    ) {
-      return this.getApiFootballFixtures(
-        activeCompetition.apiFootballLeagueId,
-        Number(activeCompetition.season),
-      );
-    }
-
     return [];
   }
 
   /**
    * Public results read.
+   *
+   * API-Football is the primary source.
+   * TheSportsDB is the secondary source.
+   * Football-Data is the fallback source.
    */
   async getResults(competitionId?: string): Promise<unknown[]> {
     if (!competitionId) {
@@ -361,7 +377,40 @@ export class SportsDataReadService {
       return [];
     }
 
-    // Football-Data
+    // ============================================================
+    // API-FOOTBALL — PRIMARY
+    // ============================================================
+
+    const activeCompetition = await this.activeCompetitionModel
+      .findOne({
+        competitionId: competition.id,
+      })
+      .lean()
+      .exec();
+
+    if (
+      activeCompetition?.apiFootballLeagueId !== undefined &&
+      activeCompetition.season !== undefined &&
+      activeCompetition.season !== null
+    ) {
+      return this.getApiFootballFinishedFixtures(
+        Number(activeCompetition.apiFootballLeagueId),
+        Number(activeCompetition.season),
+      );
+    }
+
+    // ============================================================
+    // THE SPORTS DB — SECONDARY
+    // ============================================================
+
+    if (competition.providers.sportsDbLeagueId) {
+      return this.getTheSportsDbResults(competition.providers.sportsDbLeagueId);
+    }
+
+    // ============================================================
+    // FOOTBALL-DATA — FALLBACK
+    // ============================================================
+
     if (competition.providers.footballDataCode) {
       const code = competition.providers.footballDataCode.trim().toUpperCase();
 
@@ -386,37 +435,15 @@ export class SportsDataReadService {
         .exec();
     }
 
-    // TheSportsDB
-    if (competition.providers.sportsDbLeagueId) {
-      return this.getTheSportsDbResults(competition.providers.sportsDbLeagueId);
-    }
-
-    // API-Football
-    const activeCompetition = await this.activeCompetitionModel
-      .findOne({
-        competitionId: competition.id,
-      })
-      .lean()
-      .exec();
-
-    if (
-      activeCompetition?.apiFootballLeagueId !== undefined &&
-      activeCompetition.season !== undefined &&
-      activeCompetition.season !== null
-    ) {
-      return this.getApiFootballFinishedFixtures(
-        activeCompetition.apiFootballLeagueId,
-        Number(activeCompetition.season),
-      );
-    }
-
     return [];
   }
-
   /**
    * Public standings read.
    *
-   * Standings are available from Football-Data and API-Football.
+   * API-Football is the primary source.
+   * Football-Data is the fallback source.
+   *
+   * TheSportsDB is not used as an artificial standings provider.
    */
   async getStandings(competitionId?: string): Promise<unknown[]> {
     if (!competitionId) {
@@ -429,7 +456,32 @@ export class SportsDataReadService {
       return [];
     }
 
-    // Football-Data
+    // ============================================================
+    // API-FOOTBALL — PRIMARY
+    // ============================================================
+
+    const activeCompetition = await this.activeCompetitionModel
+      .findOne({
+        competitionId: competition.id,
+      })
+      .lean()
+      .exec();
+
+    if (
+      activeCompetition?.apiFootballLeagueId !== undefined &&
+      activeCompetition.season !== undefined &&
+      activeCompetition.season !== null
+    ) {
+      return this.getApiFootballStandings(
+        Number(activeCompetition.apiFootballLeagueId),
+        Number(activeCompetition.season),
+      );
+    }
+
+    // ============================================================
+    // FOOTBALL-DATA — FALLBACK
+    // ============================================================
+
     if (competition.providers.footballDataCode) {
       const code = competition.providers.footballDataCode.trim().toUpperCase();
 
@@ -453,26 +505,6 @@ export class SportsDataReadService {
         .exec();
     }
 
-    // API-Football
-    const activeCompetition = await this.activeCompetitionModel
-      .findOne({
-        competitionId: competition.id,
-      })
-      .lean()
-      .exec();
-
-    if (
-      activeCompetition?.apiFootballLeagueId !== undefined &&
-      activeCompetition.season !== undefined &&
-      activeCompetition.season !== null
-    ) {
-      return this.getApiFootballStandings(
-        activeCompetition.apiFootballLeagueId,
-        Number(activeCompetition.season),
-      );
-    }
-
-    // TheSportsDB does not become an artificial standings provider.
     return [];
   }
 
@@ -494,6 +526,12 @@ export class SportsDataReadService {
 
   /**
    * Public team read.
+   *
+   * TheSportsDB is preferred for team information because
+   * API-Football does not currently have a dedicated stored
+   * team collection in this module.
+   *
+   * Football-Data is the fallback.
    */
   async getTeams(competitionId?: string): Promise<unknown[]> {
     if (!competitionId) {
@@ -506,7 +544,18 @@ export class SportsDataReadService {
       return [];
     }
 
-    // Football-Data
+    // ============================================================
+    // THE SPORTS DB — PRIMARY TEAM SOURCE
+    // ============================================================
+
+    if (competition.providers.sportsDbLeagueId) {
+      return this.getTheSportsDbTeams(competition.providers.sportsDbLeagueId);
+    }
+
+    // ============================================================
+    // FOOTBALL-DATA — FALLBACK
+    // ============================================================
+
     if (competition.providers.footballDataCode) {
       const code = competition.providers.footballDataCode.trim().toUpperCase();
 
@@ -526,11 +575,6 @@ export class SportsDataReadService {
         })
         .lean()
         .exec();
-    }
-
-    // TheSportsDB
-    if (competition.providers.sportsDbLeagueId) {
-      return this.getTheSportsDbTeams(competition.providers.sportsDbLeagueId);
     }
 
     return [];

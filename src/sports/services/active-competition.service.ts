@@ -38,8 +38,6 @@ export class ActiveCompetitionService {
       nextFixtureDate?: Date;
     },
   ): Promise<ActiveCompetitionDocument> {
-    const now = new Date();
-
     return this.activeCompetitionModel
       .findOneAndUpdate(
         {
@@ -52,6 +50,8 @@ export class ActiveCompetitionService {
             name: competition.name,
 
             type: competition.type,
+
+            region: competition.region,
 
             priority: competition.priority,
 
@@ -69,7 +69,7 @@ export class ActiveCompetitionService {
 
             nextFixtureDate: data.nextFixtureDate,
 
-            checkedAt: now,
+            lastUpdatedAt: new Date(),
           },
         },
         {
@@ -147,6 +147,7 @@ export class ActiveCompetitionService {
       })
       .sort({
         priority: 1,
+        nextFixtureDate: 1,
         name: 1,
       })
       .lean()
@@ -241,6 +242,8 @@ export class ActiveCompetitionService {
       if (competition.status !== status) {
         competition.status = status;
 
+        competition.lastUpdatedAt = now;
+
         await competition.save();
       }
     }
@@ -285,6 +288,8 @@ export class ActiveCompetitionService {
       now,
     );
 
+    competition.lastUpdatedAt = now;
+
     await competition.save();
   }
 
@@ -301,7 +306,7 @@ export class ActiveCompetitionService {
         {
           $set: {
             status: ActiveCompetitionStatus.INACTIVE,
-            checkedAt: new Date(),
+            lastUpdatedAt: new Date(),
           },
         },
       )
@@ -321,7 +326,7 @@ export class ActiveCompetitionService {
         {
           $set: {
             status: ActiveCompetitionStatus.FINISHED,
-            checkedAt: new Date(),
+            lastUpdatedAt: new Date(),
           },
         },
       )

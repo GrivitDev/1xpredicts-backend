@@ -19,6 +19,8 @@ import {
 
 import { YOUTUBE_CONFIG } from '../config/youtube.config';
 
+import { SportsProviderRateLimitService } from '../services/sports-provider-rate-limit.service';
+
 @Injectable()
 export class YoutubeService implements OnModuleInit {
   private readonly baseUrl = YOUTUBE_CONFIG.apiBaseUrl;
@@ -27,7 +29,11 @@ export class YoutubeService implements OnModuleInit {
 
   private apiKey!: string;
 
-  constructor(private readonly configService: ConfigService) {}
+  constructor(
+    private readonly configService: ConfigService,
+
+    private readonly providerRateLimitService: SportsProviderRateLimitService,
+  ) {}
 
   onModuleInit(): void {
     const apiKey = this.configService.get<string>('YOUTUBE_DATA_API_KEY');
@@ -40,7 +46,7 @@ export class YoutubeService implements OnModuleInit {
 
     this.http = axios.create({
       baseURL: this.baseUrl,
-      timeout: 15000,
+      timeout: 15_000,
       headers: {
         Accept: 'application/json',
       },
@@ -62,7 +68,7 @@ export class YoutubeService implements OnModuleInit {
       key: this.apiKey,
       part: 'snippet',
       q: options.query.trim(),
-      type: 'video',
+      type: YOUTUBE_CONFIG.searchType,
       maxResults: options.maxResults ?? 5,
     };
 
@@ -149,7 +155,6 @@ export class YoutubeService implements OnModuleInit {
     const candidates = await this.searchVideos({
       query,
       maxResults: 5,
-
       publishedAfter: publishedAfter?.toISOString(),
     });
 
@@ -260,17 +265,21 @@ export class YoutubeService implements OnModuleInit {
     endpoint: string,
     params: Record<string, string | number | boolean>,
   ): Promise<T> {
-    try {
-      const response = await this.http.get<T>(endpoint, { params });
+    return this.providerRateLimitService.execute('youtube', async () => {
+      try {
+        const response = await this.http.get<T>(endpoint, {
+          params,
+        });
 
-      return response.data;
-    } catch (error) {
-      this.logApiError(error, endpoint);
+        return response.data;
+      } catch (error) {
+        this.logApiError(error, endpoint);
 
-      throw new InternalServerErrorException(
-        `YouTube API request failed: ${endpoint}`,
-      );
-    }
+        throw new InternalServerErrorException(
+          `YouTube API request failed: ${endpoint}`,
+        );
+      }
+    });
   }
 
   // ============================================================

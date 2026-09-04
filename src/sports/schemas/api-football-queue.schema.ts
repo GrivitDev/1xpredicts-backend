@@ -49,6 +49,7 @@ export class ApiFootballQueue {
 
   @Prop({
     required: true,
+    type: Number,
     index: true,
   })
   priority!: number;
@@ -69,10 +70,34 @@ export class ApiFootballQueue {
 
   @Prop({
     required: true,
+    default: 3,
+  })
+  maxAttempts!: number;
+
+  @Prop({
+    required: true,
     type: Date,
     index: true,
   })
   scheduledFor!: Date;
+
+  @Prop({
+    type: Date,
+    index: true,
+  })
+  startedAt?: Date;
+
+  @Prop({
+    type: Date,
+    index: true,
+  })
+  nextAttemptAt?: Date;
+
+  @Prop({
+    type: Date,
+    index: true,
+  })
+  completedAt?: Date;
 
   @Prop({
     type: Date,
