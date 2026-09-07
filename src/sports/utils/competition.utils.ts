@@ -1,12 +1,16 @@
+import { CollectionFrequency } from '../enums/collection-frequency.enum';
+
 import { CompetitionPriority } from '../enums/competition-priority.enum';
 
 import { CompetitionRegion } from '../enums/competition-region.enum';
 
 import { CompetitionType } from '../enums/competition-type.enum';
 
-import { CollectionFrequency } from '../enums/collection-frequency.enum';
-
 import { SupportedCompetitionConfig } from '../interfaces/supported-competition-config.interface';
+
+// ============================================================
+// BASIC COLLECTIONS
+// ============================================================
 
 export function getAllCompetitions(
   competitions: SupportedCompetitionConfig[],
@@ -36,13 +40,9 @@ export function getOddsCompetitions(
   );
 }
 
-export function getNewsCompetitions(
-  competitions: SupportedCompetitionConfig[],
-): SupportedCompetitionConfig[] {
-  return competitions.filter(
-    (competition) => competition.enabled && competition.newsEnabled,
-  );
-}
+// ============================================================
+// LOOKUPS
+// ============================================================
 
 export function getCompetitionById(
   competitions: SupportedCompetitionConfig[],
@@ -85,28 +85,20 @@ export function getCompetitionsByFrequency(
   );
 }
 
+// ============================================================
+// SPECIALIZED COMPETITIONS
+// ============================================================
+
 export function getDailyCompetitions(
   competitions: SupportedCompetitionConfig[],
 ): SupportedCompetitionConfig[] {
   return getCompetitionsByFrequency(competitions, CollectionFrequency.DAILY);
 }
 
-export function getWeeklyCompetitions(
-  competitions: SupportedCompetitionConfig[],
-): SupportedCompetitionConfig[] {
-  return getCompetitionsByFrequency(competitions, CollectionFrequency.WEEKLY);
-}
-
-export function getTargetedCompetitions(
-  competitions: SupportedCompetitionConfig[],
-): SupportedCompetitionConfig[] {
-  return getCompetitionsByFrequency(competitions, CollectionFrequency.TARGETED);
-}
-
 export function getSeasonalCompetitions(
   competitions: SupportedCompetitionConfig[],
 ): SupportedCompetitionConfig[] {
-  return competitions.filter((competition) => competition.seasonal === true);
+  return getCompetitionsByFrequency(competitions, CollectionFrequency.SEASONAL);
 }
 
 export function getSupportedLeagues(
@@ -127,10 +119,17 @@ export function getInternationalCompetitions(
   return getCompetitionsByType(competitions, CompetitionType.INTERNATIONAL);
 }
 
+// ============================================================
+// PROVIDER MAPPINGS
+// ============================================================
+
 export function hasApiFootballMapping(
   competition: SupportedCompetitionConfig,
 ): boolean {
-  return competition.providers.apiFootballId !== undefined;
+  return Boolean(
+    competition.providers.apiFootballName &&
+    competition.providers.apiFootballCountry,
+  );
 }
 
 export function hasFootballDataMapping(
@@ -139,16 +138,33 @@ export function hasFootballDataMapping(
   return Boolean(competition.providers.footballDataCode);
 }
 
-export function hasSportsDbMapping(
-  competition: SupportedCompetitionConfig,
-): boolean {
-  return competition.providers.sportsDbLeagueId !== undefined;
-}
-
 export function hasOddsApiMapping(
   competition: SupportedCompetitionConfig,
 ): boolean {
   return Boolean(competition.providers.oddsApiSportKey);
+}
+
+// ============================================================
+// PRIORITY
+// ============================================================
+
+export function getPriorityWeight(priority: CompetitionPriority): number {
+  switch (priority) {
+    case CompetitionPriority.ELITE:
+      return 1;
+
+    case CompetitionPriority.HIGH:
+      return 2;
+
+    case CompetitionPriority.REGIONAL:
+      return 3;
+
+    case CompetitionPriority.SELECTIVE:
+      return 4;
+
+    default:
+      return 99;
+  }
 }
 
 export function getHighValueCompetitions(
@@ -174,24 +190,9 @@ export function getActiveMensCompetitions(
   );
 }
 
-export function getPriorityWeight(priority: CompetitionPriority): number {
-  switch (priority) {
-    case CompetitionPriority.ELITE:
-      return 1;
-
-    case CompetitionPriority.HIGH:
-      return 2;
-
-    case CompetitionPriority.REGIONAL:
-      return 3;
-
-    case CompetitionPriority.SELECTIVE:
-      return 4;
-
-    default:
-      return 99;
-  }
-}
+// ============================================================
+// VALIDATION / COUNTS
+// ============================================================
 
 export function isSupportedCompetition(
   competitions: SupportedCompetitionConfig[],
@@ -212,8 +213,6 @@ export function getCompetitionCounts(
 
     odds: getOddsCompetitions(competitions).length,
 
-    news: getNewsCompetitions(competitions).length,
-
     leagues: getSupportedLeagues(competitions).length,
 
     clubCompetitions: getClubCompetitions(competitions).length,
@@ -224,8 +223,6 @@ export function getCompetitionCounts(
     footballData: competitions.filter(hasFootballDataMapping).length,
 
     apiFootball: competitions.filter(hasApiFootballMapping).length,
-
-    sportsDb: competitions.filter(hasSportsDbMapping).length,
 
     oddsApi: competitions.filter(hasOddsApiMapping).length,
   };

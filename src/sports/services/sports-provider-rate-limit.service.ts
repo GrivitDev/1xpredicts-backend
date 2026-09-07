@@ -1,18 +1,20 @@
-import {
-  Injectable,
-  Logger,
-  ServiceUnavailableException,
-} from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 
-import { SportsRedisService } from '../cache/sports-redis.service';
+import { InjectModel } from '@nestjs/mongoose';
+
+import { Model } from 'mongoose';
 
 import { SPORTS_DATA_COLLECTION_CONFIG } from '../config/sports-data-collection.config';
 
+import {
+  SportsProviderRateLimit,
+  SportsProviderRateLimitDocument,
+} from '../schemas/sports-provider-rate-limit.schema';
+
 export type SportsProvider =
   | 'api-football'
-  | 'odds-api'
   | 'football-data'
-  | 'thesportsdb'
+  | 'odds-api'
   | 'youtube';
 
 interface ProviderLimit {
@@ -25,18 +27,23 @@ interface ProviderLimit {
 export class SportsProviderRateLimitService {
   private readonly logger = new Logger(SportsProviderRateLimitService.name);
 
-  constructor(private readonly redisService: SportsRedisService) {}
+  constructor(
+    @InjectModel(SportsProviderRateLimit.name)
+    private readonly rateLimitModel: Model<SportsProviderRateLimitDocument>,
+  ) {}
+
+  // ============================================================
+  // EXECUTE
+  // ============================================================
 
   /**
-   * Executes exactly one outbound provider request.
+   * Reserves one outbound request slot before executing the
+   * provider request.
    *
-   * Every admitted request:
+   * The slot and applicable quota are consumed even when the
+   * provider request later fails.
    *
-   * 1. consumes one 60-second provider slot;
-   * 2. consumes one configured provider quota unit;
-   * 3. applies equally to normal requests and retries.
-   *
-   * The actual HTTP request MUST be passed through this callback.
+   * Therefore retries are treated exactly like normal requests.
    */
   async execute<T>(
     provider: SportsProvider,
@@ -44,75 +51,13 @@ export class SportsProviderRateLimitService {
   ): Promise<T> {
     const limit = this.getProviderLimit(provider);
 
-    if (!this.redisService.isAvailable()) {
-      throw new ServiceUnavailableException(
-        `${provider} request blocked because Redis rate limiting is unavailable`,
-      );
-    }
-
-    const lockKey = this.getLockKey(provider);
-
-    /*
-     * Each provider has its own lock.
-     *
-     * Therefore:
-     *
-     * API-Football waiting does not block Odds API.
-     * Odds API waiting does not block YouTube.
-     * YouTube waiting does not block TheSportsDB.
-     */
-    while (true) {
-      await this.assertQuotaAvailable(provider, limit);
-
-      const lockAcquired = await this.redisService.setIfNotExists(
-        lockKey,
-        Date.now().toString(),
-        limit.minIntervalSeconds,
-      );
-
-      if (lockAcquired) {
-        break;
-      }
-
-      const ttl = await this.redisService.ttl(lockKey);
-
-      /*
-       * Redis TTL is returned in seconds.
-       *
-       * If the lock disappears between SET NX and TTL, simply retry
-       * immediately. The loop will safely attempt to acquire the slot.
-       */
-      const waitSeconds = ttl > 0 ? ttl : 1;
-
-      await this.sleep(waitSeconds * 1000);
-    }
-
-    /*
-     * The request may have waited for the slot.
-     *
-     * During that wait another worker could have consumed the final
-     * daily/monthly quota unit, so check the quota again before
-     * consuming this slot.
-     */
-    await this.assertQuotaAvailable(provider, limit);
-
-    /*
-     * Count the request BEFORE executing it.
-     *
-     * An HTTP request that receives a 4xx/5xx/network error has still
-     * been sent to the provider and therefore still consumes the
-     * provider's external API request allowance.
-     *
-     * A retry must therefore come through execute() again and consume
-     * another slot and another quota unit.
-     */
-    await this.incrementUsage(provider, limit);
+    await this.acquireSlot(provider, limit);
 
     try {
       return await request();
     } catch (error) {
       this.logger.warn(
-        `${provider} request failed after consuming rate-limit slot and quota`,
+        `${provider} request failed after consuming its request slot`,
       );
 
       throw error;
@@ -124,17 +69,19 @@ export class SportsProviderRateLimitService {
   // ============================================================
 
   async getDailyUsage(provider: SportsProvider): Promise<number> {
-    if (!this.redisService.isAvailable()) {
-      return 0;
-    }
-
     const limit = this.getProviderLimit(provider);
 
     if (limit.dailyRequestLimit === undefined) {
       return 0;
     }
 
-    return this.getUsage(this.getDailyUsageKey(provider));
+    const state = await this.getState(provider);
+
+    if (!state || state.dailyPeriod !== this.getDailyPeriod()) {
+      return 0;
+    }
+
+    return state.dailyRequests;
   }
 
   async getRemainingDailyRequests(
@@ -156,17 +103,19 @@ export class SportsProviderRateLimitService {
   // ============================================================
 
   async getMonthlyUsage(provider: SportsProvider): Promise<number> {
-    if (!this.redisService.isAvailable()) {
-      return 0;
-    }
-
     const limit = this.getProviderLimit(provider);
 
     if (limit.monthlyRequestLimit === undefined) {
       return 0;
     }
 
-    return this.getUsage(this.getMonthlyUsageKey(provider));
+    const state = await this.getState(provider);
+
+    if (!state || state.monthlyPeriod !== this.getMonthlyPeriod()) {
+      return 0;
+    }
+
+    return state.monthlyRequests;
   }
 
   async getRemainingMonthlyRequests(
@@ -184,34 +133,205 @@ export class SportsProviderRateLimitService {
   }
 
   // ============================================================
-  // QUOTA
+  // SLOT ACQUISITION
   // ============================================================
 
-  private async assertQuotaAvailable(
+  private async acquireSlot(
     provider: SportsProvider,
     limit: ProviderLimit,
   ): Promise<void> {
-    if (limit.dailyRequestLimit !== undefined) {
-      const dailyUsage = await this.getUsage(this.getDailyUsageKey(provider));
+    const intervalMs = limit.minIntervalSeconds * 1000;
 
-      if (dailyUsage >= limit.dailyRequestLimit) {
-        throw new ServiceUnavailableException(
-          `${provider} daily request limit reached (${limit.dailyRequestLimit})`,
-        );
+    while (true) {
+      const now = new Date();
+
+      const dailyPeriod = this.getDailyPeriod();
+
+      const monthlyPeriod = this.getMonthlyPeriod();
+
+      const lockedUntil = new Date(now.getTime() + intervalMs);
+
+      try {
+        const state = await this.rateLimitModel
+          .findOneAndUpdate(
+            {
+              provider,
+
+              $and: [
+                {
+                  $or: [
+                    {
+                      lockedUntil: {
+                        $exists: false,
+                      },
+                    },
+                    {
+                      lockedUntil: {
+                        $lte: now,
+                      },
+                    },
+                  ],
+                },
+
+                this.buildDailyQuotaFilter(
+                  dailyPeriod,
+                  limit.dailyRequestLimit,
+                ),
+
+                this.buildMonthlyQuotaFilter(
+                  monthlyPeriod,
+                  limit.monthlyRequestLimit,
+                ),
+              ],
+            },
+            [
+              {
+                $set: {
+                  provider,
+
+                  lastRequestAt: now,
+
+                  lockedUntil,
+
+                  dailyPeriod,
+
+                  monthlyPeriod,
+
+                  dailyRequests: {
+                    $cond: [
+                      {
+                        $eq: ['$dailyPeriod', dailyPeriod],
+                      },
+                      {
+                        $add: [
+                          {
+                            $ifNull: ['$dailyRequests', 0],
+                          },
+                          1,
+                        ],
+                      },
+                      1,
+                    ],
+                  },
+
+                  monthlyRequests: {
+                    $cond: [
+                      {
+                        $eq: ['$monthlyPeriod', monthlyPeriod],
+                      },
+                      {
+                        $add: [
+                          {
+                            $ifNull: ['$monthlyRequests', 0],
+                          },
+                          1,
+                        ],
+                      },
+                      1,
+                    ],
+                  },
+                },
+              },
+            ],
+            {
+              upsert: true,
+              returnDocument: 'after',
+              setDefaultsOnInsert: true,
+            },
+          )
+          .lean()
+          .exec();
+
+        if (state) {
+          return;
+        }
+      } catch (error) {
+        /**
+         * Multiple application instances can attempt to create
+         * the same provider limiter document at startup.
+         *
+         * The provider field is unique, so one process may win
+         * the insert while another receives a duplicate-key error.
+         *
+         * In that case we simply retry the atomic acquisition.
+         */
+        if (this.isDuplicateKeyError(error)) {
+          continue;
+        }
+
+        throw error;
       }
+
+      const current = await this.getState(provider);
+
+      if (
+        current?.lockedUntil &&
+        current.lockedUntil.getTime() > now.getTime()
+      ) {
+        await this.sleep(current.lockedUntil.getTime() - now.getTime());
+
+        continue;
+      }
+
+      /**
+       * No slot was available but there was no
+       * active lock. Retry shortly so another process
+       * cannot permanently block the caller.
+       */
+      await this.sleep(1000);
+    }
+  }
+
+  // ============================================================
+  // QUOTA FILTERS
+  // ============================================================
+
+  private buildDailyQuotaFilter(
+    period: string,
+    limit?: number,
+  ): Record<string, unknown> {
+    if (limit === undefined) {
+      return {};
     }
 
-    if (limit.monthlyRequestLimit !== undefined) {
-      const monthlyUsage = await this.getUsage(
-        this.getMonthlyUsageKey(provider),
-      );
+    return {
+      $or: [
+        {
+          dailyPeriod: {
+            $ne: period,
+          },
+        },
+        {
+          dailyRequests: {
+            $lt: limit,
+          },
+        },
+      ],
+    };
+  }
 
-      if (monthlyUsage >= limit.monthlyRequestLimit) {
-        throw new ServiceUnavailableException(
-          `${provider} monthly request limit reached (${limit.monthlyRequestLimit})`,
-        );
-      }
+  private buildMonthlyQuotaFilter(
+    period: string,
+    limit?: number,
+  ): Record<string, unknown> {
+    if (limit === undefined) {
+      return {};
     }
+
+    return {
+      $or: [
+        {
+          monthlyPeriod: {
+            $ne: period,
+          },
+        },
+        {
+          monthlyRequests: {
+            $lt: limit,
+          },
+        },
+      ],
+    };
   }
 
   // ============================================================
@@ -230,15 +350,6 @@ export class SportsProviderRateLimitService {
             SPORTS_DATA_COLLECTION_CONFIG.API_FOOTBALL.dailyRequestLimit,
         };
 
-      case 'odds-api':
-        return {
-          minIntervalSeconds:
-            SPORTS_DATA_COLLECTION_CONFIG.ODDS_API.rateLimit.minIntervalSeconds,
-
-          monthlyRequestLimit:
-            SPORTS_DATA_COLLECTION_CONFIG.ODDS_API.monthlyRequestLimit,
-        };
-
       case 'football-data':
         return {
           minIntervalSeconds:
@@ -246,11 +357,13 @@ export class SportsProviderRateLimitService {
               .minIntervalSeconds,
         };
 
-      case 'thesportsdb':
+      case 'odds-api':
         return {
           minIntervalSeconds:
-            SPORTS_DATA_COLLECTION_CONFIG.THESPORTSDB.rateLimit
-              .minIntervalSeconds,
+            SPORTS_DATA_COLLECTION_CONFIG.ODDS_API.rateLimit.minIntervalSeconds,
+
+          monthlyRequestLimit:
+            SPORTS_DATA_COLLECTION_CONFIG.ODDS_API.monthlyRequestLimit,
         };
 
       case 'youtube':
@@ -265,98 +378,49 @@ export class SportsProviderRateLimitService {
   }
 
   // ============================================================
-  // REDIS KEYS
+  // STATE
   // ============================================================
 
-  private getLockKey(provider: SportsProvider): string {
-    return `2xpredict:sports:provider-lock:${provider}`;
-  }
-
-  private getDailyUsageKey(provider: SportsProvider): string {
-    const date = new Date().toISOString().slice(0, 10);
-
-    return `2xpredict:sports:provider-usage:${provider}:daily:${date}`;
-  }
-
-  private getMonthlyUsageKey(provider: SportsProvider): string {
-    const month = new Date().toISOString().slice(0, 7);
-
-    return `2xpredict:sports:provider-usage:${provider}:monthly:${month}`;
-  }
-
-  // ============================================================
-  // USAGE
-  // ============================================================
-
-  private async getUsage(key: string): Promise<number> {
-    const value = await this.redisService.get<string>(key);
-
-    if (value === null) {
-      return 0;
-    }
-
-    const usage = Number(value);
-
-    return Number.isFinite(usage) ? usage : 0;
-  }
-
-  private async incrementUsage(
+  private async getState(
     provider: SportsProvider,
-    limit: ProviderLimit,
-  ): Promise<void> {
-    if (limit.dailyRequestLimit !== undefined) {
-      const value = await this.redisService.incrementWithTtl(
-        this.getDailyUsageKey(provider),
-        this.getDailyUsageTtlSeconds(),
-      );
-
-      if (value === null) {
-        throw new ServiceUnavailableException(
-          `${provider} request blocked because Redis daily usage tracking failed`,
-        );
-      }
-
-      return;
-    }
-
-    if (limit.monthlyRequestLimit !== undefined) {
-      const value = await this.redisService.incrementWithTtl(
-        this.getMonthlyUsageKey(provider),
-        this.getMonthlyUsageTtlSeconds(),
-      );
-
-      if (value === null) {
-        throw new ServiceUnavailableException(
-          `${provider} request blocked because Redis monthly usage tracking failed`,
-        );
-      }
-    }
+  ): Promise<SportsProviderRateLimitDocument | null> {
+    return this.rateLimitModel
+      .findOne({
+        provider,
+      })
+      .lean()
+      .exec();
   }
 
   // ============================================================
-  // USAGE TTL
+  // PERIODS
   // ============================================================
 
-  private getDailyUsageTtlSeconds(): number {
-    /*
-     * 25 hours.
-     *
-     * The key itself contains the UTC date, so this buffer simply
-     * guarantees that the counter survives the entire relevant day
-     * even around a date boundary.
-     */
-    return 25 * 60 * 60;
+  /**
+   * Request quotas are tracked using UTC periods.
+   */
+  private getDailyPeriod(): string {
+    return new Date().toISOString().slice(0, 10);
   }
 
-  private getMonthlyUsageTtlSeconds(): number {
-    /*
-     * 32 days.
-     *
-     * The key contains YYYY-MM, so the counter naturally changes
-     * with the month. The extended TTL prevents premature deletion
-     * during longer calendar months.
-     */
-    return 32 * 24 * 60 * 60;
+  private getMonthlyPeriod(): string {
+    return new Date().toISOString().slice(0, 7);
+  }
+
+  // ============================================================
+  // ERROR HELPERS
+  // ============================================================
+
+  private isDuplicateKeyError(error: unknown): boolean {
+    if (!error || typeof error !== 'object') {
+      return false;
+    }
+
+    const value = error as {
+      code?: number;
+    };
+
+    return value.code === 11000;
   }
 
   // ============================================================

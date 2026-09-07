@@ -1,0 +1,137 @@
+import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
+
+import { HydratedDocument } from 'mongoose';
+
+export type HeadToHeadDocument = HydratedDocument<HeadToHead>;
+
+@Schema({
+  _id: false,
+})
+export class HeadToHeadMeeting {
+  @Prop({ required: true })
+  fixtureId!: number;
+
+  @Prop({ required: true })
+  competitionId!: string;
+
+  @Prop({ required: true })
+  season!: number;
+
+  @Prop({ required: true })
+  date!: Date;
+
+  @Prop({ required: true })
+  homeTeamId!: number;
+
+  @Prop({ required: true })
+  homeTeamName!: string;
+
+  @Prop({ required: true })
+  awayTeamId!: number;
+
+  @Prop({ required: true })
+  awayTeamName!: string;
+
+  @Prop({ required: true })
+  homeGoals!: number;
+
+  @Prop({ required: true })
+  awayGoals!: number;
+}
+
+export const HeadToHeadMeetingSchema =
+  SchemaFactory.createForClass(HeadToHeadMeeting);
+
+@Schema({
+  timestamps: true,
+  collection: 'sports_head_to_head',
+})
+export class HeadToHead {
+  @Prop({
+    required: true,
+    unique: true,
+    index: true,
+  })
+  pairKey!: string;
+
+  @Prop({
+    required: true,
+    index: true,
+  })
+  teamAId!: number;
+
+  @Prop({
+    required: true,
+  })
+  teamAName!: string;
+
+  @Prop({
+    required: true,
+    index: true,
+  })
+  teamBId!: number;
+
+  @Prop({
+    required: true,
+  })
+  teamBName!: string;
+
+  @Prop({
+    required: true,
+    default: 0,
+  })
+  totalMeetings!: number;
+
+  @Prop({
+    required: true,
+    default: 0,
+  })
+  teamAWins!: number;
+
+  @Prop({
+    required: true,
+    default: 0,
+  })
+  draws!: number;
+
+  @Prop({
+    required: true,
+    default: 0,
+  })
+  teamBWins!: number;
+
+  @Prop({
+    required: true,
+    default: 0,
+  })
+  teamAGoals!: number;
+
+  @Prop({
+    required: true,
+    default: 0,
+  })
+  teamBGoals!: number;
+
+  @Prop({
+    type: [HeadToHeadMeetingSchema],
+    default: [],
+  })
+  meetings!: HeadToHeadMeeting[];
+
+  @Prop()
+  lastMeetingAt?: Date | null;
+
+  @Prop()
+  calculatedAt?: Date;
+}
+
+export const HeadToHeadSchema = SchemaFactory.createForClass(HeadToHead);
+
+HeadToHeadSchema.index({
+  teamAId: 1,
+  teamBId: 1,
+});
+
+HeadToHeadSchema.index({
+  lastMeetingAt: -1,
+});

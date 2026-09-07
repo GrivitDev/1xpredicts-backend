@@ -1,14 +1,7 @@
-/**
- * API-Football response contracts.
- *
- * These types intentionally represent API-Football data only.
- * They are not shared with TheSportsDB or The Odds API.
- */
-
 export interface ApiFootballResponse<T> {
   get?: string;
 
-  parameters?: Record<string, string | number | boolean | null>;
+  parameters?: Record<string, string | number | boolean | null | undefined>;
 
   errors?: Record<string, unknown> | string[];
 
@@ -29,14 +22,19 @@ export interface ApiFootballResponse<T> {
 export interface ApiFootballLeagueResponse {
   league?: {
     id?: number;
+
     name?: string;
+
     type?: string;
+
     logo?: string;
   };
 
   country?: {
     name?: string;
+
     code?: string;
+
     flag?: string;
   };
 
@@ -51,31 +49,6 @@ export interface ApiFootballLeagueSeason {
   end?: string | null;
 
   current?: boolean;
-
-  coverage?: {
-    fixtures?: {
-      events?: boolean;
-      lineups?: boolean;
-      statistics_fixtures?: boolean;
-      statistics_players?: boolean;
-    };
-
-    standings?: boolean;
-
-    players?: boolean;
-
-    top_scorers?: boolean;
-
-    top_assists?: boolean;
-
-    top_cards?: boolean;
-
-    injuries?: boolean;
-
-    predictions?: boolean;
-
-    odds?: boolean;
-  };
 }
 
 // ============================================================
@@ -174,14 +147,6 @@ export interface ApiFootballFixture {
       away?: number | null;
     };
   };
-
-  events?: ApiFootballEvent[];
-
-  lineups?: ApiFootballLineup[];
-
-  statistics?: ApiFootballMatchStatistics[];
-
-  players?: ApiFootballFixturePlayer[];
 }
 
 export interface ApiFootballTeam {
@@ -192,118 +157,6 @@ export interface ApiFootballTeam {
   logo?: string | null;
 
   winner?: boolean | null;
-}
-
-export interface ApiFootballEvent {
-  time?: {
-    elapsed?: number | null;
-
-    extra?: number | null;
-  };
-
-  team?: {
-    id?: number | null;
-
-    name?: string | null;
-
-    logo?: string | null;
-  };
-
-  player?: {
-    id?: number | null;
-
-    name?: string | null;
-  };
-
-  assist?: {
-    id?: number | null;
-
-    name?: string | null;
-  };
-
-  type?: string | null;
-
-  detail?: string | null;
-
-  comments?: string | null;
-}
-
-export interface ApiFootballLineup {
-  team?: {
-    id?: number | null;
-
-    name?: string | null;
-
-    logo?: string | null;
-
-    colors?: Record<string, unknown> | null;
-  };
-
-  coach?: {
-    id?: number | null;
-
-    name?: string | null;
-
-    photo?: string | null;
-  };
-
-  formation?: string | null;
-
-  startXI?: ApiFootballLineupPlayer[];
-
-  substitutes?: ApiFootballLineupPlayer[];
-}
-
-export interface ApiFootballLineupPlayer {
-  player?: {
-    id?: number | null;
-
-    name?: string | null;
-
-    number?: number | null;
-
-    pos?: string | null;
-
-    grid?: string | null;
-  };
-}
-
-export interface ApiFootballMatchStatistics {
-  team?: {
-    id?: number | null;
-
-    name?: string | null;
-
-    logo?: string | null;
-  };
-
-  statistics?: Array<{
-    type?: string | null;
-
-    value?: string | number | null;
-  }>;
-}
-
-export interface ApiFootballFixturePlayer {
-  team?: {
-    id?: number | null;
-
-    name?: string | null;
-
-    logo?: string | null;
-  };
-
-  players?: Array<{
-    player?: {
-      id?: number | null;
-
-      name?: string | null;
-
-      photo?: string | null;
-    };
-
-    statistics?: Array<Record<string, unknown>>;
-  }>;
 }
 
 // ============================================================
@@ -372,164 +225,4 @@ export interface ApiFootballStandingPerformance {
 
     against?: number;
   };
-}
-
-// ============================================================
-// TEAM STATISTICS
-// ============================================================
-
-export interface ApiFootballTeamStatisticsResponse {
-  league?: {
-    id?: number;
-
-    name?: string;
-
-    country?: string;
-
-    season?: number;
-  };
-
-  team?: ApiFootballTeam;
-
-  fixtures?: {
-    played?: ApiFootballHomeAwayTotal;
-
-    wins?: ApiFootballHomeAwayTotal;
-
-    draws?: ApiFootballHomeAwayTotal;
-
-    losses?: ApiFootballHomeAwayTotal;
-  };
-
-  goals?: Record<string, unknown>;
-
-  biggest?: Record<string, unknown>;
-
-  clean_sheet?: Record<string, number>;
-
-  failed_to_score?: Record<string, number>;
-
-  penalty?: Record<string, unknown>;
-
-  lineups?: Array<Record<string, unknown>>;
-
-  cards?: Record<string, unknown>;
-
-  form?: string | null;
-}
-
-export interface ApiFootballHomeAwayTotal {
-  home?: number;
-
-  away?: number;
-
-  total?: number;
-}
-
-// ============================================================
-// INJURIES
-// ============================================================
-
-export interface ApiFootballInjury {
-  player?: {
-    id?: number;
-
-    name?: string;
-
-    photo?: string | null;
-
-    type?: string | null;
-
-    reason?: string | null;
-  };
-
-  team?: {
-    id?: number;
-
-    name?: string;
-
-    logo?: string;
-  };
-
-  fixture?: {
-    id?: number;
-
-    timezone?: string;
-
-    date?: string;
-
-    timestamp?: number;
-  };
-
-  league?: {
-    id?: number;
-
-    name?: string;
-
-    season?: number;
-  };
-}
-
-// ============================================================
-// PREDICTIONS
-// ============================================================
-
-export interface ApiFootballPrediction {
-  predictions?: {
-    winner?: {
-      id?: number | null;
-
-      name?: string | null;
-
-      comment?: string | null;
-    };
-
-    win_or_draw?: boolean | null;
-
-    under_over?: string | null;
-
-    goals?: {
-      home?: string | null;
-
-      away?: string | null;
-    };
-
-    advice?: string | null;
-
-    percent?: {
-      home?: string | null;
-
-      draw?: string | null;
-
-      away?: string | null;
-    };
-  };
-
-  league?: {
-    id?: number;
-
-    name?: string;
-
-    country?: string;
-
-    season?: number;
-  };
-
-  teams?: {
-    home?: ApiFootballPredictionTeam;
-
-    away?: ApiFootballPredictionTeam;
-  };
-}
-
-export interface ApiFootballPredictionTeam {
-  id?: number;
-
-  name?: string;
-
-  logo?: string;
-
-  last_5?: Record<string, unknown>;
-
-  league?: Record<string, unknown>;
 }

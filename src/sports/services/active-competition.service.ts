@@ -30,47 +30,93 @@ export class ActiveCompetitionService {
     competition: SupportedCompetitionConfig,
     data: {
       apiFootballLeagueId?: number;
-      season?: string;
+
+      footballDataCode?: string;
+
+      oddsApiSportKey?: string;
+
+      season?: number;
+
       seasonStartDate?: Date;
+
       seasonEndDate?: Date;
+
       status: ActiveCompetitionStatus;
+
       lastFixtureDate?: Date;
+
       nextFixtureDate?: Date;
+
+      apiFootballPayload?: Record<string, unknown>;
     },
   ): Promise<ActiveCompetitionDocument> {
+    const competitionId = competition.id.trim().toLowerCase();
+
+    const update: Record<string, unknown> = {
+      competitionId,
+
+      name: competition.name,
+
+      type: competition.type,
+
+      region: competition.region,
+
+      priority: competition.priority,
+
+      status: data.status,
+
+      lastUpdatedAt: new Date(),
+    };
+
+    if (data.apiFootballLeagueId !== undefined) {
+      update.apiFootballLeagueId = data.apiFootballLeagueId;
+    }
+
+    if (data.footballDataCode !== undefined) {
+      update.footballDataCode = data.footballDataCode.trim().toUpperCase();
+    } else if (competition.providers.footballDataCode) {
+      update.footballDataCode = competition.providers.footballDataCode
+        .trim()
+        .toUpperCase();
+    }
+
+    if (data.oddsApiSportKey !== undefined) {
+      update.oddsApiSportKey = data.oddsApiSportKey.trim();
+    } else if (competition.providers.oddsApiSportKey) {
+      update.oddsApiSportKey = competition.providers.oddsApiSportKey.trim();
+    }
+
+    if (data.season !== undefined) {
+      update.season = data.season;
+    }
+
+    if (data.seasonStartDate !== undefined) {
+      update.seasonStartDate = data.seasonStartDate;
+    }
+
+    if (data.seasonEndDate !== undefined) {
+      update.seasonEndDate = data.seasonEndDate;
+    }
+
+    if (data.lastFixtureDate !== undefined) {
+      update.lastFixtureDate = data.lastFixtureDate;
+    }
+
+    if (data.nextFixtureDate !== undefined) {
+      update.nextFixtureDate = data.nextFixtureDate;
+    }
+
+    if (data.apiFootballPayload !== undefined) {
+      update.apiFootballPayload = data.apiFootballPayload;
+    }
+
     return this.activeCompetitionModel
       .findOneAndUpdate(
         {
-          competitionId: competition.id,
+          competitionId,
         },
         {
-          $set: {
-            competitionId: competition.id,
-
-            name: competition.name,
-
-            type: competition.type,
-
-            region: competition.region,
-
-            priority: competition.priority,
-
-            apiFootballLeagueId: data.apiFootballLeagueId,
-
-            season: data.season,
-
-            seasonStartDate: data.seasonStartDate,
-
-            seasonEndDate: data.seasonEndDate,
-
-            status: data.status,
-
-            lastFixtureDate: data.lastFixtureDate,
-
-            nextFixtureDate: data.nextFixtureDate,
-
-            lastUpdatedAt: new Date(),
-          },
+          $set: update,
         },
         {
           upsert: true,
@@ -187,7 +233,7 @@ export class ActiveCompetitionService {
   }
 
   // ============================================================
-  // STATUS CALCULATION
+  // STATUS
   // ============================================================
 
   calculateStatus(
@@ -205,7 +251,7 @@ export class ActiveCompetitionService {
       return ActiveCompetitionStatus.FINISHED;
     }
 
-    if (nextFixtureDate || lastFixtureDate) {
+    if (nextFixtureDate && nextFixtureDate >= now) {
       return ActiveCompetitionStatus.ACTIVE;
     }
 
@@ -215,6 +261,10 @@ export class ActiveCompetitionService {
       now >= seasonStartDate &&
       now <= seasonEndDate
     ) {
+      return ActiveCompetitionStatus.ACTIVE;
+    }
+
+    if (lastFixtureDate && lastFixtureDate <= now) {
       return ActiveCompetitionStatus.ACTIVE;
     }
 
@@ -259,6 +309,7 @@ export class ActiveCompetitionService {
     competitionId: string,
     data: {
       lastFixtureDate?: Date;
+
       nextFixtureDate?: Date;
     },
   ): Promise<void> {
@@ -274,11 +325,13 @@ export class ActiveCompetitionService {
 
     const now = new Date();
 
-    competition.lastFixtureDate =
-      data.lastFixtureDate ?? competition.lastFixtureDate;
+    if (data.lastFixtureDate !== undefined) {
+      competition.lastFixtureDate = data.lastFixtureDate;
+    }
 
-    competition.nextFixtureDate =
-      data.nextFixtureDate ?? competition.nextFixtureDate;
+    if (data.nextFixtureDate !== undefined) {
+      competition.nextFixtureDate = data.nextFixtureDate;
+    }
 
     competition.status = this.calculateStatus(
       competition.seasonStartDate,
@@ -306,6 +359,7 @@ export class ActiveCompetitionService {
         {
           $set: {
             status: ActiveCompetitionStatus.INACTIVE,
+
             lastUpdatedAt: new Date(),
           },
         },
@@ -326,6 +380,7 @@ export class ActiveCompetitionService {
         {
           $set: {
             status: ActiveCompetitionStatus.FINISHED,
+
             lastUpdatedAt: new Date(),
           },
         },
@@ -334,16 +389,18 @@ export class ActiveCompetitionService {
   }
 
   // ============================================================
-  // CLEAR REGISTRY
+  // REMOVE MISSING COMPETITIONS
   // ============================================================
 
   async removeMissingCompetitions(
     supportedCompetitionIds: string[],
   ): Promise<number> {
+    const ids = supportedCompetitionIds.map((id) => id.trim().toLowerCase());
+
     const result = await this.activeCompetitionModel
       .deleteMany({
         competitionId: {
-          $nin: supportedCompetitionIds.map((id) => id.trim().toLowerCase()),
+          $nin: ids,
         },
       })
       .exec();

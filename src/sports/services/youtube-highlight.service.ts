@@ -4,142 +4,188 @@ import { InjectModel } from '@nestjs/mongoose';
 
 import { Model } from 'mongoose';
 
-import { YoutubeService } from '../providers/youtube.service';
+import {
+  FootballDataMatch,
+  FootballDataMatchDocument,
+} from '../schemas/football-data/football-data-match.schema';
 
 import {
-  YoutubeHighlight,
-  YoutubeHighlightDocument,
+  ApiFootballFixture,
+  ApiFootballFixtureDocument,
+} from '../schemas/api-football/api-football-fixture.schema';
+
+import {
+  YouTubeHighlight,
+  YouTubeHighlightDocument,
 } from '../schemas/youtube-highlight.schema';
 
+import { YoutubeService } from '../providers/youtube.service';
+
 import { YoutubeHighlightStatus } from '../interfaces/youtube-highlight.interface';
+
+import { SPORTS_DATA_COLLECTION_CONFIG } from '../config/sports-data-collection.config';
+
+interface MatchInfo {
+  fixtureId: string;
+  competitionId?: string;
+  homeTeamId?: number;
+  awayTeamId?: number;
+  homeTeam: string;
+  awayTeam: string;
+  date: Date;
+}
 
 @Injectable()
 export class YoutubeHighlightService {
   private readonly logger = new Logger(YoutubeHighlightService.name);
 
-  private readonly maxRetryCount = 3;
-
-  private readonly retryDelayMinutes = 20;
+  private readonly config = SPORTS_DATA_COLLECTION_CONFIG.YOUTUBE;
 
   constructor(
     private readonly youtubeService: YoutubeService,
 
-    @InjectModel(YoutubeHighlight.name)
-    private readonly highlightModel: Model<YoutubeHighlightDocument>,
+    @InjectModel(ApiFootballFixture.name)
+    private readonly apiFootballFixtureModel: Model<ApiFootballFixtureDocument>,
+
+    @InjectModel(FootballDataMatch.name)
+    private readonly footballDataMatchModel: Model<FootballDataMatchDocument>,
+
+    @InjectModel(YouTubeHighlight.name)
+    private readonly highlightModel: Model<YouTubeHighlightDocument>,
   ) {}
 
-  // ============================================================
-  // QUEUE MATCH
-  // ============================================================
-
-  async queueHighlight(data: {
-    fixtureId: string;
-    competitionId?: string;
-    homeTeam: string;
-    awayTeam: string;
-  }): Promise<YoutubeHighlightDocument> {
+  async queueFixture(
+    fixtureId: number,
+    competitionId?: string,
+  ): Promise<YouTubeHighlightDocument | null> {
     const existing = await this.highlightModel
       .findOne({
-        fixtureId: data.fixtureId,
+        fixtureId: String(fixtureId),
       })
       .exec();
 
-    if (existing) {
+    if (
+      existing &&
+      (existing.status === YoutubeHighlightStatus.FOUND ||
+        existing.status === YoutubeHighlightStatus.SEARCHING)
+    ) {
       return existing;
     }
 
-    return this.highlightModel.create({
-      fixtureId: data.fixtureId,
+    const match = await this.getMatchInfo(String(fixtureId));
 
-      competitionId: data.competitionId,
+    if (!match) {
+      return null;
+    }
 
-      homeTeam: data.homeTeam,
-
-      awayTeam: data.awayTeam,
-
-      status: YoutubeHighlightStatus.PENDING,
-
-      retryCount: 0,
-    });
-  }
-
-  // ============================================================
-  // PROCESS NEXT
-  // ============================================================
-
-  async processNext(): Promise<boolean> {
-    const job = await this.highlightModel
+    return this.highlightModel
       .findOneAndUpdate(
         {
-          status: {
-            $in: [YoutubeHighlightStatus.PENDING, YoutubeHighlightStatus.RETRY],
-          },
-
-          $or: [
-            {
-              nextRetryAt: {
-                $exists: false,
-              },
-            },
-            {
-              nextRetryAt: {
-                $lte: new Date(),
-              },
-            },
-          ],
+          fixtureId: String(fixtureId),
         },
         {
-          $set: {
-            status: YoutubeHighlightStatus.SEARCHING,
-
-            searchedAt: new Date(),
-
-            error: undefined,
+          $setOnInsert: {
+            fixtureId: String(fixtureId),
+            competitionId: competitionId ?? match.competitionId,
+            homeTeam: match.homeTeam,
+            awayTeam: match.awayTeam,
+            status: YoutubeHighlightStatus.PENDING,
+            retryCount: 0,
           },
         },
         {
-          sort: {
-            createdAt: 1,
-          },
-
-          returnDocument: 'after',
+          upsert: true,
+          new: true,
         },
       )
       .exec();
+  }
 
-    if (!job) {
-      return false;
-    }
+  async processPending(limit = 1): Promise<number> {
+    let processed = 0;
 
-    try {
-      const result = await this.youtubeService.findHighlight(
-        job.homeTeam,
-        job.awayTeam,
-      );
+    for (let index = 0; index < limit; index += 1) {
+      const job = await this.highlightModel
+        .findOneAndUpdate(
+          {
+            status: {
+              $in: [
+                YoutubeHighlightStatus.PENDING,
+                YoutubeHighlightStatus.RETRY,
+              ],
+            },
+            $or: [
+              {
+                nextRetryAt: {
+                  $exists: false,
+                },
+              },
+              {
+                nextRetryAt: {
+                  $lte: new Date(),
+                },
+              },
+            ],
+          },
+          {
+            $set: {
+              status: YoutubeHighlightStatus.SEARCHING,
+              searchedAt: new Date(),
+            },
+            $inc: {
+              retryCount: 1,
+            },
+          },
+          {
+            sort: {
+              createdAt: 1,
+            },
+            new: true,
+          },
+        )
+        .exec();
 
-      if (!result) {
-        await this.handleNotFound(job);
-
-        return true;
+      if (!job) {
+        break;
       }
 
-      await this.highlightModel
-        .updateOne(
+      try {
+        const match = await this.getMatchInfo(job.fixtureId);
+
+        if (!match) {
+          await this.markFailed(job, 'Match data not found');
+
+          continue;
+        }
+
+        const result = await this.youtubeService.findHighlight(
+          match.homeTeam,
+          match.awayTeam,
+          match.date,
+        );
+
+        if (!result) {
+          await this.scheduleRetry(job, 'No suitable highlight found');
+
+          continue;
+        }
+
+        await this.highlightModel.updateOne(
           {
             _id: job._id,
           },
           {
             $set: {
-              status: YoutubeHighlightStatus.FOUND,
+              competitionId: match.competitionId ?? job.competitionId,
+
+              homeTeam: match.homeTeam,
+              awayTeam: match.awayTeam,
 
               videoId: result.videoId,
-
               videoUrl: result.videoUrl,
-
               title: result.title,
 
               channelId: result.channelId,
-
               channelTitle: result.channelTitle,
 
               publishedAt: result.publishedAt
@@ -148,175 +194,184 @@ export class YoutubeHighlightService {
 
               thumbnailUrl: result.thumbnailUrl,
 
-              searchedAt: new Date(),
+              status: YoutubeHighlightStatus.FOUND,
 
-              nextRetryAt: undefined,
-
+              nextRetryAt: null,
               error: undefined,
+
+              payload: result as unknown as Record<string, unknown>,
             },
           },
-        )
-        .exec();
+        );
 
-      return true;
-    } catch (error) {
-      await this.handleError(job, error);
+        processed += 1;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
 
-      return true;
+        await this.scheduleRetry(job, message);
+      }
     }
+
+    return processed;
   }
 
-  // ============================================================
-  // NOT FOUND
-  // ============================================================
+  async getRemainingDailyQuota(): Promise<number> {
+    return (await this.getDailyUsedRequests()) >= this.config.dailyRequestLimit
+      ? 0
+      : this.config.dailyRequestLimit - (await this.getDailyUsedRequests());
+  }
 
-  private async handleNotFound(job: YoutubeHighlightDocument): Promise<void> {
-    const nextRetryCount = job.retryCount + 1;
+  private async getDailyUsedRequests(): Promise<number> {
+    const start = this.getStartOfWATDay();
 
-    if (nextRetryCount >= this.maxRetryCount) {
-      await this.highlightModel
-        .updateOne(
-          {
-            _id: job._id,
-          },
-          {
-            $set: {
-              status: YoutubeHighlightStatus.NOT_FOUND,
+    return this.highlightModel.countDocuments({
+      searchedAt: {
+        $gte: start,
+      },
+    });
+  }
 
-              retryCount: nextRetryCount,
+  private async getMatchInfo(fixtureId: string): Promise<MatchInfo | null> {
+    const numericFixtureId = Number(fixtureId);
 
-              searchedAt: new Date(),
-
-              nextRetryAt: undefined,
-            },
-          },
-        )
+    if (Number.isInteger(numericFixtureId)) {
+      const fixture = await this.apiFootballFixtureModel
+        .findOne({
+          fixtureId: numericFixtureId,
+        })
+        .lean()
         .exec();
 
-      return;
+      if (fixture) {
+        const payload = fixture.payload as any;
+
+        const home = payload?.teams?.home;
+        const away = payload?.teams?.away;
+
+        const dateValue = payload?.fixture?.date ?? fixture.fixtureDate;
+
+        if (home?.name && away?.name && dateValue) {
+          return {
+            fixtureId: String(numericFixtureId),
+            competitionId:
+              fixture.leagueId !== undefined
+                ? String(fixture.leagueId)
+                : undefined,
+            homeTeamId: typeof home.id === 'number' ? home.id : undefined,
+            awayTeamId: typeof away.id === 'number' ? away.id : undefined,
+            homeTeam: home.name,
+            awayTeam: away.name,
+            date: new Date(dateValue),
+          };
+        }
+      }
     }
 
-    await this.highlightModel
-      .updateOne(
-        {
-          _id: job._id,
-        },
-        {
-          $set: {
-            status: YoutubeHighlightStatus.RETRY,
+    if (!Number.isInteger(numericFixtureId)) {
+      return null;
+    }
 
-            retryCount: nextRetryCount,
-
-            searchedAt: new Date(),
-
-            nextRetryAt: new Date(
-              Date.now() + this.retryDelayMinutes * 60 * 1000,
-            ),
-          },
-        },
-      )
+    const footballDataMatch = await this.footballDataMatchModel
+      .findOne({
+        matchId: numericFixtureId,
+      })
+      .lean()
       .exec();
+
+    if (!footballDataMatch) {
+      return null;
+    }
+
+    const payload = footballDataMatch.payload as any;
+
+    const homeTeam =
+      payload?.homeTeam?.name ?? `Team ${footballDataMatch.homeTeamId}`;
+
+    const awayTeam =
+      payload?.awayTeam?.name ?? `Team ${footballDataMatch.awayTeamId}`;
+
+    return {
+      fixtureId: String(footballDataMatch.matchId),
+      competitionId: footballDataMatch.competitionCode,
+      homeTeamId: footballDataMatch.homeTeamId || undefined,
+      awayTeamId: footballDataMatch.awayTeamId || undefined,
+      homeTeam,
+      awayTeam,
+      date: new Date(footballDataMatch.utcDate),
+    };
   }
 
-  // ============================================================
-  // ERROR
-  // ============================================================
-
-  private async handleError(
-    job: YoutubeHighlightDocument,
-    error: unknown,
+  private async scheduleRetry(
+    job: YouTubeHighlightDocument,
+    reason: string,
   ): Promise<void> {
-    const message = error instanceof Error ? error.message : String(error);
+    const maxAttempts = this.config.queue.maxAttempts;
 
-    const nextRetryCount = job.retryCount + 1;
+    const retryDelayMinutes = this.config.queue.retryDelayMinutes;
 
-    if (nextRetryCount >= this.maxRetryCount) {
-      await this.highlightModel
-        .updateOne(
-          {
-            _id: job._id,
-          },
-          {
-            $set: {
-              status: YoutubeHighlightStatus.SKIPPED,
-
-              retryCount: nextRetryCount,
-
-              searchedAt: new Date(),
-
-              error: message,
-
-              nextRetryAt: undefined,
-            },
-          },
-        )
-        .exec();
-
-      this.logger.error(
-        `YouTube search permanently skipped for ${job.fixtureId}: ${message}`,
-      );
-
+    if (job.retryCount >= maxAttempts) {
+      await this.markFailed(job, reason);
       return;
     }
 
-    await this.highlightModel
-      .updateOne(
-        {
-          _id: job._id,
+    await this.highlightModel.updateOne(
+      {
+        _id: job._id,
+      },
+      {
+        $set: {
+          status: YoutubeHighlightStatus.RETRY,
+
+          nextRetryAt: new Date(Date.now() + retryDelayMinutes * 60_000),
+
+          error: reason,
         },
-        {
-          $set: {
-            status: YoutubeHighlightStatus.RETRY,
-
-            retryCount: nextRetryCount,
-
-            searchedAt: new Date(),
-
-            nextRetryAt: new Date(
-              Date.now() + this.retryDelayMinutes * 60 * 1000,
-            ),
-
-            error: message,
-          },
-        },
-      )
-      .exec();
+      },
+    );
   }
 
-  // ============================================================
-  // READ
-  // ============================================================
+  private async markFailed(
+    job: YouTubeHighlightDocument,
+    reason: string,
+  ): Promise<void> {
+    await this.highlightModel.updateOne(
+      {
+        _id: job._id,
+      },
+      {
+        $set: {
+          status: YoutubeHighlightStatus.FAILED,
 
-  async getByFixtureId(
-    fixtureId: string,
-  ): Promise<YoutubeHighlightDocument | null> {
-    return this.highlightModel
-      .findOne({
-        fixtureId,
-      })
-      .lean()
-      .exec();
-  }
+          error: reason,
 
-  async getFoundByFixtureId(
-    fixtureId: string,
-  ): Promise<YoutubeHighlightDocument | null> {
-    return this.highlightModel
-      .findOne({
-        fixtureId,
-        status: YoutubeHighlightStatus.FOUND,
-      })
-      .lean()
-      .exec();
-  }
-
-  async getPendingCount(): Promise<number> {
-    return this.highlightModel
-      .countDocuments({
-        status: {
-          $in: [YoutubeHighlightStatus.PENDING, YoutubeHighlightStatus.RETRY],
+          nextRetryAt: null,
         },
-      })
-      .exec();
+      },
+    );
+  }
+
+  private getStartOfWATDay(): Date {
+    const now = new Date();
+
+    const formatter = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Africa/Lagos',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    });
+
+    const parts = formatter.formatToParts(now);
+
+    const year = Number(parts.find((part) => part.type === 'year')?.value);
+
+    const month = Number(parts.find((part) => part.type === 'month')?.value);
+
+    const day = Number(parts.find((part) => part.type === 'day')?.value);
+
+    const start = new Date(Date.UTC(year, month - 1, day, 0, 0, 0, 0));
+
+    start.setUTCHours(start.getUTCHours() - 1);
+
+    return start;
   }
 }

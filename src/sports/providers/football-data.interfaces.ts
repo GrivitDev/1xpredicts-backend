@@ -1,25 +1,69 @@
-export interface FootballDataArea {
-  id: number;
+export interface FootballDataCompetitionListResponse {
+  count?: number;
 
-  name: string;
+  competitions?: FootballDataCompetition[];
 
-  code: string | null;
+  filters?: Record<string, unknown>;
 
-  flag: string | null;
+  [key: string]: unknown;
 }
 
-export interface FootballDataSeason {
-  id: number;
+export interface FootballDataMatchListResponse {
+  count?: number;
 
-  startDate: string;
+  matches?: FootballDataMatch[];
 
-  endDate: string;
+  filters?: Record<string, unknown>;
 
-  currentMatchday: number | null;
+  resultSet?: {
+    count?: number;
 
-  winner: FootballDataTeam | null;
+    competitions?: string;
 
-  stages?: string[];
+    first?: string;
+
+    last?: string;
+
+    played?: number;
+
+    wins?: number;
+
+    draws?: number;
+
+    losses?: number;
+
+    goalsFor?: number;
+
+    goalsAgainst?: number;
+  };
+
+  [key: string]: unknown;
+}
+
+export interface FootballDataStandingsResponse {
+  filters?: Record<string, unknown>;
+
+  competition?: FootballDataCompetition;
+
+  season?: FootballDataSeason | null;
+
+  standings?: FootballDataStandingTable[];
+
+  [key: string]: unknown;
+}
+
+export interface FootballDataTeamListResponse {
+  count?: number;
+
+  teams?: FootballDataTeam[];
+
+  filters?: Record<string, unknown>;
+
+  competition?: FootballDataCompetition;
+
+  season?: FootballDataSeason | null;
+
+  [key: string]: unknown;
 }
 
 export interface FootballDataCompetition {
@@ -29,29 +73,105 @@ export interface FootballDataCompetition {
 
   code: string | null;
 
-  type: 'LEAGUE' | 'CUP' | string;
+  type: string;
 
-  emblem: string | null;
+  emblem?: string | null;
 
-  plan?: string;
+  plan?: string | null;
 
-  area: FootballDataArea;
+  currentSeason?: FootballDataSeason | null;
 
-  currentSeason: FootballDataSeason | null;
+  area?: FootballDataArea | null;
 
-  seasons: FootballDataSeason[];
-
-  numberOfAvailableSeasons?: number;
-
-  lastUpdated?: string;
+  [key: string]: unknown;
 }
 
-export interface FootballDataCompetitionListResponse {
-  count: number;
+export interface FootballDataSeason {
+  id: number;
 
-  filters?: Record<string, unknown>;
+  startDate: string;
 
-  competitions: FootballDataCompetition[];
+  endDate: string;
+
+  currentMatchday?: number | null;
+
+  winner?: FootballDataTeam | null;
+
+  [key: string]: unknown;
+}
+
+export interface FootballDataArea {
+  id: number;
+
+  name: string;
+
+  code?: string | null;
+
+  flag?: string | null;
+
+  [key: string]: unknown;
+}
+
+export interface FootballDataMatch {
+  id: number;
+
+  utcDate: string;
+
+  status: string;
+
+  minute?: string | null;
+
+  injuryTime?: number | null;
+
+  attendance?: number | null;
+
+  competition: {
+    id: number;
+
+    name: string;
+
+    code: string | null;
+
+    type: string;
+
+    emblem?: string | null;
+
+    [key: string]: unknown;
+  };
+
+  season?: FootballDataSeason | null;
+
+  homeTeam: FootballDataTeam;
+
+  awayTeam: FootballDataTeam;
+
+  score: FootballDataScore;
+
+  referees?: FootballDataReferee[];
+
+  [key: string]: unknown;
+}
+
+export interface FootballDataScore {
+  winner?: string | null;
+
+  duration?: string | null;
+
+  fullTime?: FootballDataScoreTime;
+
+  halfTime?: FootballDataScoreTime;
+
+  extraTime?: FootballDataScoreTime;
+
+  penalties?: FootballDataScoreTime;
+
+  [key: string]: unknown;
+}
+
+export interface FootballDataScoreTime {
+  home?: number | null;
+
+  away?: number | null;
 }
 
 export interface FootballDataTeam {
@@ -59,11 +179,11 @@ export interface FootballDataTeam {
 
   name: string;
 
-  shortName: string | null;
+  shortName?: string | null;
 
-  tla: string | null;
+  tla?: string | null;
 
-  crest: string | null;
+  crest?: string | null;
 
   address?: string | null;
 
@@ -75,264 +195,31 @@ export interface FootballDataTeam {
 
   venue?: string | null;
 
-  runningCompetitions?: Array<{
-    id: number;
+  runningCompetitions?: FootballDataCompetition[];
 
-    name: string;
-
-    code: string | null;
-
-    type: string;
-
-    emblem: string | null;
-  }>;
-
-  coach?: FootballDataCoach | null;
-
-  squad?: FootballDataSquadMember[];
-
-  staff?: FootballDataStaffMember[];
-
-  lastUpdated?: string;
+  [key: string]: unknown;
 }
 
-export interface FootballDataCoach {
-  id: number | null;
+export interface FootballDataStandingTable {
+  stage?: string | null;
 
-  firstName: string | null;
+  type?: string | null;
 
-  lastName: string | null;
+  group?: string | null;
 
-  name: string | null;
+  table: FootballDataStandingRow[];
 
-  dateOfBirth: string | null;
-
-  nationality: string | null;
-
-  contract?: {
-    start: string | null;
-
-    until: string | null;
-  } | null;
+  [key: string]: unknown;
 }
 
-export interface FootballDataSquadMember {
-  id: number;
-
-  name: string;
-
-  firstName: string | null;
-
-  lastName: string | null;
-
-  dateOfBirth: string | null;
-
-  nationality: string | null;
-
-  position: string | null;
-
-  shirtNumber: number | null;
-
-  lastUpdated?: string;
-}
-
-export interface FootballDataStaffMember extends FootballDataSquadMember {
-  role?: string | null;
-}
-
-export interface FootballDataPlayer {
-  id: number;
-
-  name: string;
-
-  firstName: string | null;
-
-  lastName: string | null;
-
-  dateOfBirth?: string | null;
-
-  nationality?: string | null;
-
-  position?: string | null;
-
-  shirtNumber?: number | null;
-
-  lastUpdated?: string;
-}
-
-export interface FootballDataReferee {
-  id: number;
-
-  name: string;
-
-  type: string | null;
-
-  nationality: string | null;
-}
-
-export interface FootballDataMatchScore {
-  winner: 'HOME_TEAM' | 'AWAY_TEAM' | 'DRAW' | null;
-
-  duration: 'REGULAR' | 'EXTRA_TIME' | 'PENALTY_SHOOTOUT' | string;
-
-  fullTime: {
-    home: number | null;
-
-    away: number | null;
-  };
-
-  halfTime: {
-    home: number | null;
-
-    away: number | null;
-  };
-
-  extraTime: {
-    home: number | null;
-
-    away: number | null;
-  };
-
-  penalties: {
-    home: number | null;
-
-    away: number | null;
-  };
-}
-
-export interface FootballDataGoal {
-  minute: number;
-
-  injuryTime: number | null;
-
-  type: string | null;
-
-  team: FootballDataTeam;
-
-  scorer?: FootballDataPlayer | null;
-
-  assist?: FootballDataPlayer | null;
-
-  score?: {
-    home: number | null;
-
-    away: number | null;
-  } | null;
-}
-
-export interface FootballDataMatch {
-  area: FootballDataArea;
-
-  competition: {
-    id: number;
-
-    name: string;
-
-    code: string | null;
-
-    type: string;
-
-    emblem: string | null;
-  };
-
-  season: FootballDataSeason;
-
-  id: number;
-
-  utcDate: string;
-
-  status:
-    | 'SCHEDULED'
-    | 'TIMED'
-    | 'IN_PLAY'
-    | 'PAUSED'
-    | 'FINISHED'
-    | 'POSTPONED'
-    | 'SUSPENDED'
-    | 'CANCELLED'
-    | string;
-
-  minute: number | null;
-
-  injuryTime: number | null;
-
-  attendance: number | null;
-
-  venue: string | null;
-
-  matchday: number | null;
-
-  stage: string | null;
-
-  group: string | null;
-
-  lastUpdated: string;
-
-  homeTeam: FootballDataTeam;
-
-  awayTeam: FootballDataTeam;
-
-  score: FootballDataMatchScore;
-
-  goals?: FootballDataGoal[];
-
-  penalties?: FootballDataGoal[];
-
-  bookings?: unknown[];
-
-  substitutions?: unknown[];
-
-  odds?: Record<string, unknown> | null;
-
-  referees?: FootballDataReferee[];
-}
-
-export interface FootballDataMatchListResponse {
-  filters: Record<string, unknown>;
-
-  resultSet: {
-    count: number;
-
-    first: string | null;
-
-    last: string | null;
-
-    played: number;
-
-    wins?: number;
-
-    draws?: number;
-
-    losses?: number;
-
-    competitions?: string;
-  };
-
-  competition: FootballDataCompetition;
-
-  matches: FootballDataMatch[];
-}
-
-export interface FootballDataTeamListResponse {
-  count: number;
-
-  filters: Record<string, unknown>;
-
-  competition: FootballDataCompetition;
-
-  season: FootballDataSeason;
-
-  teams: FootballDataTeam[];
-}
-
-export interface FootballDataStandingTeam {
+export interface FootballDataStandingRow {
   position: number;
 
   team: FootballDataTeam;
 
   playedGames: number;
 
-  form: string | null;
+  form?: string | null;
 
   won: number;
 
@@ -347,36 +234,16 @@ export interface FootballDataStandingTeam {
   goalsAgainst: number;
 
   goalDifference: number;
+
+  [key: string]: unknown;
 }
 
-export interface FootballDataStanding {
-  stage: string;
+export interface FootballDataReferee {
+  id?: number;
 
-  type: 'TOTAL' | 'HOME' | 'AWAY' | string;
+  name?: string;
 
-  group: string | null;
+  type?: string;
 
-  table: FootballDataStandingTeam[];
-}
-
-export interface FootballDataStandingsResponse {
-  filters: Record<string, unknown>;
-
-  area: FootballDataArea;
-
-  competition: {
-    id: number;
-
-    name: string;
-
-    code: string | null;
-
-    type: string;
-
-    emblem: string | null;
-  };
-
-  season: FootballDataSeason;
-
-  standings: FootballDataStanding[];
+  nationality?: string;
 }

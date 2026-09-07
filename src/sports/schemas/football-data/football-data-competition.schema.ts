@@ -1,4 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
+
 import { HydratedDocument } from 'mongoose';
 
 export type FootballDataCompetitionDocument =
@@ -9,6 +10,9 @@ export type FootballDataCompetitionDocument =
   collection: 'sports_football_data_competitions',
 })
 export class FootballDataCompetition {
+  /**
+   * Football-Data provider competition ID.
+   */
   @Prop({
     required: true,
     unique: true,
@@ -19,17 +23,26 @@ export class FootballDataCompetition {
   @Prop({
     required: true,
     index: true,
+    trim: true,
+    uppercase: true,
   })
   code!: string;
 
   @Prop({
     required: true,
+    trim: true,
   })
   name!: string;
 
-  @Prop()
+  @Prop({
+    type: String,
+    trim: true,
+  })
   type?: string;
 
+  /**
+   * Complete latest Football-Data competition object.
+   */
   @Prop({
     type: Object,
     required: true,
@@ -38,6 +51,7 @@ export class FootballDataCompetition {
 
   @Prop({
     required: true,
+    type: Date,
     index: true,
   })
   collectedAt!: Date;

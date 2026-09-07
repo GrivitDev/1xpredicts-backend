@@ -1,16 +1,16 @@
 import {
+  BadRequestException,
   Injectable,
   Logger,
   OnModuleInit,
   ServiceUnavailableException,
 } from '@nestjs/common';
 
-import axios, { AxiosError, AxiosInstance, AxiosRequestConfig } from 'axios';
+import axios, { AxiosError, AxiosInstance } from 'axios';
 
 import {
   FootballDataCompetition,
   FootballDataCompetitionListResponse,
-  FootballDataMatch,
   FootballDataMatchListResponse,
   FootballDataStandingsResponse,
   FootballDataTeamListResponse,
@@ -19,6 +19,8 @@ import {
 import { SportsProviderRateLimitService } from '../services/sports-provider-rate-limit.service';
 
 export interface FootballDataMatchQuery {
+  competitions?: string;
+
   dateFrom?: string;
 
   dateTo?: string;
@@ -51,10 +53,13 @@ export class FootballDataService implements OnModuleInit {
   ) {
     this.client = axios.create({
       baseURL: this.baseUrl,
+
       timeout: 15_000,
+
       headers: {
         Accept: 'application/json',
         'X-Unfold-Goals': 'true',
+
         ...(this.apiKey
           ? {
               'X-Auth-Token': this.apiKey,
@@ -75,36 +80,53 @@ export class FootballDataService implements OnModuleInit {
   }
 
   // ============================================================
-  // AVAILABLE COMPETITIONS
+  // COMPETITIONS
   // ============================================================
 
-  async getCompetitions(): Promise<FootballDataCompetition[]> {
-    const data =
-      await this.request<FootballDataCompetitionListResponse>('/competitions');
-
-    return data.competitions ?? [];
+  async getCompetitions(): Promise<FootballDataCompetitionListResponse> {
+    return this.request<FootballDataCompetitionListResponse>('/competitions');
   }
 
-  // ============================================================
-  // COMPETITION
-  // ============================================================
+  async getCompetition(
+    competitionCode: string,
+  ): Promise<FootballDataCompetition> {
+    const code = this.normalizeCompetitionCode(competitionCode);
 
-  async getCompetition(code: string): Promise<FootballDataCompetition> {
-    return this.request<FootballDataCompetition>(
-      `/competitions/${this.normalizeCompetitionCode(code)}`,
-    );
+    return this.request<FootballDataCompetition>(`/competitions/${code}`);
   }
 
   // ============================================================
   // MATCHES
   // ============================================================
 
+  /**
+   * Global matches endpoint.
+   *
+   * This is used for bulk collection across several
+   * Football-Data competitions.
+   */
   async getMatches(
-    code: string,
     query: FootballDataMatchQuery = {},
   ): Promise<FootballDataMatchListResponse> {
+    return this.request<FootballDataMatchListResponse>('/matches', {
+      params: this.cleanQuery(query),
+    });
+  }
+
+  /**
+   * Matches for one competition.
+   *
+   * Kept as a convenience method for competition-scoped
+   * collection where it is preferable to the global endpoint.
+   */
+  async getCompetitionMatches(
+    competitionCode: string,
+    query: Omit<FootballDataMatchQuery, 'competitions'> = {},
+  ): Promise<FootballDataMatchListResponse> {
+    const code = this.normalizeCompetitionCode(competitionCode);
+
     return this.request<FootballDataMatchListResponse>(
-      `/competitions/${this.normalizeCompetitionCode(code)}/matches`,
+      `/competitions/${code}/matches`,
       {
         params: this.cleanQuery(query),
       },
@@ -112,15 +134,40 @@ export class FootballDataService implements OnModuleInit {
   }
 
   // ============================================================
+  // LIVE MATCHES
+  // ============================================================
+
+  async getLiveMatches(
+    competitions?: string[],
+  ): Promise<FootballDataMatchListResponse> {
+    const competitionFilter = this.normalizeCompetitionList(competitions);
+
+    return this.getMatches({
+      ...(competitionFilter
+        ? {
+            competitions: competitionFilter,
+          }
+        : {}),
+
+      status: 'IN_PLAY,PAUSED',
+    });
+  }
+
+  // ============================================================
   // SCHEDULED MATCHES
   // ============================================================
 
   async getScheduledMatches(
-    code: string,
-    query: Omit<FootballDataMatchQuery, 'status'> = {},
+    competitions?: string[],
+    dateFrom?: string,
+    dateTo?: string,
   ): Promise<FootballDataMatchListResponse> {
-    return this.getMatches(code, {
-      ...query,
+    return this.getMatches({
+      competitions: this.normalizeCompetitionList(competitions),
+
+      dateFrom,
+
+      dateTo,
 
       status: 'SCHEDULED,TIMED',
     });
@@ -131,45 +178,19 @@ export class FootballDataService implements OnModuleInit {
   // ============================================================
 
   async getFinishedMatches(
-    code: string,
-    query: Omit<FootballDataMatchQuery, 'status'> = {},
+    competitions?: string[],
+    dateFrom?: string,
+    dateTo?: string,
   ): Promise<FootballDataMatchListResponse> {
-    return this.getMatches(code, {
-      ...query,
+    return this.getMatches({
+      competitions: this.normalizeCompetitionList(competitions),
+
+      dateFrom,
+
+      dateTo,
 
       status: 'FINISHED',
     });
-  }
-
-  // ============================================================
-  // MATCH
-  // ============================================================
-
-  async getMatch(matchId: number): Promise<FootballDataMatch> {
-    this.assertPositiveInteger(matchId, 'matchId');
-
-    return this.request<FootballDataMatch>(`/matches/${matchId}`);
-  }
-
-  // ============================================================
-  // TEAMS
-  // ============================================================
-
-  async getTeams(
-    code: string,
-    season?: number,
-  ): Promise<FootballDataTeamListResponse> {
-    return this.request<FootballDataTeamListResponse>(
-      `/competitions/${this.normalizeCompetitionCode(code)}/teams`,
-      {
-        params:
-          season === undefined
-            ? undefined
-            : {
-                season,
-              },
-      },
-    );
   }
 
   // ============================================================
@@ -177,17 +198,42 @@ export class FootballDataService implements OnModuleInit {
   // ============================================================
 
   async getStandings(
-    code: string,
+    competitionCode: string,
     season?: number,
   ): Promise<FootballDataStandingsResponse> {
+    const code = this.normalizeCompetitionCode(competitionCode);
+
     return this.request<FootballDataStandingsResponse>(
-      `/competitions/${this.normalizeCompetitionCode(code)}/standings`,
+      `/competitions/${code}/standings`,
       {
         params:
           season === undefined
             ? undefined
             : {
-                season,
+                season: this.validatePositiveInteger(season, 'season'),
+              },
+      },
+    );
+  }
+
+  // ============================================================
+  // TEAMS
+  // ============================================================
+
+  async getTeams(
+    competitionCode: string,
+    season?: number,
+  ): Promise<FootballDataTeamListResponse> {
+    const code = this.normalizeCompetitionCode(competitionCode);
+
+    return this.request<FootballDataTeamListResponse>(
+      `/competitions/${code}/teams`,
+      {
+        params:
+          season === undefined
+            ? undefined
+            : {
+                season: this.validatePositiveInteger(season, 'season'),
               },
       },
     );
@@ -199,7 +245,9 @@ export class FootballDataService implements OnModuleInit {
 
   private async request<T>(
     path: string,
-    config: AxiosRequestConfig = {},
+    config: {
+      params?: Record<string, string | number>;
+    } = {},
   ): Promise<T> {
     if (!this.apiKey) {
       throw new ServiceUnavailableException(
@@ -213,7 +261,7 @@ export class FootballDataService implements OnModuleInit {
 
         return response.data;
       } catch (error) {
-        this.handleRequestError(error, path);
+        return this.handleRequestError(error, path);
       }
     });
   }
@@ -227,62 +275,113 @@ export class FootballDataService implements OnModuleInit {
   ): Record<string, string | number> {
     const params: Record<string, string | number> = {};
 
+    if (query.competitions?.trim()) {
+      const competitions = this.normalizeCompetitionList(
+        query.competitions.split(','),
+      );
+
+      if (competitions) {
+        params.competitions = competitions;
+      }
+    }
+
     if (query.dateFrom) {
+      this.validateDate(query.dateFrom, 'dateFrom');
+
       params.dateFrom = query.dateFrom;
     }
 
     if (query.dateTo) {
+      this.validateDate(query.dateTo, 'dateTo');
+
       params.dateTo = query.dateTo;
     }
 
+    if (query.dateFrom && query.dateTo && query.dateFrom > query.dateTo) {
+      throw new BadRequestException('dateFrom cannot be after dateTo');
+    }
+
     if (query.season !== undefined) {
-      params.season = query.season;
+      params.season = this.validatePositiveInteger(query.season, 'season');
     }
 
-    if (query.status) {
-      params.status = query.status;
+    if (query.status?.trim()) {
+      params.status = query.status.trim().toUpperCase();
     }
 
-    if (query.stage) {
-      params.stage = query.stage;
+    if (query.stage?.trim()) {
+      params.stage = query.stage.trim().toUpperCase();
     }
 
-    if (query.group) {
-      params.group = query.group;
+    if (query.group?.trim()) {
+      params.group = query.group.trim();
     }
 
     if (query.matchday !== undefined) {
-      params.matchday = query.matchday;
+      params.matchday = this.validatePositiveInteger(
+        query.matchday,
+        'matchday',
+      );
     }
 
     if (query.limit !== undefined) {
-      params.limit = query.limit;
+      params.limit = this.validatePositiveInteger(query.limit, 'limit');
     }
 
     return params;
   }
 
   // ============================================================
-  // NORMALIZE COMPETITION CODE
+  // NORMALIZATION
   // ============================================================
 
   private normalizeCompetitionCode(code: string): string {
     const normalized = code.trim().toUpperCase();
 
     if (!normalized) {
-      throw new Error('Football-Data competition code is required');
+      throw new BadRequestException(
+        'Football-Data competition code is required',
+      );
     }
 
     return encodeURIComponent(normalized);
+  }
+
+  private normalizeCompetitionList(
+    competitions?: string[],
+  ): string | undefined {
+    const values = competitions
+      ?.map((competition) => competition.trim().toUpperCase())
+      .filter(Boolean);
+
+    if (!values?.length) {
+      return undefined;
+    }
+
+    return values.join(',');
   }
 
   // ============================================================
   // VALIDATION
   // ============================================================
 
-  private assertPositiveInteger(value: number, field: string): void {
+  private validatePositiveInteger(value: number, field: string): number {
     if (!Number.isInteger(value) || value <= 0) {
-      throw new Error(`${field} must be a positive integer`);
+      throw new BadRequestException(`${field} must be a positive integer`);
+    }
+
+    return value;
+  }
+
+  private validateDate(value: string, field: string): void {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+      throw new BadRequestException(`${field} must be a valid YYYY-MM-DD date`);
+    }
+
+    const date = new Date(`${value}T00:00:00.000Z`);
+
+    if (Number.isNaN(date.getTime())) {
+      throw new BadRequestException(`${field} must be a valid YYYY-MM-DD date`);
     }
   }
 

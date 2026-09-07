@@ -1,6 +1,6 @@
 export enum CompetitionPriority {
   /**
-   * Core global / Nigerian betting competitions.
+   * Core global and Nigerian betting competitions.
    */
   ELITE = 'ELITE',
 
@@ -15,7 +15,8 @@ export enum CompetitionPriority {
   REGIONAL = 'REGIONAL',
 
   /**
-   * Supported but should receive conservative API resources.
+   * Supported competitions that should receive
+   * conservative collection resources.
    */
   SELECTIVE = 'SELECTIVE',
 }

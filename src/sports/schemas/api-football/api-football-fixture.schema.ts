@@ -9,6 +9,10 @@ export type ApiFootballFixtureDocument = HydratedDocument<ApiFootballFixture>;
   collection: 'sports_api_football_fixtures',
 })
 export class ApiFootballFixture {
+  /**
+   * API-Football fixture ID is the permanent provider identity
+   * of this match.
+   */
   @Prop({
     required: true,
     unique: true,
@@ -53,12 +57,18 @@ export class ApiFootballFixture {
   })
   awayTeamId!: number;
 
+  /**
+   * Complete latest API-Football fixture object.
+   */
   @Prop({
     type: Object,
     required: true,
   })
   payload!: Record<string, unknown>;
 
+  /**
+   * Last time this current fixture record was collected.
+   */
   @Prop({
     required: true,
     type: Date,
@@ -77,7 +87,24 @@ ApiFootballFixtureSchema.index({
 });
 
 ApiFootballFixtureSchema.index({
+  leagueId: 1,
+  season: 1,
+  statusShort: 1,
+  fixtureDate: 1,
+});
+
+ApiFootballFixtureSchema.index({
   homeTeamId: 1,
+  awayTeamId: 1,
+  fixtureDate: -1,
+});
+
+ApiFootballFixtureSchema.index({
+  homeTeamId: 1,
+  fixtureDate: -1,
+});
+
+ApiFootballFixtureSchema.index({
   awayTeamId: 1,
   fixtureDate: -1,
 });

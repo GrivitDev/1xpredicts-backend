@@ -2,8 +2,13 @@ import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 
 import { HydratedDocument } from 'mongoose';
 
-import { ActiveCompetitionStatus } from '../interfaces/active-competition.interface';
 import { CompetitionPriority } from '../enums/competition-priority.enum';
+
+import { ActiveCompetitionStatus } from '../interfaces/active-competition.interface';
+
+import { CompetitionRegion } from '../enums/competition-region.enum';
+
+import { CompetitionType } from '../enums/competition-type.enum';
 
 export type ActiveCompetitionDocument = HydratedDocument<ActiveCompetition>;
 
@@ -16,6 +21,8 @@ export class ActiveCompetition {
     required: true,
     unique: true,
     index: true,
+    trim: true,
+    lowercase: true,
   })
   competitionId!: string;
 
@@ -27,15 +34,19 @@ export class ActiveCompetition {
 
   @Prop({
     required: true,
+    type: String,
+    enum: Object.values(CompetitionType),
     index: true,
   })
-  type!: string;
+  type!: CompetitionType;
 
   @Prop({
     required: true,
+    type: String,
+    enum: Object.values(CompetitionRegion),
     index: true,
   })
-  region!: string;
+  region!: CompetitionRegion;
 
   @Prop({
     required: true,
@@ -52,38 +63,52 @@ export class ActiveCompetition {
   apiFootballLeagueId?: number;
 
   @Prop({
-    type: Number,
+    type: String,
+    trim: true,
+    uppercase: true,
     index: true,
   })
-  sportsDbLeagueId?: number;
+  footballDataCode?: string;
 
   @Prop({
     type: String,
+    trim: true,
     index: true,
   })
-  season?: string;
+  oddsApiSportKey?: string;
+
+  @Prop({
+    type: Number,
+    index: true,
+  })
+  season?: number;
 
   @Prop({
     type: Date,
+    index: true,
   })
   seasonStartDate?: Date;
 
   @Prop({
     type: Date,
+    index: true,
   })
   seasonEndDate?: Date;
 
   @Prop({
     type: Date,
+    index: true,
   })
   lastFixtureDate?: Date;
 
   @Prop({
     type: Date,
+    index: true,
   })
   nextFixtureDate?: Date;
 
   @Prop({
+    required: true,
     type: String,
     enum: Object.values(ActiveCompetitionStatus),
     default: ActiveCompetitionStatus.INACTIVE,
@@ -91,11 +116,40 @@ export class ActiveCompetition {
   })
   status!: ActiveCompetitionStatus;
 
+  /**
+   * Complete latest API-Football league discovery record.
+   */
   @Prop({
-    type: Date,
+    type: Object,
   })
-  lastUpdatedAt?: Date;
+  apiFootballPayload?: Record<string, unknown>;
+
+  @Prop({
+    required: true,
+    type: Date,
+    index: true,
+  })
+  lastUpdatedAt!: Date;
 }
 
 export const ActiveCompetitionSchema =
   SchemaFactory.createForClass(ActiveCompetition);
+
+ActiveCompetitionSchema.index({
+  status: 1,
+  priority: 1,
+  nextFixtureDate: 1,
+});
+
+ActiveCompetitionSchema.index({
+  apiFootballLeagueId: 1,
+  season: 1,
+});
+
+ActiveCompetitionSchema.index({
+  footballDataCode: 1,
+});
+
+ActiveCompetitionSchema.index({
+  oddsApiSportKey: 1,
+});

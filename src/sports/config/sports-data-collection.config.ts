@@ -1,5 +1,3 @@
-import { CollectionFrequency } from '../enums/collection-frequency.enum';
-
 export const SPORTS_DATA_COLLECTION_CONFIG = {
   // ==========================================================
   // FOOTBALL-DATA
@@ -8,56 +6,12 @@ export const SPORTS_DATA_COLLECTION_CONFIG = {
   FOOTBALL_DATA: {
     enabled: true,
 
-    competitions: {
-      frequency: CollectionFrequency.DAILY,
-
-      seasonRefresh: CollectionFrequency.WEEKLY,
-
-      standings: CollectionFrequency.DAILY,
-
-      fixtures: CollectionFrequency.DAILY,
-
-      results: CollectionFrequency.DAILY,
-    },
-
     rateLimit: {
       minIntervalSeconds: 60,
     },
 
-    schedule: {
-      hour: 23,
-      minute: 0,
-    },
-  },
-
-  // ==========================================================
-  // THE SPORTS DB
-  // ==========================================================
-
-  THESPORTSDB: {
-    enabled: true,
-
-    leagueData: CollectionFrequency.WEEKLY,
-
-    seasonData: CollectionFrequency.WEEKLY,
-
-    events: CollectionFrequency.DAILY,
-
-    completedMatchData: CollectionFrequency.TARGETED,
-
-    teamData: CollectionFrequency.WEEKLY,
-
-    playerData: CollectionFrequency.WEEKLY,
-
-    venueData: CollectionFrequency.WEEKLY,
-
-    rateLimit: {
-      minIntervalSeconds: 60,
-    },
-
-    schedule: {
-      hour: 23,
-      minute: 30,
+    live: {
+      intervalMinutes: 5,
     },
   },
 
@@ -68,29 +22,76 @@ export const SPORTS_DATA_COLLECTION_CONFIG = {
   API_FOOTBALL: {
     enabled: true,
 
-    // Maximum actual API requests per UTC day.
-    // Retries also consume this quota.
+    /**
+     * Application-level maximum number of API-Football
+     * requests allowed in one UTC day.
+     *
+     * Retries consume the same quota as normal requests.
+     */
     dailyRequestLimit: 95,
 
     rateLimit: {
-      // One actual request every 60 seconds.
-      // Retries use the same limit.
+      /**
+       * Never allow two API-Football requests closer
+       * than 60 seconds apart.
+       *
+       * This also applies to retries.
+       */
       minIntervalSeconds: 60,
     },
 
-    fixtures: CollectionFrequency.DAILY,
+    /**
+     * League discovery / season maintenance.
+     */
+    discovery: {
+      intervalDays: 30,
+    },
 
-    standings: CollectionFrequency.TARGETED,
+    /**
+     * Startup flow:
+     *
+     * discover competitions first,
+     * then wait before building the initial
+     * fixture collection queue.
+     */
+    startup: {
+      initialFixtureDelayMinutes: 10,
+    },
 
-    teamStatistics: CollectionFrequency.TARGETED,
+    /**
+     * Daily API-Football collection window.
+     *
+     * Africa/Lagos:
+     * 01:00 - 07:00
+     */
+    collectionWindow: {
+      startHour: 1,
+      endHour: 7,
+    },
 
-    injuries: CollectionFrequency.TARGETED,
+    /**
+     * One collection pass per day.
+     *
+     * The provider limiter, not an artificial five-minute
+     * delay, controls the actual request spacing.
+     */
+    collectionPasses: 1,
 
-    predictions: CollectionFrequency.TARGETED,
+    /**
+     * Queue scheduling interval.
+     *
+     * One minute matches the global provider rule of
+     * one request every 60 seconds.
+     */
+    slotIntervalMinutes: 1,
 
     queue: {
       enabled: true,
 
+      /**
+       * Maximum attempts for one queued request,
+       * including the initial attempt.
+       */
       maxAttempts: 3,
 
       staleProcessingMinutes: 30,
@@ -106,25 +107,34 @@ export const SPORTS_DATA_COLLECTION_CONFIG = {
   ODDS_API: {
     enabled: true,
 
-    // The Odds API is controlled by a monthly request budget.
-    // Keep this below the provider's 500-request monthly limit.
-    //
-    // Every normal request and every retry consumes one request.
+    /**
+     * Application-level monthly request budget.
+     */
     monthlyRequestLimit: 450,
 
     rateLimit: {
-      // One actual request every 60 seconds.
-      // Retries use the same limit.
       minIntervalSeconds: 60,
     },
 
-    sports: CollectionFrequency.WEEKLY,
+    /**
+     * Refresh the provider sport catalogue periodically.
+     */
+    sportsRefreshDays: 30,
 
-    events: CollectionFrequency.DAILY,
+    oddsCollection: {
+      /**
+       * Odds are collected from sport keys selected from
+       * matches already stored in MongoDB.
+       */
+      daily: true,
 
-    scores: CollectionFrequency.TARGETED,
-
-    odds: CollectionFrequency.TARGETED,
+      /**
+       * Scheduler/queue timing is one minute because
+       * the provider limiter enforces the real 60-second
+       * outbound request rule.
+       */
+      slotIntervalMinutes: 1,
+    },
   },
 
   // ==========================================================
@@ -134,13 +144,14 @@ export const SPORTS_DATA_COLLECTION_CONFIG = {
   YOUTUBE: {
     enabled: true,
 
-    // Maximum actual API requests per UTC day.
-    // Retries also consume this quota.
+    /**
+     * Internal daily request/search safety budget.
+     *
+     * The collector deliberately minimizes search calls.
+     */
     dailyRequestLimit: 30,
 
     rateLimit: {
-      // One actual request every 60 seconds.
-      // Retries use the same limit.
       minIntervalSeconds: 60,
     },
 

@@ -8,8 +8,6 @@ import { SupportedCompetitionService } from './supported-competition.service';
 
 import { ActiveCompetitionService } from './active-competition.service';
 
-import { SupportedCompetitionConfig } from '../interfaces/supported-competition-config.interface';
-
 import { ActiveCompetitionStatus } from '../interfaces/active-competition.interface';
 
 @Injectable()
@@ -20,7 +18,9 @@ export class ApiFootballActiveCompetitionService {
 
   constructor(
     private readonly apiFootballService: ApiFootballService,
+
     private readonly supportedCompetitionService: SupportedCompetitionService,
+
     private readonly activeCompetitionService: ActiveCompetitionService,
   ) {}
 
@@ -30,22 +30,28 @@ export class ApiFootballActiveCompetitionService {
     updated: number;
     skipped: number;
   }> {
-    const supportedCompetitions = this.supportedCompetitionService.getEnabled();
+    const supportedCompetitions =
+      this.supportedCompetitionService.getWithApiFootball();
 
-    const apiFootballLeagues =
-      await this.apiFootballService.getCurrentLeagues();
+    const response = await this.apiFootballService.getCurrentLeagues();
+
+    const apiFootballLeagues = response.response ?? [];
 
     const supportedByNameAndCountry = new Map<
       string,
-      SupportedCompetitionConfig
+      (typeof supportedCompetitions)[number]
     >();
 
-    const supportedByName = new Map<string, SupportedCompetitionConfig>();
+    const supportedByName = new Map<
+      string,
+      (typeof supportedCompetitions)[number]
+    >();
 
     for (const competition of supportedCompetitions) {
-      const configuredName =
-        competition.providers.apiFootballName?.trim() ||
-        competition.name.trim();
+      const configuredName = competition.providers.apiFootballName?.trim();
+
+      const configuredCountry =
+        competition.providers.apiFootballCountry?.trim();
 
       if (!configuredName) {
         continue;
@@ -53,10 +59,9 @@ export class ApiFootballActiveCompetitionService {
 
       const normalizedName = this.normalizeName(configuredName);
 
-      supportedByName.set(normalizedName, competition);
-
-      const configuredCountry =
-        competition.providers.apiFootballCountry?.trim();
+      if (!supportedByName.has(normalizedName)) {
+        supportedByName.set(normalizedName, competition);
+      }
 
       if (configuredCountry) {
         supportedByNameAndCountry.set(
@@ -77,12 +82,8 @@ export class ApiFootballActiveCompetitionService {
 
       const countryName = providerLeague.country?.name;
 
-      if (
-        leagueId === undefined ||
-        !leagueName ||
-        leagueName.trim().length === 0
-      ) {
-        skipped++;
+      if (typeof leagueId !== 'number' || !leagueName?.trim()) {
+        skipped += 1;
         continue;
       }
 
@@ -101,31 +102,57 @@ export class ApiFootballActiveCompetitionService {
 
       const currentSeason = this.getCurrentSeason(providerLeague.seasons);
 
-      if (!currentSeason?.year) {
-        skipped++;
+      if (
+        currentSeason?.year === undefined ||
+        !Number.isInteger(currentSeason.year)
+      ) {
+        skipped += 1;
 
         this.logger.warn(
-          `No current season found for supported API-Football competition "${leagueName}" (${leagueId}).`,
+          `No valid current season found for "${leagueName}" (${leagueId})`,
         );
 
         continue;
       }
 
-      matched++;
+      const seasonStartDate = this.parseDate(currentSeason.start);
+
+      const seasonEndDate = this.parseDate(currentSeason.end);
+
+      const status = this.calculateStatus(seasonStartDate, seasonEndDate);
+
+      matched += 1;
 
       await this.activeCompetitionService.upsert(competition, {
         apiFootballLeagueId: leagueId,
-        season: String(currentSeason.year),
-        seasonStartDate: this.parseDate(currentSeason.start),
-        seasonEndDate: this.parseDate(currentSeason.end),
-        status: ActiveCompetitionStatus.UPCOMING,
+
+        footballDataCode: competition.providers.footballDataCode,
+
+        oddsApiSportKey: competition.providers.oddsApiSportKey,
+
+        season: currentSeason.year,
+
+        seasonStartDate,
+
+        seasonEndDate,
+
+        status,
+
+        apiFootballPayload: providerLeague as unknown as Record<
+          string,
+          unknown
+        >,
       });
 
-      updated++;
+      updated += 1;
     }
 
     this.logger.log(
-      `API-Football competition discovery completed: discovered=${apiFootballLeagues.length}, matched=${matched}, updated=${updated}, skipped=${skipped}`,
+      `API-Football competition discovery completed: ` +
+        `discovered=${apiFootballLeagues.length}, ` +
+        `matched=${matched}, ` +
+        `updated=${updated}, ` +
+        `skipped=${skipped}`,
     );
 
     return {
@@ -146,9 +173,36 @@ export class ApiFootballActiveCompetitionService {
     return (
       seasons.find((season) => season.current === true) ??
       seasons
-        .filter((season) => typeof season.year === 'number')
+        .filter(
+          (season) =>
+            typeof season.year === 'number' && Number.isInteger(season.year),
+        )
         .sort((a, b) => (b.year ?? 0) - (a.year ?? 0))[0]
     );
+  }
+
+  private calculateStatus(
+    seasonStartDate?: Date,
+    seasonEndDate?: Date,
+    now = new Date(),
+  ): ActiveCompetitionStatus {
+    if (seasonStartDate && now < seasonStartDate) {
+      return ActiveCompetitionStatus.UPCOMING;
+    }
+
+    if (seasonEndDate && now > seasonEndDate) {
+      return ActiveCompetitionStatus.FINISHED;
+    }
+
+    if (
+      seasonStartDate &&
+      now >= seasonStartDate &&
+      (!seasonEndDate || now <= seasonEndDate)
+    ) {
+      return ActiveCompetitionStatus.ACTIVE;
+    }
+
+    return ActiveCompetitionStatus.INACTIVE;
   }
 
   private parseDate(value?: string | null): Date | undefined {

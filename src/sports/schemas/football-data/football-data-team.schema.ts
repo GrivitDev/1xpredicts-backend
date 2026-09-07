@@ -1,4 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
+
 import { HydratedDocument } from 'mongoose';
 
 export type FootballDataTeamDocument = HydratedDocument<FootballDataTeam>;
@@ -8,6 +9,14 @@ export type FootballDataTeamDocument = HydratedDocument<FootballDataTeam>;
   collection: 'sports_football_data_teams',
 })
 export class FootballDataTeam {
+  /**
+   * Football-Data provider team ID.
+   *
+   * This is the identity of the team at this provider.
+   *
+   * A team can participate in multiple competitions, but
+   * it remains one provider team record.
+   */
   @Prop({
     required: true,
     unique: true,
@@ -17,21 +26,25 @@ export class FootballDataTeam {
 
   @Prop({
     required: true,
-    index: true,
-  })
-  competitionId!: number;
-
-  @Prop({
-    required: true,
-    index: true,
-  })
-  competitionCode!: string;
-
-  @Prop({
-    required: true,
+    trim: true,
   })
   name!: string;
 
+  @Prop({
+    type: String,
+    trim: true,
+  })
+  shortName?: string;
+
+  @Prop({
+    type: String,
+    trim: true,
+  })
+  tla?: string;
+
+  /**
+   * Complete latest Football-Data team object.
+   */
   @Prop({
     type: Object,
     required: true,
@@ -40,6 +53,7 @@ export class FootballDataTeam {
 
   @Prop({
     required: true,
+    type: Date,
     index: true,
   })
   collectedAt!: Date;
@@ -47,3 +61,7 @@ export class FootballDataTeam {
 
 export const FootballDataTeamSchema =
   SchemaFactory.createForClass(FootballDataTeam);
+
+FootballDataTeamSchema.index({
+  name: 1,
+});

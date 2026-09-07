@@ -6,28 +6,37 @@ export type SportsOddsSnapshotDocument = HydratedDocument<SportsOddsSnapshot>;
 
 @Schema({
   timestamps: true,
-  collection: 'sports_odds_snapshots',
+  collection: 'sports_odds',
 })
 export class SportsOddsSnapshot {
+  /**
+   * Odds API event ID is the identity of the current
+   * odds record.
+   */
   @Prop({
     required: true,
+    unique: true,
     index: true,
+    trim: true,
   })
   eventId!: string;
 
   @Prop({
     required: true,
     index: true,
+    trim: true,
   })
   sportKey!: string;
 
   @Prop({
     required: true,
+    trim: true,
   })
   homeTeam!: string;
 
   @Prop({
     required: true,
+    trim: true,
   })
   awayTeam!: string;
 
@@ -38,6 +47,14 @@ export class SportsOddsSnapshot {
   })
   commenceTime!: Date;
 
+  /**
+   * Complete latest Odds API event object.
+   *
+   * This contains the current bookmakers and markets.
+   *
+   * We do NOT create a separate MongoDB document for each
+   * bookmaker or market.
+   */
   @Prop({
     type: Object,
     required: true,
@@ -56,11 +73,12 @@ export const SportsOddsSnapshotSchema =
   SchemaFactory.createForClass(SportsOddsSnapshot);
 
 SportsOddsSnapshotSchema.index({
-  eventId: 1,
-  collectedAt: -1,
+  sportKey: 1,
+  commenceTime: 1,
 });
 
 SportsOddsSnapshotSchema.index({
-  sportKey: 1,
+  homeTeam: 1,
+  awayTeam: 1,
   commenceTime: 1,
 });

@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Injectable,
   InternalServerErrorException,
+  Logger,
   OnModuleInit,
 } from '@nestjs/common';
 
@@ -12,9 +13,7 @@ import axios, { AxiosError, AxiosInstance } from 'axios';
 import {
   YouTubeSearchOptions,
   YouTubeSearchResponse,
-  YouTubeVideoItem,
   YouTubeVideoResult,
-  YouTubeVideosResponse,
 } from './youtube.interfaces';
 
 import { YOUTUBE_CONFIG } from '../config/youtube.config';
@@ -23,6 +22,8 @@ import { SportsProviderRateLimitService } from '../services/sports-provider-rate
 
 @Injectable()
 export class YoutubeService implements OnModuleInit {
+  private readonly logger = new Logger(YoutubeService.name);
+
   private readonly baseUrl = YOUTUBE_CONFIG.apiBaseUrl;
 
   private http!: AxiosInstance;
@@ -31,12 +32,13 @@ export class YoutubeService implements OnModuleInit {
 
   constructor(
     private readonly configService: ConfigService,
-
     private readonly providerRateLimitService: SportsProviderRateLimitService,
   ) {}
 
   onModuleInit(): void {
-    const apiKey = this.configService.get<string>('YOUTUBE_DATA_API_KEY');
+    const apiKey = this.configService
+      .get<string>('YOUTUBE_DATA_API_KEY')
+      ?.trim();
 
     if (!apiKey) {
       throw new Error('YOUTUBE_DATA_API_KEY is missing');
@@ -53,15 +55,19 @@ export class YoutubeService implements OnModuleInit {
     });
   }
 
-  // ============================================================
-  // SEARCH
-  // ============================================================
-
   async searchVideos(
     options: YouTubeSearchOptions,
-  ): Promise<YouTubeVideoResult[]> {
+  ): Promise<YouTubeSearchResponse> {
     if (!options.query?.trim()) {
       throw new BadRequestException('YouTube search query is required');
+    }
+
+    const maxResults = options.maxResults ?? 5;
+
+    if (!Number.isInteger(maxResults) || maxResults < 1 || maxResults > 50) {
+      throw new BadRequestException(
+        'maxResults must be an integer between 1 and 50',
+      );
     }
 
     const params: Record<string, string | number | boolean> = {
@@ -69,11 +75,15 @@ export class YoutubeService implements OnModuleInit {
       part: 'snippet',
       q: options.query.trim(),
       type: YOUTUBE_CONFIG.searchType,
-      maxResults: options.maxResults ?? 5,
+      maxResults,
     };
 
-    if (options.channelId) {
-      params.channelId = options.channelId;
+    if (options.order) {
+      params.order = options.order;
+    }
+
+    if (options.channelId?.trim()) {
+      params.channelId = options.channelId.trim();
     }
 
     if (options.publishedAfter) {
@@ -89,109 +99,77 @@ export class YoutubeService implements OnModuleInit {
       params.videoSyndicated = 'true';
     }
 
-    const response = await this.request<YouTubeSearchResponse>(
-      '/search',
-      params,
-    );
-
-    return (response.items ?? [])
-      .filter((item) => item.id?.videoId)
-      .map((item) => ({
-        videoId: item.id!.videoId!,
-        channelId: item.snippet?.channelId,
-        channelTitle: item.snippet?.channelTitle,
-        title: item.snippet?.title ?? '',
-        description: item.snippet?.description,
-        publishedAt: item.snippet?.publishedAt
-          ? new Date(item.snippet.publishedAt)
-          : undefined,
-        thumbnailUrl:
-          item.snippet?.thumbnails?.high?.url ??
-          item.snippet?.thumbnails?.medium?.url ??
-          item.snippet?.thumbnails?.default?.url,
-        embeddable: true,
-      }));
+    return this.request<YouTubeSearchResponse>('/search', params);
   }
 
-  // ============================================================
-  // VIDEO DETAILS
-  // ============================================================
-
-  async getVideo(videoId: string): Promise<YouTubeVideoResult | null> {
-    if (!videoId?.trim()) {
-      throw new BadRequestException('videoId is required');
-    }
-
-    const response = await this.request<YouTubeVideosResponse>('/videos', {
-      key: this.apiKey,
-      part: 'snippet,contentDetails,status',
-      id: videoId,
-    });
-
-    const video = response.items?.[0];
-
-    if (!video) {
-      return null;
-    }
-
-    return this.mapVideo(video);
-  }
-
-  // ============================================================
-  // FIND EMBEDDABLE VIDEO
-  // ============================================================
-
+  /**
+   * Performs one search request and selects the best
+   * candidate from the returned search results.
+   *
+   * No videos.list request is made.
+   */
   async findHighlight(
     homeTeam: string,
     awayTeam: string,
     publishedAfter?: Date,
   ): Promise<YouTubeVideoResult | null> {
-    if (!homeTeam?.trim() || !awayTeam?.trim()) {
+    const normalizedHome = homeTeam?.trim();
+    const normalizedAway = awayTeam?.trim();
+
+    if (!normalizedHome || !normalizedAway) {
       throw new BadRequestException('Both homeTeam and awayTeam are required');
     }
 
-    const query = `${homeTeam} ${awayTeam} highlights`;
+    const query = `${normalizedHome} ${normalizedAway} highlights`;
 
-    const candidates = await this.searchVideos({
+    const searchResponse = await this.searchVideos({
       query,
       maxResults: 5,
+      order: 'relevance',
       publishedAfter: publishedAfter?.toISOString(),
+      publishedBefore: new Date().toISOString(),
     });
 
-    if (candidates.length === 0) {
+    const candidates: YouTubeVideoResult[] = (searchResponse.items ?? [])
+      .filter(
+        (item) => item.id?.kind === 'youtube#video' && Boolean(item.id.videoId),
+      )
+      .map((item) => {
+        const videoId = item.id!.videoId!;
+
+        return {
+          videoId,
+          channelId: item.snippet?.channelId,
+          channelTitle: item.snippet?.channelTitle,
+          title: item.snippet?.title ?? '',
+          description: item.snippet?.description,
+          publishedAt: item.snippet?.publishedAt,
+          thumbnailUrl:
+            item.snippet?.thumbnails?.high?.url ??
+            item.snippet?.thumbnails?.medium?.url ??
+            item.snippet?.thumbnails?.default?.url,
+          embeddable: true,
+          videoUrl: `https://www.youtube.com/watch?v=${videoId}`,
+        };
+      });
+
+    if (!candidates.length) {
       return null;
     }
 
-    const verified: YouTubeVideoResult[] = [];
-
-    for (const candidate of candidates) {
-      const video = await this.getVideo(candidate.videoId);
-
-      if (!video || !video.embeddable) {
-        continue;
-      }
-
-      verified.push(video);
-    }
-
-    return this.selectBestHighlight(verified, homeTeam, awayTeam) ?? null;
+    return this.selectBestHighlight(candidates, normalizedHome, normalizedAway);
   }
-
-  // ============================================================
-  // BEST MATCH
-  // ============================================================
 
   private selectBestHighlight(
     videos: YouTubeVideoResult[],
     homeTeam: string,
     awayTeam: string,
   ): YouTubeVideoResult | null {
-    if (videos.length === 0) {
+    if (!videos.length) {
       return null;
     }
 
     const home = this.normalize(homeTeam);
-
     const away = this.normalize(awayTeam);
 
     const scored = videos.map((video) => {
@@ -207,11 +185,9 @@ export class YoutubeService implements OnModuleInit {
         score += 3;
       }
 
-      if (title.includes('highlight')) {
-        score += 2;
-      }
-
       if (title.includes('highlights')) {
+        score += 2;
+      } else if (title.includes('highlight')) {
         score += 2;
       }
 
@@ -223,43 +199,8 @@ export class YoutubeService implements OnModuleInit {
 
     scored.sort((a, b) => b.score - a.score);
 
-    return scored[0].video;
+    return scored[0]?.video ?? null;
   }
-
-  // ============================================================
-  // MAP VIDEO
-  // ============================================================
-
-  private mapVideo(video: YouTubeVideoItem): YouTubeVideoResult {
-    return {
-      videoId: video.id ?? '',
-
-      channelId: video.snippet?.channelId,
-
-      channelTitle: video.snippet?.channelTitle,
-
-      title: video.snippet?.title ?? '',
-
-      description: video.snippet?.description,
-
-      publishedAt: video.snippet?.publishedAt
-        ? new Date(video.snippet.publishedAt)
-        : undefined,
-
-      thumbnailUrl:
-        video.snippet?.thumbnails?.high?.url ??
-        video.snippet?.thumbnails?.medium?.url ??
-        video.snippet?.thumbnails?.default?.url,
-
-      embeddable: video.status?.embeddable === true,
-
-      duration: video.contentDetails?.duration,
-    };
-  }
-
-  // ============================================================
-  // REQUEST
-  // ============================================================
 
   private async request<T>(
     endpoint: string,
@@ -282,10 +223,6 @@ export class YoutubeService implements OnModuleInit {
     });
   }
 
-  // ============================================================
-  // NORMALIZE SEARCH TEXT
-  // ============================================================
-
   private normalize(value: string): string {
     return value
       .toLowerCase()
@@ -294,16 +231,11 @@ export class YoutubeService implements OnModuleInit {
       .trim();
   }
 
-  // ============================================================
-  // ERROR LOGGING
-  // ============================================================
-
   private logApiError(error: unknown, endpoint: string): void {
     if (axios.isAxiosError(error)) {
       const axiosError = error as AxiosError;
 
-      console.error('YouTube API error', {
-        endpoint,
+      this.logger.error(`YouTube API request failed: ${endpoint}`, {
         status: axiosError.response?.status,
         data: axiosError.response?.data,
       });
@@ -311,9 +243,6 @@ export class YoutubeService implements OnModuleInit {
       return;
     }
 
-    console.error('YouTube API error', {
-      endpoint,
-      error,
-    });
+    this.logger.error(`YouTube API request failed: ${endpoint}`, error);
   }
 }

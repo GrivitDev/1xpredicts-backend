@@ -21,24 +21,22 @@ export class ApiFootballQueue {
   competitionId!: string;
 
   @Prop({
+    required: true,
     index: true,
   })
-  apiFootballLeagueId?: number;
+  apiFootballLeagueId!: number;
 
   @Prop({
+    required: true,
     index: true,
   })
-  season?: number;
+  season!: number;
 
   @Prop({
+    required: true,
     index: true,
   })
-  apiFootballTeamId?: number;
-
-  @Prop({
-    index: true,
-  })
-  apiFootballFixtureId?: number;
+  collectionDate!: string;
 
   @Prop({
     required: true,
@@ -50,6 +48,7 @@ export class ApiFootballQueue {
   @Prop({
     required: true,
     type: Number,
+    default: 100,
     index: true,
   })
   priority!: number;
@@ -75,17 +74,10 @@ export class ApiFootballQueue {
   maxAttempts!: number;
 
   @Prop({
-    required: true,
     type: Date,
     index: true,
   })
-  scheduledFor!: Date;
-
-  @Prop({
-    type: Date,
-    index: true,
-  })
-  startedAt?: Date;
+  scheduledFor?: Date;
 
   @Prop({
     type: Date,
@@ -95,35 +87,57 @@ export class ApiFootballQueue {
 
   @Prop({
     type: Date,
-    index: true,
+  })
+  startedAt?: Date;
+
+  @Prop({
+    type: Date,
   })
   completedAt?: Date;
 
   @Prop({
     type: Date,
-    index: true,
   })
-  processedAt?: Date;
+  failedAt?: Date;
 
-  @Prop()
-  error?: string;
+  @Prop({
+    type: String,
+  })
+  lastError?: string;
 }
 
 export const ApiFootballQueueSchema =
   SchemaFactory.createForClass(ApiFootballQueue);
 
+ApiFootballQueueSchema.index(
+  {
+    competitionId: 1,
+    apiFootballLeagueId: 1,
+    season: 1,
+    collectionDate: 1,
+    type: 1,
+  },
+  {
+    unique: true,
+    partialFilterExpression: {
+      status: {
+        $in: [
+          ApiFootballQueueStatus.PENDING,
+          ApiFootballQueueStatus.PROCESSING,
+        ],
+      },
+    },
+  },
+);
+
 ApiFootballQueueSchema.index({
+  collectionDate: 1,
   status: 1,
   priority: 1,
   scheduledFor: 1,
 });
 
 ApiFootballQueueSchema.index({
-  type: 1,
-  competitionId: 1,
-  apiFootballLeagueId: 1,
-  season: 1,
-  apiFootballTeamId: 1,
-  apiFootballFixtureId: 1,
   status: 1,
+  nextAttemptAt: 1,
 });

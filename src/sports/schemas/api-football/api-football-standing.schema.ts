@@ -29,10 +29,12 @@ export class ApiFootballStanding {
 
   @Prop({
     required: true,
-    index: true,
   })
   rank!: number;
 
+  /**
+   * Complete latest API-Football standing row.
+   */
   @Prop({
     type: Object,
     required: true,
@@ -50,8 +52,29 @@ export class ApiFootballStanding {
 export const ApiFootballStandingSchema =
   SchemaFactory.createForClass(ApiFootballStanding);
 
+/**
+ * One current standing record per:
+ *
+ * competition + season + team
+ */
+ApiFootballStandingSchema.index(
+  {
+    leagueId: 1,
+    season: 1,
+    teamId: 1,
+  },
+  {
+    unique: true,
+  },
+);
+
 ApiFootballStandingSchema.index({
   leagueId: 1,
   season: 1,
   rank: 1,
+});
+
+ApiFootballStandingSchema.index({
+  teamId: 1,
+  collectedAt: -1,
 });

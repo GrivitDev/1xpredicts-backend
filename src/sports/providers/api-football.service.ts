@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Injectable,
   InternalServerErrorException,
+  Logger,
   OnModuleInit,
 } from '@nestjs/common';
 
@@ -11,18 +12,17 @@ import axios, { AxiosError, AxiosInstance } from 'axios';
 
 import {
   ApiFootballFixture,
-  ApiFootballInjury,
   ApiFootballLeagueResponse,
-  ApiFootballPrediction,
   ApiFootballResponse,
   ApiFootballStandingResponse,
-  ApiFootballTeamStatisticsResponse,
 } from './api-football.interfaces';
 
 import { SportsProviderRateLimitService } from '../services/sports-provider-rate-limit.service';
 
 @Injectable()
 export class ApiFootballService implements OnModuleInit {
+  private readonly logger = new Logger(ApiFootballService.name);
+
   private readonly baseUrl = 'https://v3.football.api-sports.io';
 
   private http!: AxiosInstance;
@@ -34,7 +34,7 @@ export class ApiFootballService implements OnModuleInit {
   ) {}
 
   onModuleInit(): void {
-    const apiKey = this.configService.get<string>('API_FOOTBALL_KEY');
+    const apiKey = this.configService.get<string>('API_FOOTBALL_KEY')?.trim();
 
     if (!apiKey) {
       throw new Error('API_FOOTBALL_KEY is missing');
@@ -42,7 +42,9 @@ export class ApiFootballService implements OnModuleInit {
 
     this.http = axios.create({
       baseURL: this.baseUrl,
+
       timeout: 15_000,
+
       headers: {
         'x-apisports-key': apiKey,
         Accept: 'application/json',
@@ -51,17 +53,18 @@ export class ApiFootballService implements OnModuleInit {
   }
 
   // ============================================================
-  // CURRENT LEAGUES
+  // LEAGUES
   // ============================================================
 
-  async getCurrentLeagues(): Promise<ApiFootballLeagueResponse[]> {
-    const data = await this.request<
-      ApiFootballResponse<ApiFootballLeagueResponse[]>
-    >('/leagues', {
-      current: true,
-    });
-
-    return data.response ?? [];
+  async getCurrentLeagues(): Promise<
+    ApiFootballResponse<ApiFootballLeagueResponse[]>
+  > {
+    return this.request<ApiFootballResponse<ApiFootballLeagueResponse[]>>(
+      '/leagues',
+      {
+        current: true,
+      },
+    );
   }
 
   // ============================================================
@@ -71,19 +74,32 @@ export class ApiFootballService implements OnModuleInit {
   async getFixtures(
     leagueId: number,
     season: number,
-  ): Promise<ApiFootballFixture[]> {
+    dateFrom?: string,
+    dateTo?: string,
+  ): Promise<ApiFootballResponse<ApiFootballFixture[]>> {
     this.validatePositiveNumber(leagueId, 'leagueId');
+
     this.validatePositiveNumber(season, 'season');
 
-    const data = await this.request<ApiFootballResponse<ApiFootballFixture[]>>(
-      '/fixtures',
-      {
-        league: leagueId,
-        season,
-      },
-    );
+    this.validateDateRange(dateFrom, dateTo);
 
-    return data.response ?? [];
+    const params: Record<string, string | number | boolean> = {
+      league: leagueId,
+      season,
+    };
+
+    if (dateFrom) {
+      params.from = dateFrom;
+    }
+
+    if (dateTo) {
+      params.to = dateTo;
+    }
+
+    return this.request<ApiFootballResponse<ApiFootballFixture[]>>(
+      '/fixtures',
+      params,
+    );
   }
 
   // ============================================================
@@ -93,82 +109,18 @@ export class ApiFootballService implements OnModuleInit {
   async getStandings(
     leagueId: number,
     season: number,
-  ): Promise<ApiFootballStandingResponse[]> {
+  ): Promise<ApiFootballResponse<ApiFootballStandingResponse[]>> {
     this.validatePositiveNumber(leagueId, 'leagueId');
+
     this.validatePositiveNumber(season, 'season');
 
-    const data = await this.request<
-      ApiFootballResponse<ApiFootballStandingResponse[]>
-    >('/standings', {
-      league: leagueId,
-      season,
-    });
-
-    return data.response ?? [];
-  }
-
-  // ============================================================
-  // TEAM STATISTICS
-  // ============================================================
-
-  async getTeamStatistics(
-    leagueId: number,
-    season: number,
-    teamId: number,
-  ): Promise<ApiFootballTeamStatisticsResponse | null> {
-    this.validatePositiveNumber(leagueId, 'leagueId');
-    this.validatePositiveNumber(season, 'season');
-    this.validatePositiveNumber(teamId, 'teamId');
-
-    const data = await this.request<
-      ApiFootballResponse<ApiFootballTeamStatisticsResponse[]>
-    >('/teams/statistics', {
-      league: leagueId,
-      season,
-      team: teamId,
-    });
-
-    return data.response?.[0] ?? null;
-  }
-
-  // ============================================================
-  // INJURIES / SIDELINED
-  // ============================================================
-
-  async getInjuries(
-    leagueId: number,
-    season: number,
-  ): Promise<ApiFootballInjury[]> {
-    this.validatePositiveNumber(leagueId, 'leagueId');
-    this.validatePositiveNumber(season, 'season');
-
-    const data = await this.request<ApiFootballResponse<ApiFootballInjury[]>>(
-      '/injuries',
+    return this.request<ApiFootballResponse<ApiFootballStandingResponse[]>>(
+      '/standings',
       {
         league: leagueId,
         season,
       },
     );
-
-    return data.response ?? [];
-  }
-
-  // ============================================================
-  // PREDICTIONS
-  // ============================================================
-
-  async getPrediction(
-    fixtureId: number,
-  ): Promise<ApiFootballPrediction | null> {
-    this.validatePositiveNumber(fixtureId, 'fixtureId');
-
-    const data = await this.request<
-      ApiFootballResponse<ApiFootballPrediction[]>
-    >('/predictions', {
-      fixture: fixtureId,
-    });
-
-    return data.response?.[0] ?? null;
   }
 
   // ============================================================
@@ -185,10 +137,9 @@ export class ApiFootballService implements OnModuleInit {
           params,
         });
 
-        this.assertApiResponse(
-          response.data as unknown as ApiFootballResponse<unknown>,
-          endpoint,
-        );
+        const data = response.data as unknown as ApiFootballResponse<unknown>;
+
+        this.assertApiResponse(data, endpoint);
 
         return response.data;
       } catch (error) {
@@ -215,14 +166,44 @@ export class ApiFootballService implements OnModuleInit {
     }
   }
 
+  private validateDateRange(dateFrom?: string, dateTo?: string): void {
+    if (dateFrom !== undefined && !this.isValidDate(dateFrom)) {
+      throw new BadRequestException('dateFrom must be a valid YYYY-MM-DD date');
+    }
+
+    if (dateTo !== undefined && !this.isValidDate(dateTo)) {
+      throw new BadRequestException('dateTo must be a valid YYYY-MM-DD date');
+    }
+
+    if (dateFrom && dateTo && dateFrom > dateTo) {
+      throw new BadRequestException('dateFrom cannot be after dateTo');
+    }
+  }
+
+  private isValidDate(value: string): boolean {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+      return false;
+    }
+
+    const date = new Date(`${value}T00:00:00.000Z`);
+
+    return !Number.isNaN(date.getTime());
+  }
+
   // ============================================================
-  // API RESPONSE VALIDATION
+  // RESPONSE VALIDATION
   // ============================================================
 
   private assertApiResponse(
     data: ApiFootballResponse<unknown>,
     endpoint: string,
   ): void {
+    if (!data) {
+      throw new InternalServerErrorException(
+        `API-Football returned an empty response for ${endpoint}`,
+      );
+    }
+
     if (
       data.errors &&
       (Array.isArray(data.errors)
@@ -236,25 +217,22 @@ export class ApiFootballService implements OnModuleInit {
   }
 
   // ============================================================
-  // LOGGING
+  // ERROR LOGGING
   // ============================================================
 
   private logApiError(error: unknown, endpoint: string): void {
     if (axios.isAxiosError(error)) {
       const axiosError = error as AxiosError;
 
-      console.error('API-Football error', {
-        endpoint,
+      this.logger.error(`API-Football request failed: ${endpoint}`, {
         status: axiosError.response?.status,
+
         data: axiosError.response?.data,
       });
 
       return;
     }
 
-    console.error('API-Football error', {
-      endpoint,
-      error,
-    });
+    this.logger.error(`API-Football request failed: ${endpoint}`, error);
   }
 }

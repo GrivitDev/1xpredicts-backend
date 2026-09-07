@@ -1,6 +1,7 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 
 import { InjectModel } from '@nestjs/mongoose';
+
 import { Model } from 'mongoose';
 
 import {
@@ -19,13 +20,11 @@ import { SPORTS_DATA_COLLECTION_CONFIG } from '../config/sports-data-collection.
 
 @Injectable()
 export class ApiFootballQueueService {
-  private readonly logger = new Logger(ApiFootballQueueService.name);
-
   private readonly maxAttempts =
     SPORTS_DATA_COLLECTION_CONFIG.API_FOOTBALL.queue.maxAttempts;
 
-  private readonly dailyRequestLimit =
-    SPORTS_DATA_COLLECTION_CONFIG.API_FOOTBALL.dailyRequestLimit;
+  private readonly retryDelayMinutes =
+    SPORTS_DATA_COLLECTION_CONFIG.API_FOOTBALL.queue.retryDelayMinutes;
 
   constructor(
     @InjectModel(ApiFootballQueue.name)
@@ -34,49 +33,24 @@ export class ApiFootballQueueService {
     private readonly rateLimitService: SportsProviderRateLimitService,
   ) {}
 
-  // ============================================================
-  // ADD JOB
-  // ============================================================
-
   async addJob(job: {
     jobType: ApiFootballQueueJobType;
     competitionId: string;
-    apiFootballLeagueId?: number;
-    season?: number;
-    apiFootballTeamId?: number;
-    apiFootballFixtureId?: number;
+    apiFootballLeagueId: number;
+    season: number;
+    collectionDate: string;
     priority?: number;
     scheduledFor?: Date;
   }): Promise<ApiFootballQueueDocument | null> {
-    const identity: Record<string, unknown> = {
-      type: job.jobType,
-      competitionId: job.competitionId,
-    };
+    const competitionId = job.competitionId.trim().toLowerCase();
 
-    if (job.apiFootballLeagueId !== undefined) {
-      identity.apiFootballLeagueId = job.apiFootballLeagueId;
-    }
-
-    if (job.season !== undefined) {
-      identity.season = job.season;
-    }
-
-    if (job.apiFootballTeamId !== undefined) {
-      identity.apiFootballTeamId = job.apiFootballTeamId;
-    }
-
-    if (job.apiFootballFixtureId !== undefined) {
-      identity.apiFootballFixtureId = job.apiFootballFixtureId;
-    }
-
-    /*
-     * A job already pending or processing is still active.
-     *
-     * Do not create another copy.
-     */
-    const activeJob = await this.queueModel
+    const existing = await this.queueModel
       .findOne({
-        ...identity,
+        competitionId,
+        apiFootballLeagueId: job.apiFootballLeagueId,
+        season: job.season,
+        collectionDate: job.collectionDate,
+        type: job.jobType,
         status: {
           $in: [
             ApiFootballQueueStatus.PENDING,
@@ -84,59 +58,48 @@ export class ApiFootballQueueService {
           ],
         },
       })
-      .sort({
-        createdAt: -1,
-      })
+      .lean()
       .exec();
 
-    if (activeJob) {
+    if (existing) {
       return null;
     }
 
-    /*
-     * IMPORTANT:
-     *
-     * We intentionally do NOT reject a job merely because an older
-     * completed job exists.
-     *
-     * API-Football collection is recurring. A completed job from
-     * yesterday must not prevent today's refresh.
-     *
-     * The scheduler/builder controls when a new collection is needed.
-     */
-    return this.queueModel.create({
-      competitionId: job.competitionId,
-      apiFootballLeagueId: job.apiFootballLeagueId,
-      season: job.season,
-      apiFootballTeamId: job.apiFootballTeamId,
-      apiFootballFixtureId: job.apiFootballFixtureId,
+    try {
+      return await this.queueModel.create({
+        competitionId,
 
-      type: job.jobType,
+        apiFootballLeagueId: job.apiFootballLeagueId,
 
-      priority: job.priority ?? 100,
+        season: job.season,
 
-      status: ApiFootballQueueStatus.PENDING,
+        collectionDate: job.collectionDate,
 
-      attempts: 0,
+        type: job.jobType,
 
-      maxAttempts: this.maxAttempts,
+        priority: job.priority ?? 100,
 
-      scheduledFor: job.scheduledFor ?? new Date(),
-    });
+        status: ApiFootballQueueStatus.PENDING,
+
+        attempts: 0,
+
+        maxAttempts: this.maxAttempts,
+
+        scheduledFor: job.scheduledFor ?? new Date(),
+      });
+    } catch (error) {
+      if (this.isDuplicateKeyError(error)) {
+        return null;
+      }
+
+      throw error;
+    }
   }
 
-  // ============================================================
-  // GET NEXT JOB
-  // ============================================================
-
   async getNextJob(): Promise<ApiFootballQueueDocument | null> {
-    /*
-     * Never claim another API-Football job once the daily budget
-     * has already been consumed.
-     */
-    const remainingQuota = await this.getRemainingDailyQuota();
+    const remaining = await this.getRemainingDailyRequests();
 
-    if (remainingQuota <= 0) {
+    if (remaining <= 0) {
       return null;
     }
 
@@ -187,312 +150,116 @@ export class ApiFootballQueueService {
       .exec();
   }
 
-  // ============================================================
-  // COMPLETE JOB
-  // ============================================================
-
-  async completeJob(jobId: string): Promise<void> {
-    const now = new Date();
-
-    await this.queueModel
-      .findByIdAndUpdate(
-        jobId,
-        {
-          $set: {
-            status: ApiFootballQueueStatus.COMPLETED,
-            completedAt: now,
-            processedAt: now,
-          },
-
-          $unset: {
-            error: 1,
-            nextAttemptAt: 1,
-            startedAt: 1,
-          },
+  async complete(jobId: string): Promise<void> {
+    await this.queueModel.updateOne(
+      {
+        _id: jobId,
+      },
+      {
+        $set: {
+          status: ApiFootballQueueStatus.COMPLETED,
+          completedAt: new Date(),
+          nextAttemptAt: null,
         },
-        {
-          new: true,
+
+        $unset: {
+          lastError: 1,
         },
-      )
-      .exec();
+      },
+    );
   }
 
-  async markCompleted(jobId: string): Promise<void> {
-    await this.completeJob(jobId);
-  }
-
-  // ============================================================
-  // FAIL JOB
-  // ============================================================
-
-  async failJob(jobId: string, error: unknown): Promise<void> {
+  async fail(jobId: string, error: string): Promise<void> {
     const job = await this.queueModel.findById(jobId).exec();
 
     if (!job) {
       return;
     }
 
-    const message = error instanceof Error ? error.message : String(error);
-
-    const attempts = job.attempts ?? 0;
-    const maxAttempts = job.maxAttempts ?? this.maxAttempts;
-
-    const shouldRetry = attempts < maxAttempts;
-
-    if (shouldRetry) {
-      /*
-       * Retry scheduling does NOT bypass the provider limiter.
-       *
-       * When this job is processed again:
-       *
-       * retry -> SportsProviderRateLimitService
-       *       -> 60-second provider window
-       *       -> daily quota check
-       *       -> actual API call
-       *
-       * The failed original request has already consumed its quota
-       * because quota accounting happens before the external request.
-       */
-      const retryDelayMinutes =
-        SPORTS_DATA_COLLECTION_CONFIG.API_FOOTBALL.queue.retryDelayMinutes;
-
-      const retryDelay = retryDelayMinutes * 60 * 1000;
-
-      await this.queueModel
-        .findByIdAndUpdate(
-          jobId,
-          {
-            $set: {
-              status: ApiFootballQueueStatus.PENDING,
-              error: message,
-              nextAttemptAt: new Date(Date.now() + retryDelay),
-            },
-
-            $unset: {
-              startedAt: 1,
-            },
-          },
-          {
-            new: true,
-          },
-        )
-        .exec();
-    } else {
-      const now = new Date();
-
-      await this.queueModel
-        .findByIdAndUpdate(
-          jobId,
-          {
-            $set: {
-              status: ApiFootballQueueStatus.FAILED,
-              error: message,
-              completedAt: now,
-              processedAt: now,
-            },
-
-            $unset: {
-              startedAt: 1,
-              nextAttemptAt: 1,
-            },
-          },
-          {
-            new: true,
-          },
-        )
-        .exec();
-    }
-
-    this.logger.warn(
-      `API-Football job ${jobId} ${
-        shouldRetry ? 'will retry' : 'failed permanently'
-      }: ${message}`,
-    );
-  }
-
-  async markFailed(jobId: string, error: unknown): Promise<void> {
-    await this.failJob(jobId, error);
-  }
-
-  // ============================================================
-  // PROCESS NEXT JOB
-  // ============================================================
-
-  async processNextJob(
-    processor: (job: ApiFootballQueueDocument) => Promise<void>,
-  ): Promise<boolean> {
-    const job = await this.getNextJob();
-
-    if (!job) {
-      return false;
-    }
-
-    try {
-      await processor(job);
-
-      await this.completeJob(job._id.toString());
-
-      return true;
-    } catch (error) {
-      await this.failJob(job._id.toString(), error);
-
-      return false;
-    }
-  }
-
-  // ============================================================
-  // DAILY QUOTA
-  // ============================================================
-
-  async getDailyProcessedCount(): Promise<number> {
-    return this.rateLimitService.getDailyUsage('api-football');
-  }
-
-  async getRemainingDailyQuota(): Promise<number> {
-    const remaining =
-      await this.rateLimitService.getRemainingDailyRequests('api-football');
-
-    /*
-     * Fail closed if Redis/quota state is unavailable.
-     */
-    if (remaining === null || remaining === undefined) {
-      return 0;
-    }
-
-    return Math.max(0, Math.min(remaining, this.dailyRequestLimit));
-  }
-
-  // ============================================================
-  // STALE JOB RECOVERY
-  // ============================================================
-
-  async requeueStaleProcessingJobs(staleMinutes = 30): Promise<number> {
-    const cutoff = new Date(Date.now() - staleMinutes * 60 * 1000);
-
-    /*
-     * Jobs that still have attempts available can return to PENDING.
-     *
-     * Jobs already at maxAttempts are permanently failed instead.
-     */
-    const retryResult = await this.queueModel
-      .updateMany(
+    if (job.attempts >= job.maxAttempts) {
+      await this.queueModel.updateOne(
         {
-          status: ApiFootballQueueStatus.PROCESSING,
-
-          startedAt: {
-            $lt: cutoff,
-          },
-
-          $expr: {
-            $lt: ['$attempts', '$maxAttempts'],
-          },
-        },
-        {
-          $set: {
-            status: ApiFootballQueueStatus.PENDING,
-            nextAttemptAt: new Date(),
-            error: 'Recovered from stale processing state',
-          },
-
-          $unset: {
-            startedAt: 1,
-          },
-        },
-      )
-      .exec();
-
-    const failedResult = await this.queueModel
-      .updateMany(
-        {
-          status: ApiFootballQueueStatus.PROCESSING,
-
-          startedAt: {
-            $lt: cutoff,
-          },
-
-          $expr: {
-            $gte: ['$attempts', '$maxAttempts'],
-          },
+          _id: jobId,
         },
         {
           $set: {
             status: ApiFootballQueueStatus.FAILED,
-            completedAt: new Date(),
-            processedAt: new Date(),
-            error: 'Processing became stale after maximum attempts',
-          },
-
-          $unset: {
-            startedAt: 1,
-            nextAttemptAt: 1,
+            failedAt: new Date(),
+            lastError: error,
+            nextAttemptAt: null,
           },
         },
-      )
-      .exec();
-
-    const recovered = retryResult.modifiedCount + failedResult.modifiedCount;
-
-    if (recovered > 0) {
-      this.logger.warn(
-        `Recovered ${retryResult.modifiedCount} stale API-Football job(s); ` +
-          `${failedResult.modifiedCount} exceeded maximum attempts`,
       );
+
+      return;
     }
 
-    return recovered;
+    await this.queueModel.updateOne(
+      {
+        _id: jobId,
+      },
+      {
+        $set: {
+          status: ApiFootballQueueStatus.PENDING,
+
+          nextAttemptAt: new Date(Date.now() + this.retryDelayMinutes * 60_000),
+
+          lastError: error,
+        },
+      },
+    );
   }
 
-  // ============================================================
-  // OLD JOB CLEANUP
-  // ============================================================
+  async recoverStaleJobs(staleMinutes: number): Promise<number> {
+    const staleBefore = new Date(Date.now() - staleMinutes * 60_000);
 
-  async removeOldCompletedJobs(olderThanDays = 30): Promise<number> {
+    const result = await this.queueModel.updateMany(
+      {
+        status: ApiFootballQueueStatus.PROCESSING,
+
+        startedAt: {
+          $lte: staleBefore,
+        },
+      },
+      {
+        $set: {
+          status: ApiFootballQueueStatus.PENDING,
+          nextAttemptAt: new Date(),
+          lastError: 'Recovered stale processing job',
+        },
+      },
+    );
+
+    return result.modifiedCount;
+  }
+
+  async cleanupCompleted(olderThanDays = 7): Promise<number> {
     const cutoff = new Date(Date.now() - olderThanDays * 24 * 60 * 60 * 1000);
 
-    const result = await this.queueModel
-      .deleteMany({
-        status: {
-          $in: [
-            ApiFootballQueueStatus.COMPLETED,
-            ApiFootballQueueStatus.FAILED,
-          ],
-        },
+    const result = await this.queueModel.deleteMany({
+      status: ApiFootballQueueStatus.COMPLETED,
 
-        $or: [
-          {
-            completedAt: {
-              $lt: cutoff,
-            },
-          },
-          {
-            completedAt: {
-              $exists: false,
-            },
+      completedAt: {
+        $lt: cutoff,
+      },
+    });
 
-            updatedAt: {
-              $lt: cutoff,
-            },
-          },
-        ],
-      })
-      .exec();
-
-    return result.deletedCount ?? 0;
+    return result.deletedCount;
   }
 
-  // ============================================================
-  // LEGACY CLEANUP
-  // ============================================================
-
-  async cleanupCompletedJobs(): Promise<void> {
-    await this.removeOldCompletedJobs(7);
+  async getRemainingDailyRequests(): Promise<number> {
+    return (
+      (await this.rateLimitService.getRemainingDailyRequests('api-football')) ??
+      0
+    );
   }
 
-  // ============================================================
-  // LEGACY STALE RECOVERY
-  // ============================================================
-
-  async recoverStaleJobs(): Promise<void> {
-    await this.requeueStaleProcessingJobs(10);
+  private isDuplicateKeyError(error: unknown): boolean {
+    return Boolean(
+      error &&
+      typeof error === 'object' &&
+      'code' in error &&
+      (error as { code?: number }).code === 11000,
+    );
   }
 }

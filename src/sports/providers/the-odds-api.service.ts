@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Injectable,
   InternalServerErrorException,
+  Logger,
   OnModuleInit,
 } from '@nestjs/common';
 
@@ -9,19 +10,14 @@ import { ConfigService } from '@nestjs/config';
 
 import axios, { AxiosError, AxiosInstance } from 'axios';
 
-import {
-  OddsApiBookmakerMarkets,
-  OddsApiEvent,
-  OddsApiEventMarkets,
-  OddsApiEventOdds,
-  OddsApiScore,
-  OddsApiSport,
-} from './the-odds-api.interfaces';
+import { OddsApiEventOdds, OddsApiSport } from './the-odds-api.interfaces';
 
 import { SportsProviderRateLimitService } from '../services/sports-provider-rate-limit.service';
 
 @Injectable()
 export class TheOddsApiService implements OnModuleInit {
+  private readonly logger = new Logger(TheOddsApiService.name);
+
   private readonly baseUrl = 'https://api.the-odds-api.com/v4';
 
   private apiKey!: string;
@@ -35,7 +31,7 @@ export class TheOddsApiService implements OnModuleInit {
   ) {}
 
   onModuleInit(): void {
-    const apiKey = this.configService.get<string>('THE_ODDS_API_KEY');
+    const apiKey = this.configService.get<string>('THE_ODDS_API_KEY')?.trim();
 
     if (!apiKey) {
       throw new Error('THE_ODDS_API_KEY is missing');
@@ -45,7 +41,9 @@ export class TheOddsApiService implements OnModuleInit {
 
     this.http = axios.create({
       baseURL: this.baseUrl,
+
       timeout: 15_000,
+
       headers: {
         Accept: 'application/json',
       },
@@ -61,134 +59,44 @@ export class TheOddsApiService implements OnModuleInit {
   }
 
   // ============================================================
-  // EVENTS
-  // ============================================================
-
-  async getEvents(sport: string): Promise<OddsApiEvent[]> {
-    this.requireSport(sport);
-
-    return this.request<OddsApiEvent[]>(
-      `/sports/${encodeURIComponent(sport)}/events`,
-    );
-  }
-
-  // ============================================================
-  // SCORES
-  // ============================================================
-
-  async getScores(
-    sport: string,
-    daysFrom?: 1 | 2 | 3,
-  ): Promise<OddsApiScore[]> {
-    this.requireSport(sport);
-
-    if (daysFrom !== undefined && ![1, 2, 3].includes(daysFrom)) {
-      throw new BadRequestException('daysFrom must be 1, 2, or 3');
-    }
-
-    return this.request<OddsApiScore[]>(
-      `/sports/${encodeURIComponent(sport)}/scores`,
-      daysFrom ? { daysFrom } : undefined,
-    );
-  }
-
-  // ============================================================
   // ODDS
   // ============================================================
 
   async getOdds(
     sport: string,
-    regions: string,
-    markets?: string[],
+    regions = 'eu',
+    markets: string[] = [],
   ): Promise<OddsApiEventOdds[]> {
-    this.requireSport(sport);
+    const normalizedSport = sport?.trim();
 
-    if (!regions?.trim()) {
+    if (!normalizedSport) {
+      throw new BadRequestException('sport is required');
+    }
+
+    const normalizedRegions = regions?.trim().toLowerCase();
+
+    if (!normalizedRegions) {
       throw new BadRequestException('regions is required');
     }
 
-    const params: Record<string, string | number | boolean> = {
-      regions,
-      oddsFormat: 'decimal',
-    };
+    const normalizedMarkets = markets
+      .map((market) => market.trim().toLowerCase())
+      .filter(Boolean);
 
-    if (markets && markets.length > 0) {
-      params.markets = markets.join(',');
+    if (!normalizedMarkets.length) {
+      throw new BadRequestException('At least one Odds API market is required');
     }
 
     return this.request<OddsApiEventOdds[]>(
-      `/sports/${encodeURIComponent(sport)}/odds`,
-      params,
-    );
-  }
-
-  // ============================================================
-  // EVENT ODDS
-  // ============================================================
-
-  async getEventOdds(
-    sport: string,
-    eventId: string,
-    regions: string,
-    markets: string[],
-  ): Promise<OddsApiEventOdds | null> {
-    this.requireSport(sport);
-
-    if (!eventId?.trim()) {
-      throw new BadRequestException('eventId is required');
-    }
-
-    if (!regions?.trim()) {
-      throw new BadRequestException('regions is required');
-    }
-
-    if (!Array.isArray(markets) || markets.length === 0) {
-      throw new BadRequestException('At least one market is required');
-    }
-
-    const response = await this.request<OddsApiEventOdds[]>(
-      `/sports/${encodeURIComponent(sport)}/events/${encodeURIComponent(
-        eventId,
-      )}/odds`,
+      `/sports/${encodeURIComponent(normalizedSport)}/odds`,
       {
-        regions,
-        markets: markets.join(','),
+        regions: normalizedRegions,
+
+        markets: normalizedMarkets.join(','),
+
         oddsFormat: 'decimal',
       },
     );
-
-    return response[0] ?? null;
-  }
-
-  // ============================================================
-  // AVAILABLE MARKETS
-  // ============================================================
-
-  async getEventMarkets(
-    sport: string,
-    eventId: string,
-    regions: string,
-  ): Promise<OddsApiBookmakerMarkets[]> {
-    this.requireSport(sport);
-
-    if (!eventId?.trim()) {
-      throw new BadRequestException('eventId is required');
-    }
-
-    if (!regions?.trim()) {
-      throw new BadRequestException('regions is required');
-    }
-
-    const response = await this.request<OddsApiEventMarkets>(
-      `/sports/${encodeURIComponent(sport)}/events/${encodeURIComponent(
-        eventId,
-      )}/markets`,
-      {
-        regions,
-      },
-    );
-
-    return response.bookmakers ?? [];
   }
 
   // ============================================================
@@ -220,17 +128,7 @@ export class TheOddsApiService implements OnModuleInit {
   }
 
   // ============================================================
-  // VALIDATION
-  // ============================================================
-
-  private requireSport(sport: string): void {
-    if (!sport?.trim()) {
-      throw new BadRequestException('sport is required');
-    }
-  }
-
-  // ============================================================
-  // LOGGING
+  // ERROR LOGGING
   // ============================================================
 
   private logApiError(error: unknown, endpoint: string): void {
@@ -241,21 +139,21 @@ export class TheOddsApiService implements OnModuleInit {
         | Record<string, string | string[] | undefined>
         | undefined;
 
-      console.error('The Odds API error', {
-        endpoint,
+      this.logger.error(`The Odds API request failed: ${endpoint}`, {
         status: axiosError.response?.status,
+
         data: axiosError.response?.data,
+
         remainingRequests: headers?.['x-requests-remaining'],
+
         usedRequests: headers?.['x-requests-used'],
+
         lastRequestCost: headers?.['x-requests-last'],
       });
 
       return;
     }
 
-    console.error('The Odds API error', {
-      endpoint,
-      error,
-    });
+    this.logger.error(`The Odds API request failed: ${endpoint}`, error);
   }
 }

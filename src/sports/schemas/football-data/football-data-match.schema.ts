@@ -1,4 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
+
 import { HydratedDocument } from 'mongoose';
 
 export type FootballDataMatchDocument = HydratedDocument<FootballDataMatch>;
@@ -8,6 +9,9 @@ export type FootballDataMatchDocument = HydratedDocument<FootballDataMatch>;
   collection: 'sports_football_data_matches',
 })
 export class FootballDataMatch {
+  /**
+   * Football-Data provider match ID.
+   */
   @Prop({
     required: true,
     unique: true,
@@ -24,6 +28,8 @@ export class FootballDataMatch {
   @Prop({
     required: true,
     index: true,
+    trim: true,
+    uppercase: true,
   })
   competitionCode!: string;
 
@@ -41,20 +47,26 @@ export class FootballDataMatch {
 
   @Prop({
     required: true,
+    type: Date,
     index: true,
   })
   utcDate!: Date;
 
   @Prop({
     required: true,
+    index: true,
   })
   homeTeamId!: number;
 
   @Prop({
     required: true,
+    index: true,
   })
   awayTeamId!: number;
 
+  /**
+   * Complete latest Football-Data match object.
+   */
   @Prop({
     type: Object,
     required: true,
@@ -63,6 +75,7 @@ export class FootballDataMatch {
 
   @Prop({
     required: true,
+    type: Date,
     index: true,
   })
   collectedAt!: Date;
@@ -80,4 +93,21 @@ FootballDataMatchSchema.index({
   competitionId: 1,
   seasonId: 1,
   status: 1,
+  utcDate: -1,
+});
+
+FootballDataMatchSchema.index({
+  homeTeamId: 1,
+  utcDate: -1,
+});
+
+FootballDataMatchSchema.index({
+  awayTeamId: 1,
+  utcDate: -1,
+});
+
+FootballDataMatchSchema.index({
+  homeTeamId: 1,
+  awayTeamId: 1,
+  utcDate: -1,
 });

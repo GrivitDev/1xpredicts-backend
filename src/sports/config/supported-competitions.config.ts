@@ -1,33 +1,26 @@
 import { CollectionFrequency } from '../enums/collection-frequency.enum';
-
 import { CompetitionPriority } from '../enums/competition-priority.enum';
-
 import { CompetitionRegion } from '../enums/competition-region.enum';
-
 import { CompetitionType } from '../enums/competition-type.enum';
-
 import { SupportedLeague } from '../enums/supported-league.enum';
-
 import { SupportedClubCompetition } from '../enums/supported-club-competition.enum';
-
 import { SupportedInternationalCompetition } from '../enums/supported-international-competition.enum';
-
 import { SupportedCompetitionConfig } from '../interfaces/supported-competition-config.interface';
-
 import { FOOTBALL_DATA_COVERAGE } from './football-data-coverage.config';
 
 // ============================================================
 // FOOTBALL-DATA MAPPINGS
 // ============================================================
 
-const FOOTBALL_DATA_CODES: Record<string, string> = {};
-
-for (const coverage of FOOTBALL_DATA_COVERAGE) {
-  FOOTBALL_DATA_CODES[coverage.internalCompetitionId] = coverage.code;
-}
+const FOOTBALL_DATA_CODES: Record<string, string> = Object.fromEntries(
+  FOOTBALL_DATA_COVERAGE.map((coverage) => [
+    coverage.internalCompetitionId,
+    coverage.code,
+  ]),
+);
 
 // ============================================================
-// API-FOOTBALL MAPPINGS
+// API-FOOTBALL DISCOVERY HINTS
 // ============================================================
 
 const API_FOOTBALL_MAPPINGS: Record<
@@ -99,7 +92,7 @@ const API_FOOTBALL_MAPPINGS: Record<
 
   SOUTH_AFRICA_PREMIER_DIVISION: {
     name: 'Premier Division',
-    country: 'South-Africa',
+    country: 'South Africa',
   },
 
   EGYPTIAN_PREMIER_LEAGUE: {
@@ -134,7 +127,7 @@ const API_FOOTBALL_MAPPINGS: Record<
 
   SAUDI_PRO_LEAGUE: {
     name: 'Pro League',
-    country: 'Saudi-Arabia',
+    country: 'Saudi Arabia',
   },
 };
 
@@ -145,29 +138,29 @@ const API_FOOTBALL_MAPPINGS: Record<
 const DISPLAY_NAMES: Record<string, string> = {
   PREMIER_LEAGUE: 'Premier League',
   CHAMPIONSHIP: 'Championship',
-
   LA_LIGA: 'La Liga',
   SERIE_A: 'Serie A',
   BUNDESLIGA: 'Bundesliga',
   LIGUE_1: 'Ligue 1',
-
   EREDIVISIE: 'Eredivisie',
   PRIMEIRA_LIGA: 'Primeira Liga',
   SCOTTISH_PREMIERSHIP: 'Scottish Premiership',
   BELGIAN_PRO_LEAGUE: 'Belgian Pro League',
   TURKISH_SUPER_LIG: 'Turkish Super Lig',
-
   NPFL: 'Nigeria Premier Football League',
   SOUTH_AFRICA_PREMIER_DIVISION: 'South African Premier Division',
   EGYPTIAN_PREMIER_LEAGUE: 'Egyptian Premier League',
   BOTOLA_PRO: 'Botola Pro',
-
   BRAZIL_SERIE_A: 'Brazil Serie A',
   ARGENTINA_PRIMERA: 'Argentina Primera Division',
   LIGA_MX: 'Liga MX',
   MLS: 'MLS',
   SAUDI_PRO_LEAGUE: 'Saudi Pro League',
 };
+
+// ============================================================
+// DISPLAY NAME OVERRIDES
+// ============================================================
 
 const DISPLAY_NAME_OVERRIDES: Record<string, string> = {
   CHAMPIONS_LEAGUE: 'UEFA Champions League',
@@ -241,13 +234,11 @@ function getFootballDataMapping(value: string): {
 } {
   const code = FOOTBALL_DATA_CODES[value];
 
-  if (!code) {
-    return {};
-  }
-
-  return {
-    footballDataCode: code,
-  };
+  return code
+    ? {
+        footballDataCode: code,
+      }
+    : {};
 }
 
 function getApiFootballMapping(value: string): {
@@ -256,14 +247,12 @@ function getApiFootballMapping(value: string): {
 } {
   const mapping = API_FOOTBALL_MAPPINGS[value];
 
-  if (!mapping) {
-    return {};
-  }
-
-  return {
-    apiFootballName: mapping.name,
-    apiFootballCountry: mapping.country,
-  };
+  return mapping
+    ? {
+        apiFootballName: mapping.name,
+        apiFootballCountry: mapping.country,
+      }
+    : {};
 }
 
 function buildCompetition(
@@ -274,24 +263,12 @@ function buildCompetition(
   collectionFrequency: CollectionFrequency,
   options?: {
     predictionEnabled?: boolean;
-
     oddsEnabled?: boolean;
-
-    newsEnabled?: boolean;
-
     providers?: {
-      apiFootballName?: string;
-      apiFootballCountry?: string;
-      apiFootballId?: number;
-      footballDataCode?: string;
-      sportsDbLeagueId?: number;
       oddsApiSportKey?: string;
     };
-
     seasonal?: boolean;
-
     gender?: 'MEN' | 'WOMEN';
-
     notes?: string;
   },
 ): SupportedCompetitionConfig {
@@ -311,8 +288,6 @@ function buildCompetition(
     predictionEnabled: options?.predictionEnabled ?? true,
 
     oddsEnabled: options?.oddsEnabled ?? true,
-
-    newsEnabled: options?.newsEnabled ?? true,
 
     collectionFrequency,
 
@@ -458,10 +433,6 @@ const INTERNATIONAL_COMPETITIONS: SupportedCompetitionConfig[] = Object.values(
 
     {
       seasonal: true,
-
-      oddsEnabled: true,
-
-      predictionEnabled: true,
     },
   ),
 );
@@ -472,9 +443,7 @@ const INTERNATIONAL_COMPETITIONS: SupportedCompetitionConfig[] = Object.values(
 
 export const SUPPORTED_COMPETITIONS: SupportedCompetitionConfig[] = [
   ...DOMESTIC_LEAGUES,
-
   ...CLUB_COMPETITIONS,
-
   ...INTERNATIONAL_COMPETITIONS,
 ];
 

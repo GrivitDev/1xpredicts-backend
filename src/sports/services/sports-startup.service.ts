@@ -1,85 +1,67 @@
-import { Injectable, Logger } from '@nestjs/common';
-
-import { ApiFootballQueueBuilderService } from './api-football-queue-builder.service';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 
 import { ApiFootballActiveCompetitionService } from './api-football-active-competition.service';
 
+import { ApiFootballQueueBuilderService } from './api-football-queue-builder.service';
+
+import { SPORTS_DATA_COLLECTION_CONFIG } from '../config/sports-data-collection.config';
+
 @Injectable()
-export class SportsStartupService {
+export class SportsStartupService implements OnModuleInit {
   private readonly logger = new Logger(SportsStartupService.name);
 
-  private hasRun = false;
-
   constructor(
-    private readonly apiFootballQueueBuilderService: ApiFootballQueueBuilderService,
-
     private readonly apiFootballActiveCompetitionService: ApiFootballActiveCompetitionService,
+
+    private readonly apiFootballQueueBuilderService: ApiFootballQueueBuilderService,
   ) {}
 
-  async onApplicationBootstrap(): Promise<void> {
-    if (this.hasRun) {
-      return;
-    }
-
-    this.hasRun = true;
-
-    try {
-      this.logger.log('Sports startup bootstrap started');
-
-      await this.initializeApiFootballCompetitions();
-
-      await this.initializeApiFootballQueue();
-
-      this.logger.log('Sports startup bootstrap completed');
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-
-      this.logger.error(`Sports startup bootstrap failed: ${message}`);
-    }
-  }
-
-  // ============================================================
-  // API-FOOTBALL ACTIVE COMPETITIONS
-  // ============================================================
-
-  private async initializeApiFootballCompetitions(): Promise<void> {
+  async onModuleInit(): Promise<void> {
     try {
       const result =
         await this.apiFootballActiveCompetitionService.refreshCurrentCompetitions();
 
       this.logger.log(
-        `API-Football competition discovery completed: ` +
-          `${result.discovered} discovered, ` +
+        `API-Football discovery completed: ` +
           `${result.matched} matched, ` +
-          `${result.updated} active competitions initialized`,
+          `${result.updated} updated, ` +
+          `${result.skipped} skipped`,
       );
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-
-      this.logger.warn(
-        `Initial API-Football competition discovery failed: ${message}`,
+      this.logger.error(
+        'API-Football startup discovery failed',
+        error instanceof Error ? error.stack : String(error),
       );
+
+      return;
     }
-  }
 
-  // ============================================================
-  // API-FOOTBALL QUEUE
-  // ============================================================
+    const delay =
+      SPORTS_DATA_COLLECTION_CONFIG.API_FOOTBALL.startup
+        .initialFixtureDelayMinutes;
 
-  private async initializeApiFootballQueue(): Promise<void> {
+    if (delay > 0) {
+      await this.sleep(delay * 60_000);
+    }
+
     try {
       const result =
-        await this.apiFootballQueueBuilderService.buildFixtureQueue();
+        await this.apiFootballQueueBuilderService.buildInitialQueue();
 
       this.logger.log(
-        `Initial API-Football fixture queue built: ` +
+        `API-Football initial queue: ` +
           `${result.queued} queued, ` +
           `${result.skipped} skipped`,
       );
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-
-      this.logger.warn(`Initial API-Football queue build failed: ${message}`);
+      this.logger.error(
+        'API-Football initial queue creation failed',
+        error instanceof Error ? error.stack : String(error),
+      );
     }
+  }
+
+  private sleep(milliseconds: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, milliseconds));
   }
 }

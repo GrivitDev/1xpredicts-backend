@@ -5,7 +5,7 @@ import {
   getSupportedCompetition,
 } from '../config/supported-competitions.config';
 
-import { SupportedCompetitionConfig } from '../interfaces/supported-competition-config.interface';
+import { CollectionFrequency } from '../enums/collection-frequency.enum';
 
 import { CompetitionPriority } from '../enums/competition-priority.enum';
 
@@ -13,25 +13,26 @@ import { CompetitionRegion } from '../enums/competition-region.enum';
 
 import { CompetitionType } from '../enums/competition-type.enum';
 
-import { CollectionFrequency } from '../enums/collection-frequency.enum';
+import { SupportedCompetitionConfig } from '../interfaces/supported-competition-config.interface';
 
 import {
+  getActiveMensCompetitions,
+  getClubCompetitions,
   getCompetitionCounts,
   getCompetitionsByFrequency,
   getCompetitionsByPriority,
   getCompetitionsByRegion,
   getCompetitionsByType,
+  getDailyCompetitions,
   getEnabledCompetitions,
   getHighValueCompetitions,
-  getPredictionCompetitions,
-  getOddsCompetitions,
-  getNewsCompetitions,
-  getSupportedLeagues,
-  getClubCompetitions,
   getInternationalCompetitions,
+  getOddsCompetitions,
+  getPredictionCompetitions,
+  getSeasonalCompetitions,
+  getSupportedLeagues,
   hasApiFootballMapping,
   hasFootballDataMapping,
-  hasSportsDbMapping,
   hasOddsApiMapping,
 } from '../utils/competition.utils';
 
@@ -59,10 +60,6 @@ export class SupportedCompetitionService {
     return getOddsCompetitions(this.competitions);
   }
 
-  getNewsEnabled(): SupportedCompetitionConfig[] {
-    return getNewsCompetitions(this.competitions);
-  }
-
   getByType(type: CompetitionType): SupportedCompetitionConfig[] {
     return getCompetitionsByType(this.competitions, type);
   }
@@ -80,21 +77,11 @@ export class SupportedCompetitionService {
   }
 
   getDaily(): SupportedCompetitionConfig[] {
-    return this.getByFrequency(CollectionFrequency.DAILY);
-  }
-
-  getWeekly(): SupportedCompetitionConfig[] {
-    return this.getByFrequency(CollectionFrequency.WEEKLY);
-  }
-
-  getTargeted(): SupportedCompetitionConfig[] {
-    return this.getByFrequency(CollectionFrequency.TARGETED);
+    return getDailyCompetitions(this.competitions);
   }
 
   getSeasonal(): SupportedCompetitionConfig[] {
-    return this.competitions.filter(
-      (competition) => competition.seasonal === true,
-    );
+    return getSeasonalCompetitions(this.competitions);
   }
 
   getLeagues(): SupportedCompetitionConfig[] {
@@ -113,16 +100,16 @@ export class SupportedCompetitionService {
     return getHighValueCompetitions(this.competitions);
   }
 
+  getActiveMens(): SupportedCompetitionConfig[] {
+    return getActiveMensCompetitions(this.competitions);
+  }
+
   getWithApiFootball(): SupportedCompetitionConfig[] {
     return this.competitions.filter(hasApiFootballMapping);
   }
 
   getWithFootballData(): SupportedCompetitionConfig[] {
     return this.competitions.filter(hasFootballDataMapping);
-  }
-
-  getWithSportsDb(): SupportedCompetitionConfig[] {
-    return this.competitions.filter(hasSportsDbMapping);
   }
 
   getWithOddsApi(): SupportedCompetitionConfig[] {
