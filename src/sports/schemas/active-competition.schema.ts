@@ -145,11 +145,3 @@ ActiveCompetitionSchema.index({
   apiFootballLeagueId: 1,
   season: 1,
 });
-
-ActiveCompetitionSchema.index({
-  footballDataCode: 1,
-});
-
-ActiveCompetitionSchema.index({
-  oddsApiSportKey: 1,
-});

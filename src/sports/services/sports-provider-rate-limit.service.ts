@@ -237,6 +237,7 @@ export class SportsProviderRateLimitService {
               upsert: true,
               returnDocument: 'after',
               setDefaultsOnInsert: true,
+              updatePipeline: true,
             },
           )
           .lean()
