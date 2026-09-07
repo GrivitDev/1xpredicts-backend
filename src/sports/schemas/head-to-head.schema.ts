@@ -118,7 +118,10 @@ export class HeadToHead {
   })
   meetings!: HeadToHeadMeeting[];
 
-  @Prop()
+  @Prop({
+    type: Date,
+    default: null,
+  })
   lastMeetingAt?: Date | null;
 
   @Prop()
