@@ -1,5 +1,9 @@
 import { Injectable, Logger } from '@nestjs/common';
 
+import { InjectModel } from '@nestjs/mongoose';
+
+import { Model } from 'mongoose';
+
 import { ApiFootballService } from '../providers/api-football.service';
 
 import { ApiFootballLeagueSeason } from '../providers/api-football.interfaces';
@@ -9,6 +13,16 @@ import { SupportedCompetitionService } from './supported-competition.service';
 import { ActiveCompetitionService } from './active-competition.service';
 
 import { ActiveCompetitionStatus } from '../interfaces/active-competition.interface';
+
+import {
+  ApiFootballLeague,
+  ApiFootballLeagueDocument,
+} from '../schemas/api-football-league.schema';
+
+import {
+  SupportedCompetition,
+  SupportedCompetitionDocument,
+} from '../schemas/supported-competition.schema';
 
 @Injectable()
 export class ApiFootballActiveCompetitionService {
@@ -22,81 +36,220 @@ export class ApiFootballActiveCompetitionService {
     private readonly supportedCompetitionService: SupportedCompetitionService,
 
     private readonly activeCompetitionService: ActiveCompetitionService,
+
+    @InjectModel(ApiFootballLeague.name)
+    private readonly apiFootballLeagueModel: Model<ApiFootballLeagueDocument>,
+
+    @InjectModel(SupportedCompetition.name)
+    private readonly supportedCompetitionModel: Model<SupportedCompetitionDocument>,
   ) {}
 
   async refreshCurrentCompetitions(): Promise<{
     discovered: number;
+    supported: number;
     matched: number;
     updated: number;
     skipped: number;
   }> {
-    const supportedCompetitions =
-      this.supportedCompetitionService.getWithApiFootball();
+    // ============================================================
+    // 1. ONE API-FOOTBALL CALL
+    // ============================================================
 
-    const response = await this.apiFootballService.getCurrentLeagues();
+    const response = await this.apiFootballService.getLeagues();
 
     const apiFootballLeagues = response.response ?? [];
 
-    const supportedByNameAndCountry = new Map<
-      string,
-      (typeof supportedCompetitions)[number]
-    >();
+    // ============================================================
+    // 2. SAVE COMPLETE API-FOOTBALL CATALOG
+    // ============================================================
 
-    const supportedByName = new Map<
-      string,
-      (typeof supportedCompetitions)[number]
-    >();
+    const now = new Date();
 
-    for (const competition of supportedCompetitions) {
-      const configuredName = competition.providers.apiFootballName?.trim();
+    const catalogOperations = apiFootballLeagues
+      .filter(
+        (league) =>
+          typeof league.league?.id === 'number' &&
+          Boolean(league.league?.name?.trim()),
+      )
+      .map((league) => ({
+        updateOne: {
+          filter: {
+            apiFootballLeagueId: league.league!.id!,
+          },
+          update: {
+            $set: {
+              apiFootballLeagueId: league.league!.id!,
+              name: league.league!.name!.trim(),
+              type: league.league?.type ?? null,
+              logo: league.league?.logo ?? null,
+              country: league.country?.name ?? null,
+              countryCode: league.country?.code ?? null,
+              countryFlag: league.country?.flag ?? null,
+              seasons: league.seasons ?? [],
+              lastSyncedAt: now,
+            },
+          },
+          upsert: true,
+        },
+      }));
 
-      const configuredCountry =
-        competition.providers.apiFootballCountry?.trim();
+    if (catalogOperations.length > 0) {
+      await this.apiFootballLeagueModel.bulkWrite(catalogOperations);
+    }
 
-      if (!configuredName) {
-        continue;
+    // ============================================================
+    // 3. SAVE OUR COMPLETE SUPPORTED COMPETITION LIST
+    // ============================================================
+    //
+    // IMPORTANT:
+    // Do not overwrite providers.apiFootballId.
+    // That ID is our persistent provider mapping.
+    // ============================================================
+
+    const allSupportedCompetitions = this.supportedCompetitionService.getAll();
+
+    const supportedOperations = allSupportedCompetitions.map((competition) => {
+      const competitionId = competition.id.trim().toLowerCase();
+
+      return {
+        updateOne: {
+          filter: {
+            competitionId,
+          },
+          update: {
+            $set: {
+              competitionId,
+              name: competition.name,
+              type: competition.type,
+              region: competition.region,
+              priority: competition.priority,
+              enabled: competition.enabled,
+              predictionEnabled: competition.predictionEnabled,
+              oddsEnabled: competition.oddsEnabled,
+              collectionFrequency: competition.collectionFrequency,
+              'providers.apiFootballName':
+                competition.providers.apiFootballName ?? null,
+              'providers.apiFootballCountry':
+                competition.providers.apiFootballCountry ?? null,
+              'providers.footballDataCode':
+                competition.providers.footballDataCode ?? null,
+              'providers.oddsApiSportKey':
+                competition.providers.oddsApiSportKey ?? null,
+              seasonal: competition.seasonal ?? false,
+              gender: competition.gender ?? undefined,
+              notes: competition.notes ?? null,
+            },
+          },
+          upsert: true,
+        },
+      };
+    });
+
+    if (supportedOperations.length > 0) {
+      await this.supportedCompetitionModel.bulkWrite(supportedOperations);
+    }
+
+    // ============================================================
+    // 4. LOAD SUPPORTED COMPETITIONS THAT USE API-FOOTBALL
+    // ============================================================
+
+    const storedSupportedCompetitions = await this.supportedCompetitionModel
+      .find({
+        enabled: true,
+        'providers.apiFootballName': {
+          $exists: true,
+          $ne: null,
+        },
+      })
+      .lean()
+      .exec();
+
+    // ============================================================
+    // 5. BUILD API-FOOTBALL LOOKUPS
+    // ============================================================
+
+    const apiLeagues = await this.apiFootballLeagueModel.find().lean().exec();
+
+    const byId = new Map<number, (typeof apiLeagues)[number]>();
+
+    const byNameAndCountry = new Map<string, (typeof apiLeagues)[number]>();
+
+    const byName = new Map<string, (typeof apiLeagues)[number]>();
+
+    for (const league of apiLeagues) {
+      byId.set(league.apiFootballLeagueId, league);
+
+      const normalizedName = this.normalizeName(league.name);
+
+      if (!byName.has(normalizedName)) {
+        byName.set(normalizedName, league);
       }
 
-      const normalizedName = this.normalizeName(configuredName);
-
-      if (!supportedByName.has(normalizedName)) {
-        supportedByName.set(normalizedName, competition);
-      }
-
-      if (configuredCountry) {
-        supportedByNameAndCountry.set(
-          this.buildNameCountryKey(normalizedName, configuredCountry),
-          competition,
+      if (league.country) {
+        byNameAndCountry.set(
+          this.buildNameCountryKey(normalizedName, league.country),
+          league,
         );
       }
     }
+
+    // ============================================================
+    // 6. MATCH + CREATE ACTIVE COMPETITIONS
+    // ============================================================
 
     let matched = 0;
     let updated = 0;
     let skipped = 0;
 
-    for (const providerLeague of apiFootballLeagues) {
-      const leagueId = providerLeague.league?.id;
+    const activeCompetitionIds: string[] = [];
 
-      const leagueName = providerLeague.league?.name;
+    for (const storedCompetition of storedSupportedCompetitions) {
+      const competitionId = storedCompetition.competitionId
+        .trim()
+        .toLowerCase();
 
-      const countryName = providerLeague.country?.name;
+      const configuredName =
+        storedCompetition.providers?.apiFootballName?.trim();
 
-      if (typeof leagueId !== 'number' || !leagueName?.trim()) {
+      const configuredCountry =
+        storedCompetition.providers?.apiFootballCountry?.trim();
+
+      if (!configuredName) {
         skipped += 1;
         continue;
       }
 
-      const normalizedName = this.normalizeName(leagueName);
+      // ----------------------------------------------------------
+      // First use an already discovered provider ID.
+      // ----------------------------------------------------------
 
-      const competition =
-        (countryName
-          ? supportedByNameAndCountry.get(
-              this.buildNameCountryKey(normalizedName, countryName),
-            )
-          : undefined) ?? supportedByName.get(normalizedName);
+      let providerLeague =
+        typeof storedCompetition.providers?.apiFootballId === 'number'
+          ? byId.get(storedCompetition.providers.apiFootballId)
+          : undefined;
 
-      if (!competition) {
+      // ----------------------------------------------------------
+      // Only perform name/country matching when no stored ID exists.
+      // ----------------------------------------------------------
+
+      if (!providerLeague) {
+        const normalizedName = this.normalizeName(configuredName);
+
+        providerLeague =
+          (configuredCountry
+            ? byNameAndCountry.get(
+                this.buildNameCountryKey(normalizedName, configuredCountry),
+              )
+            : undefined) ?? byName.get(normalizedName);
+      }
+
+      if (!providerLeague) {
+        skipped += 1;
+
+        this.logger.warn(
+          `No API-Football league match found for "${storedCompetition.name}"`,
+        );
+
         continue;
       }
 
@@ -109,10 +262,33 @@ export class ApiFootballActiveCompetitionService {
         skipped += 1;
 
         this.logger.warn(
-          `No valid current season found for "${leagueName}" (${leagueId})`,
+          `No valid current season found for "${providerLeague.name}" ` +
+            `(${providerLeague.apiFootballLeagueId})`,
         );
 
         continue;
+      }
+
+      matched += 1;
+
+      // ----------------------------------------------------------
+      // Save provider ID only when it has not already been stored.
+      // ----------------------------------------------------------
+
+      if (
+        storedCompetition.providers?.apiFootballId !==
+        providerLeague.apiFootballLeagueId
+      ) {
+        await this.supportedCompetitionModel.updateOne(
+          {
+            competitionId,
+          },
+          {
+            $set: {
+              'providers.apiFootballId': providerLeague.apiFootballLeagueId,
+            },
+          },
+        );
       }
 
       const seasonStartDate = this.parseDate(currentSeason.start);
@@ -121,14 +297,23 @@ export class ApiFootballActiveCompetitionService {
 
       const status = this.calculateStatus(seasonStartDate, seasonEndDate);
 
-      matched += 1;
+      const supportedCompetition =
+        this.supportedCompetitionService.getById(competitionId);
 
-      await this.activeCompetitionService.upsert(competition, {
-        apiFootballLeagueId: leagueId,
+      if (!supportedCompetition) {
+        skipped += 1;
 
-        footballDataCode: competition.providers.footballDataCode,
+        continue;
+      }
 
-        oddsApiSportKey: competition.providers.oddsApiSportKey,
+      await this.activeCompetitionService.upsert(supportedCompetition, {
+        apiFootballLeagueId: providerLeague.apiFootballLeagueId,
+
+        footballDataCode:
+          supportedCompetition.providers.footballDataCode ?? undefined,
+
+        oddsApiSportKey:
+          supportedCompetition.providers.oddsApiSportKey ?? undefined,
 
         season: currentSeason.year,
 
@@ -144,19 +329,31 @@ export class ApiFootballActiveCompetitionService {
         >,
       });
 
+      activeCompetitionIds.push(competitionId);
+
       updated += 1;
     }
 
+    // ============================================================
+    // 7. REMOVE ACTIVE COMPETITIONS THAT ARE NO LONGER MATCHED
+    // ============================================================
+
+    await this.activeCompetitionService.removeMissingCompetitions(
+      activeCompetitionIds,
+    );
+
     this.logger.log(
-      `API-Football competition discovery completed: ` +
-        `discovered=${apiFootballLeagues.length}, ` +
+      `API-Football synchronization completed: ` +
+        `catalog=${apiFootballLeagues.length}, ` +
+        `supported=${storedSupportedCompetitions.length}, ` +
         `matched=${matched}, ` +
-        `updated=${updated}, ` +
+        `activeUpdated=${updated}, ` +
         `skipped=${skipped}`,
     );
 
     return {
       discovered: apiFootballLeagues.length,
+      supported: storedSupportedCompetitions.length,
       matched,
       updated,
       skipped,

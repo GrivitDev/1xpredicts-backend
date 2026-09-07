@@ -235,4 +235,17 @@ export class ApiFootballService implements OnModuleInit {
 
     this.logger.error(`API-Football request failed: ${endpoint}`, error);
   }
+
+  // ============================================================
+  // LEAGUES
+  // ============================================================
+
+  async getLeagues(): Promise<
+    ApiFootballResponse<ApiFootballLeagueResponse[]>
+  > {
+    return this.request<ApiFootballResponse<ApiFootballLeagueResponse[]>>(
+      '/leagues',
+      {},
+    );
+  }
 }

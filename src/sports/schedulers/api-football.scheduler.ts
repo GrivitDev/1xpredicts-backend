@@ -6,6 +6,8 @@ import { SPORTS_DATA_COLLECTION_CONFIG } from '../config/sports-data-collection.
 
 import { ApiFootballQueueService } from '../services/api-football-queue.service';
 
+import { ApiFootballQueueBuilderService } from '../services/api-football-queue-builder.service';
+
 import { SportsCollectionService } from '../services/sports-collection.service';
 
 import { TeamCompetitionStatsService } from '../services/team-competition-stats.service';
@@ -24,8 +26,12 @@ export class ApiFootballScheduler {
 
   private running = false;
 
+  private queueBuilding = false;
+
   constructor(
     private readonly apiFootballQueueService: ApiFootballQueueService,
+
+    private readonly apiFootballQueueBuilderService: ApiFootballQueueBuilderService,
 
     private readonly sportsCollectionService: SportsCollectionService,
 
@@ -34,7 +40,38 @@ export class ApiFootballScheduler {
     private readonly headToHeadService: HeadToHeadService,
   ) {}
 
+  @Cron('55 0 * * *', {
+    name: 'api-football-daily-queue',
+    timeZone: 'Africa/Lagos',
+  })
+  async buildDailyQueue(): Promise<void> {
+    if (this.queueBuilding) {
+      return;
+    }
+
+    this.queueBuilding = true;
+
+    try {
+      const result =
+        await this.apiFootballQueueBuilderService.buildDailyQueue();
+
+      this.logger.log(
+        `API-Football daily queue: ` +
+          `${result.queued} queued, ` +
+          `${result.skipped} skipped`,
+      );
+    } catch (error) {
+      this.logger.error(
+        'API-Football daily queue creation failed',
+        error instanceof Error ? error.stack : String(error),
+      );
+    } finally {
+      this.queueBuilding = false;
+    }
+  }
+
   @Cron('* * * * *', {
+    name: 'api-football-process-queue',
     timeZone: 'Africa/Lagos',
   })
   async processQueue(): Promise<void> {
@@ -73,7 +110,7 @@ export class ApiFootballScheduler {
       } else if (job.type === ApiFootballQueueJobType.STANDINGS) {
         await this.processStandings(job);
       } else {
-        throw new Error(`Unsupported API-Football job type: ${job.type}`);
+        throw new Error('Unsupported API-Football job type');
       }
 
       await this.apiFootballQueueService.complete(String(job._id));
@@ -84,7 +121,7 @@ export class ApiFootballScheduler {
       );
 
       this.logger.error(
-        `API-Football job ${job._id} failed`,
+        `API-Football job ${String(job._id)} failed`,
         error instanceof Error ? error.stack : String(error),
       );
     }

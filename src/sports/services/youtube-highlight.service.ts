@@ -95,7 +95,7 @@ export class YoutubeHighlightService {
         },
         {
           upsert: true,
-          new: true,
+          returnDocument: 'after',
         },
       )
       .exec();
@@ -140,7 +140,7 @@ export class YoutubeHighlightService {
             sort: {
               createdAt: 1,
             },
-            new: true,
+            returnDocument: 'after',
           },
         )
         .exec();

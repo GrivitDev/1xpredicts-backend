@@ -4,8 +4,6 @@ import { ApiFootballActiveCompetitionService } from './api-football-active-compe
 
 import { ApiFootballQueueBuilderService } from './api-football-queue-builder.service';
 
-import { SPORTS_DATA_COLLECTION_CONFIG } from '../config/sports-data-collection.config';
-
 @Injectable()
 export class SportsStartupService implements OnModuleInit {
   private readonly logger = new Logger(SportsStartupService.name);
@@ -22,28 +20,23 @@ export class SportsStartupService implements OnModuleInit {
         await this.apiFootballActiveCompetitionService.refreshCurrentCompetitions();
 
       this.logger.log(
-        `API-Football discovery completed: ` +
-          `${result.matched} matched, ` +
-          `${result.updated} updated, ` +
-          `${result.skipped} skipped`,
+        `API-Football startup synchronization completed: ` +
+          `catalog=${result.discovered}, ` +
+          `supported=${result.supported}, ` +
+          `matched=${result.matched}, ` +
+          `active=${result.updated}, ` +
+          `skipped=${result.skipped}`,
       );
     } catch (error) {
       this.logger.error(
-        'API-Football startup discovery failed',
+        'API-Football startup synchronization failed',
         error instanceof Error ? error.stack : String(error),
       );
 
       return;
     }
 
-    const delay =
-      SPORTS_DATA_COLLECTION_CONFIG.API_FOOTBALL.startup
-        .initialFixtureDelayMinutes;
-
-    if (delay > 0) {
-      await this.sleep(delay * 60_000);
-    }
-
+    // MongoDB only. No provider call here.
     try {
       const result =
         await this.apiFootballQueueBuilderService.buildInitialQueue();
@@ -59,9 +52,5 @@ export class SportsStartupService implements OnModuleInit {
         error instanceof Error ? error.stack : String(error),
       );
     }
-  }
-
-  private sleep(milliseconds: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, milliseconds));
   }
 }

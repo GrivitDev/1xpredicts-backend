@@ -10,6 +10,11 @@ import {
 } from '../schemas/active-competition.schema';
 
 import {
+  ApiFootballFixture,
+  ApiFootballFixtureDocument,
+} from '../schemas/api-football/api-football-fixture.schema';
+
+import {
   ApiFootballQueue,
   ApiFootballQueueDocument,
 } from '../schemas/api-football-queue.schema';
@@ -30,6 +35,9 @@ export class ApiFootballQueueBuilderService {
     @InjectModel(ActiveCompetition.name)
     private readonly activeCompetitionModel: Model<ActiveCompetitionDocument>,
 
+    @InjectModel(ApiFootballFixture.name)
+    private readonly fixtureModel: Model<ApiFootballFixtureDocument>,
+
     @InjectModel(ApiFootballQueue.name)
     private readonly queueModel: Model<ApiFootballQueueDocument>,
 
@@ -42,6 +50,25 @@ export class ApiFootballQueueBuilderService {
   }> {
     const competitions = await this.getEligibleCompetitions();
 
+    return this.buildQueueForCompetitions(competitions, collectionDate);
+  }
+
+  async buildDailyQueue(collectionDate = this.getWATDate()): Promise<{
+    queued: number;
+    skipped: number;
+  }> {
+    const competitions = await this.getRecentMatchCompetitions();
+
+    return this.buildQueueForCompetitions(competitions, collectionDate);
+  }
+
+  private async buildQueueForCompetitions(
+    competitions: ActiveCompetitionDocument[],
+    collectionDate: string,
+  ): Promise<{
+    queued: number;
+    skipped: number;
+  }> {
     let queued = 0;
     let skipped = 0;
 
@@ -112,13 +139,6 @@ export class ApiFootballQueueBuilderService {
     };
   }
 
-  async buildDailyQueue(collectionDate = this.getWATDate()): Promise<{
-    queued: number;
-    skipped: number;
-  }> {
-    return this.buildInitialQueue(collectionDate);
-  }
-
   private async getEligibleCompetitions(): Promise<
     ActiveCompetitionDocument[]
   > {
@@ -149,6 +169,111 @@ export class ApiFootballQueueBuilderService {
       .exec();
   }
 
+  private async getRecentMatchCompetitions(): Promise<
+    ActiveCompetitionDocument[]
+  > {
+    const now = new Date();
+
+    const since = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+
+    const recentFixtures = await this.fixtureModel
+      .find({
+        fixtureDate: {
+          $gte: since,
+          $lt: now,
+        },
+
+        statusShort: {
+          $in: ['FT', 'AET', 'PEN'],
+        },
+      })
+      .select({
+        leagueId: 1,
+        season: 1,
+      })
+      .lean()
+      .exec();
+
+    if (recentFixtures.length === 0) {
+      return [];
+    }
+
+    const competitionKeys = new Set<string>();
+
+    for (const fixture of recentFixtures) {
+      if (
+        typeof fixture.leagueId !== 'number' ||
+        typeof fixture.season !== 'number'
+      ) {
+        continue;
+      }
+
+      competitionKeys.add(`${fixture.leagueId}:${fixture.season}`);
+    }
+
+    if (competitionKeys.size === 0) {
+      return [];
+    }
+
+    const leagueIds: number[] = [];
+    const seasons: number[] = [];
+
+    for (const key of competitionKeys) {
+      const [leagueIdValue, seasonValue] = key.split(':');
+
+      const leagueId = Number(leagueIdValue);
+      const season = Number(seasonValue);
+
+      if (!Number.isInteger(leagueId) || !Number.isInteger(season)) {
+        continue;
+      }
+
+      leagueIds.push(leagueId);
+      seasons.push(season);
+    }
+
+    if (leagueIds.length === 0 || seasons.length === 0) {
+      return [];
+    }
+
+    const competitions = await this.activeCompetitionModel
+      .find({
+        status: {
+          $in: [
+            ActiveCompetitionStatus.UPCOMING,
+            ActiveCompetitionStatus.ACTIVE,
+          ],
+        },
+
+        apiFootballLeagueId: {
+          $in: [...new Set(leagueIds)],
+        },
+
+        season: {
+          $in: [...new Set(seasons)],
+        },
+      })
+      .sort({
+        priority: 1,
+        name: 1,
+      })
+      .lean()
+      .exec();
+
+    return competitions.filter((competition) => {
+      if (
+        typeof competition.apiFootballLeagueId !== 'number' ||
+        typeof competition.season !== 'number'
+      ) {
+        return false;
+      }
+
+      return competitionKeys.has(
+        `${competition.apiFootballLeagueId}:${competition.season}`,
+      );
+    });
+  }
+
   private getQueuePriority(priority: CompetitionPriority): number {
     switch (priority) {
       case CompetitionPriority.ELITE:
@@ -162,9 +287,6 @@ export class ApiFootballQueueBuilderService {
 
       case CompetitionPriority.SELECTIVE:
         return 4;
-
-      default:
-        return 10;
     }
   }
 

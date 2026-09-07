@@ -114,12 +114,28 @@ import { FootballDataScheduler } from './schedulers/football-data.scheduler';
 import { OddsApiScheduler } from './schedulers/odds-api.scheduler';
 
 import { YoutubeScheduler } from './schedulers/youtube.scheduler';
+import {
+  ApiFootballLeague,
+  ApiFootballLeagueSchema,
+} from './schemas/api-football-league.schema';
+import {
+  SupportedCompetition,
+  SupportedCompetitionSchema,
+} from './schemas/supported-competition.schema';
 
 @Module({
   imports: [
     ScheduleModule.forRoot(),
 
     MongooseModule.forFeature([
+      {
+        name: ApiFootballLeague.name,
+        schema: ApiFootballLeagueSchema,
+      },
+      {
+        name: SupportedCompetition.name,
+        schema: SupportedCompetitionSchema,
+      },
       {
         name: ActiveCompetition.name,
         schema: ActiveCompetitionSchema,

@@ -224,7 +224,7 @@ export class HeadToHeadService {
         },
         {
           upsert: true,
-          new: true,
+          returnDocument: 'after',
         },
       )
       .exec();
