@@ -1,5 +1,3 @@
-// src/ai/ai.module.ts
-
 import { Module } from '@nestjs/common';
 
 import { MongooseModule } from '@nestjs/mongoose';
@@ -15,6 +13,8 @@ import { PredictionsModule } from '../predictions/predictions.module';
 import { CommunityModule } from '../community/community.module';
 
 import { UploadsModule } from '../uploads/uploads.module';
+
+import { SupportedCompetitionService } from '../sports/services/supported-competition.service';
 
 // ============================================================
 // COMMUNITY AI
@@ -78,7 +78,6 @@ import {
     MongooseModule.forFeature([
       {
         name: AiLeagueIntelligence.name,
-
         schema: AiLeagueIntelligenceSchema,
       },
     ]),
@@ -87,6 +86,8 @@ import {
   controllers: [AiPredictionController],
 
   providers: [
+    SupportedCompetitionService,
+
     AiCommunityPostService,
 
     AiCommunityDiscussionService,
