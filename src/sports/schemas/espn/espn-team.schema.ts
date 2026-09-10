@@ -105,10 +105,6 @@ EspnTeamSchema.index({
 });
 
 EspnTeamSchema.index({
-  abbreviation: 1,
-});
-
-EspnTeamSchema.index({
   leagueId: 1,
   active: 1,
 });

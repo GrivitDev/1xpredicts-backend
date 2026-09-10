@@ -395,7 +395,6 @@ export class Prediction {
   @Prop({
     required: true,
     type: Date,
-    index: true,
   })
   kickoff!: Date;
 

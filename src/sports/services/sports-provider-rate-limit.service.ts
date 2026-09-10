@@ -135,76 +135,93 @@ export class SportsProviderRateLimitService {
         );
       }
 
-      /**
-       * The request slot is acquired atomically.
-       *
-       * Do not manually set createdAt/updatedAt here.
-       * Mongoose timestamps manage those fields automatically.
-       */
-      const updated = await this.rateLimitModel.findOneAndUpdate(
-        {
-          provider,
-
-          $and: [
-            {
-              $or: [
-                {
-                  lockedUntil: {
-                    $exists: false,
-                  },
-                },
-                {
-                  lockedUntil: {
-                    $lte: now,
-                  },
-                },
-              ],
-            },
-
-            {
-              $or: [
-                {
-                  lastRequestAt: {
-                    $exists: false,
-                  },
-                },
-                {
-                  lastRequestAt: {
-                    $lte: new Date(
-                      now.getTime() - config.minIntervalSeconds * 1000,
-                    ),
-                  },
-                },
-              ],
-            },
-
-            ...filters,
-          ],
-        },
-
-        {
-          $set: {
+      try {
+        /**
+         * Atomically acquire the provider request slot.
+         *
+         * Mongoose timestamps manage createdAt/updatedAt.
+         */
+        const updated = await this.rateLimitModel.findOneAndUpdate(
+          {
             provider,
-            lastRequestAt: now,
-            lockedUntil,
-            dailyPeriod: currentDailyPeriod,
-            monthlyPeriod: currentMonthlyPeriod,
+
+            $and: [
+              {
+                $or: [
+                  {
+                    lockedUntil: {
+                      $exists: false,
+                    },
+                  },
+                  {
+                    lockedUntil: {
+                      $lte: now,
+                    },
+                  },
+                ],
+              },
+
+              {
+                $or: [
+                  {
+                    lastRequestAt: {
+                      $exists: false,
+                    },
+                  },
+                  {
+                    lastRequestAt: {
+                      $lte: new Date(
+                        now.getTime() - config.minIntervalSeconds * 1000,
+                      ),
+                    },
+                  },
+                ],
+              },
+
+              ...filters,
+            ],
           },
 
-          $inc: {
-            dailyRequests: 1,
-            monthlyRequests: 1,
+          {
+            $set: {
+              provider,
+              lastRequestAt: now,
+              lockedUntil,
+              dailyPeriod: currentDailyPeriod,
+              monthlyPeriod: currentMonthlyPeriod,
+            },
+
+            $inc: {
+              dailyRequests: 1,
+              monthlyRequests: 1,
+            },
           },
-        },
 
-        {
-          returnDocument: 'after',
-          upsert: true,
-        },
-      );
+          {
+            returnDocument: 'after',
+            upsert: true,
+          },
+        );
 
-      if (updated) {
-        return;
+        if (updated) {
+          return;
+        }
+      } catch (error) {
+        /**
+         * Another concurrent caller may have created the provider
+         * state between ensurePeriodState() and this atomic upsert.
+         *
+         * The unique provider index correctly rejects that insert.
+         * Re-read the state and retry instead of treating it as a
+         * provider failure.
+         */
+        if (this.isDuplicateProviderKeyError(error)) {
+          await this.sleep(100);
+
+          continue;
+        }
+
+        throw error;
       }
 
       await this.sleep(1000);
@@ -423,15 +440,30 @@ export class SportsProviderRateLimitService {
       .exec();
 
     if (!existing) {
-      await this.rateLimitModel.create({
-        provider,
-        lockedUntil: undefined,
-        lastRequestAt: undefined,
-        dailyPeriod,
-        dailyRequests: 0,
-        monthlyPeriod,
-        monthlyRequests: 0,
-      });
+      try {
+        await this.rateLimitModel.create({
+          provider,
+          lockedUntil: undefined,
+          lastRequestAt: undefined,
+          dailyPeriod,
+          dailyRequests: 0,
+          monthlyPeriod,
+          monthlyRequests: 0,
+        });
+      } catch (error) {
+        /**
+         * Multiple startup workers may initialize the same
+         * provider simultaneously. A unique provider index is
+         * expected and protects against duplicate state.
+         *
+         * If another worker won the race, simply continue.
+         */
+        if (this.isDuplicateProviderKeyError(error)) {
+          return;
+        }
+
+        throw error;
+      }
 
       return;
     }
@@ -453,8 +485,7 @@ export class SportsProviderRateLimitService {
     }
 
     /**
-     * Mongoose timestamps handle updatedAt automatically.
-     * Do not explicitly add updatedAt to this update.
+     * Mongoose timestamps manage updatedAt automatically.
      */
     await this.rateLimitModel.updateOne(
       {
@@ -463,6 +494,24 @@ export class SportsProviderRateLimitService {
       {
         $set: update,
       },
+    );
+  }
+
+  private isDuplicateProviderKeyError(error: unknown): boolean {
+    if (!error || typeof error !== 'object') {
+      return false;
+    }
+
+    const candidate = error as {
+      code?: number;
+      keyPattern?: Record<string, unknown>;
+      keyValue?: Record<string, unknown>;
+    };
+
+    return (
+      candidate.code === 11000 &&
+      Boolean(candidate.keyPattern?.provider) &&
+      Boolean(candidate.keyValue?.provider)
     );
   }
 
