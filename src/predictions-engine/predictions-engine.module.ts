@@ -4,12 +4,10 @@ import { MongooseModule } from '@nestjs/mongoose';
 import { SportsModule } from '../sports/sports.module';
 
 import { Prediction, PredictionSchema } from './schemas/prediction.schema';
-
 import {
   PredictionQueue,
   PredictionQueueSchema,
 } from './schemas/prediction-queue.schema';
-
 import {
   PredictionCalibration,
   PredictionCalibrationSchema,
@@ -17,9 +15,6 @@ import {
 
 import { PredictionsEngineController } from './controllers/predictions-engine.controller';
 
-/*
- * Statistical engines
- */
 import { GoalModelEngine } from './engines/statistical/goal-model.engine';
 import { MatchResultEngine } from './engines/statistical/match-result.engine';
 import { GoalsMarketEngine } from './engines/statistical/goals-market.engine';
@@ -28,20 +23,11 @@ import { HalfGoalsEngine } from './engines/statistical/half-goals.engine';
 import { HandicapMarketEngine } from './engines/statistical/handicap-market.engine';
 import { StatisticalPredictionEngine } from './engines/statistical/statistical-prediction.engine';
 
-/*
- * AI engines
- */
 import { GeminiPredictionEngine } from './engines/ai/gemini-prediction.engine';
 import { GroqPredictionEngine } from './engines/ai/grok-prediction.engine';
 
-/*
- * Final decision
- */
 import { FinalDecisionEngine } from './engines/final/final-decision.engine';
 
-/*
- * Markets
- */
 import { AsianHandicapMarket } from './markets/asian-handicap.market';
 import { BttsGoalsMarket } from './markets/btts-goals.market';
 import { BttsMarket } from './markets/btts.market';
@@ -55,20 +41,15 @@ import { OverUnderMarket } from './markets/over-under.market';
 import { SecondHalfGoalsMarket } from './markets/second-half-goals.market';
 import { TeamTotalGoalsMarket } from './markets/team-total-goals.market';
 
-/*
- * Calibration
- */
 import { CalibrationService } from './calibration/calibration.service';
 import { CalibrationTrackerService } from './calibration/calibration-tracker.service';
 
-/*
- * Utilities
- */
+import { ConfidenceCalculator } from './calculators/confidence.calculator';
+import { JointProbabilityCalculator } from './calculators/joint-probability.calculator';
+import { ProbabilityCalculator } from './calculators/probability.calculator';
+import { RiskCalculator } from './calculators/risk.calculator';
 import { OddsCalculator } from './calculators/odds.calculator';
 
-/*
- * Services
- */
 import { AiPredictionPromptService } from './services/ai-prediction-prompt.service';
 import { AiPredictionRequestService } from './services/ai-prediction-request.service';
 import { FinalDecisionService } from './services/final-decision.service';
@@ -92,9 +73,6 @@ import { PredictionsEngineService } from './services/predictions-engine.service'
 import { SignalAggregatorService } from './services/signal-aggregator.service';
 import { StatisticalSignalService } from './services/statistical-signal.service';
 
-/*
- * Schedulers
- */
 import { PredictionQueueBuilderCron } from './schedulers/prediction-queue-builder.cron';
 import { PredictionProcessingCron } from './schedulers/prediction-processing.cron';
 
@@ -121,11 +99,9 @@ import { PredictionProcessingCron } from './schedulers/prediction-processing.cro
   controllers: [PredictionsEngineController],
 
   providers: [
-    /*
-     * ================================
-     * CORE STATISTICAL PIPELINE
-     * ================================
-     */
+    // ============================================================
+    // STATISTICAL ENGINES
+    // ============================================================
 
     GoalModelEngine,
     MatchResultEngine,
@@ -135,11 +111,9 @@ import { PredictionProcessingCron } from './schedulers/prediction-processing.cro
     HandicapMarketEngine,
     StatisticalPredictionEngine,
 
-    /*
-     * ================================
-     * MARKET IMPLEMENTATIONS
-     * ================================
-     */
+    // ============================================================
+    // MARKETS
+    // ============================================================
 
     AsianHandicapMarket,
     BttsGoalsMarket,
@@ -154,34 +128,39 @@ import { PredictionProcessingCron } from './schedulers/prediction-processing.cro
     SecondHalfGoalsMarket,
     TeamTotalGoalsMarket,
 
-    /*
-     * ================================
-     * AI
-     * ================================
-     */
+    // ============================================================
+    // AI ENGINES / SERVICES
+    // ============================================================
 
     GeminiPredictionEngine,
     GroqPredictionEngine,
 
     GeminiPredictionService,
     GroqPredictionService,
+
     AiPredictionPromptService,
     AiPredictionRequestService,
 
-    /*
-     * ================================
-     * FINAL DECISION
-     * ================================
-     */
+    // ============================================================
+    // FINAL DECISION
+    // ============================================================
 
     FinalDecisionEngine,
     FinalDecisionService,
 
-    /*
-     * ================================
-     * DATA / SIGNALS
-     * ================================
-     */
+    // ============================================================
+    // CALCULATORS
+    // ============================================================
+
+    ConfidenceCalculator,
+    JointProbabilityCalculator,
+    ProbabilityCalculator,
+    RiskCalculator,
+    OddsCalculator,
+
+    // ============================================================
+    // SIGNALS
+    // ============================================================
 
     FixtureAnalysisService,
     StatisticalSignalService,
@@ -189,41 +168,28 @@ import { PredictionProcessingCron } from './schedulers/prediction-processing.cro
     PredictionSourceOrchestratorService,
     SignalAggregatorService,
 
-    /*
-     * ================================
-     * PROBABILITY / CONFIDENCE / RISK
-     * ================================
-     */
+    // ============================================================
+    // PREDICTION SERVICES
+    // ============================================================
 
-    OddsCalculator,
     PredictionProbabilityService,
     PredictionConfidenceService,
     PredictionRiskService,
     PredictionOddsService,
     PredictionCombinationService,
 
-    /*
-     * ================================
-     * HALF-GOAL DATA
-     * ================================
-     */
-
     HalfGoalDistributionService,
 
-    /*
-     * ================================
-     * CALIBRATION
-     * ================================
-     */
+    // ============================================================
+    // CALIBRATION
+    // ============================================================
 
     CalibrationService,
     CalibrationTrackerService,
 
-    /*
-     * ================================
-     * QUEUE / PROCESSING
-     * ================================
-     */
+    // ============================================================
+    // QUEUE / GENERATION / PROCESSING
+    // ============================================================
 
     PredictionQueueService,
     PredictionSchedulerService,
@@ -231,19 +197,11 @@ import { PredictionProcessingCron } from './schedulers/prediction-processing.cro
     PredictionProcessingService,
     PredictionSaveService,
 
-    /*
-     * ================================
-     * ENGINE FACADE
-     * ================================
-     */
-
     PredictionsEngineService,
 
-    /*
-     * ================================
-     * CRONS
-     * ================================
-     */
+    // ============================================================
+    // CRONS
+    // ============================================================
 
     PredictionQueueBuilderCron,
     PredictionProcessingCron,
