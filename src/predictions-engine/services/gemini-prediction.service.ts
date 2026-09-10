@@ -1,5 +1,4 @@
 import { Injectable, Logger } from '@nestjs/common';
-
 import { ConfigService } from '@nestjs/config';
 
 import axios, { AxiosError } from 'axios';
@@ -13,6 +12,8 @@ import {
 
 import { parseAiPredictionResponse } from '../utils/ai-response-parser.util';
 
+import { AiPredictionPromptService } from './ai-prediction-prompt.service';
+
 @Injectable()
 export class GeminiPredictionService {
   private readonly logger = new Logger(GeminiPredictionService.name);
@@ -22,8 +23,7 @@ export class GeminiPredictionService {
 
   constructor(
     private readonly configService: ConfigService,
-
-    private readonly promptService: import('./ai-prediction-prompt.service').AiPredictionPromptService,
+    private readonly promptService: AiPredictionPromptService,
   ) {}
 
   async generate(request: AiPredictionRequest): Promise<AiPredictionResponse> {
@@ -57,7 +57,6 @@ export class GeminiPredictionService {
 
           generationConfig: {
             responseMimeType: 'application/json',
-
             temperature: 0.1,
           },
         },
@@ -66,7 +65,6 @@ export class GeminiPredictionService {
 
           headers: {
             'Content-Type': 'application/json',
-
             'x-goog-api-key': apiKey,
           },
         },
@@ -94,7 +92,6 @@ export class GeminiPredictionService {
 
       this.logger.error('Gemini prediction request failed', {
         status: axiosError.response?.status,
-
         data: axiosError.response?.data,
       });
 
