@@ -308,7 +308,7 @@ export function getPriorityCompetition(
 // ============================================================
 
 export function validatePriorityCompetitions(): void {
-  const expectedPriorityCompetitionCount = 39;
+  const expectedPriorityCompetitionCount = 37;
 
   if (PRIORITY_COMPETITIONS.length !== expectedPriorityCompetitionCount) {
     throw new Error(
