@@ -1,5 +1,4 @@
 import { Injectable, Logger } from '@nestjs/common';
-
 import { ConfigService } from '@nestjs/config';
 
 import axios, { AxiosError } from 'axios';
@@ -13,6 +12,8 @@ import {
 
 import { parseAiPredictionResponse } from '../utils/ai-response-parser.util';
 
+import { AiPredictionPromptService } from './ai-prediction-prompt.service';
+
 @Injectable()
 export class GroqPredictionService {
   private readonly logger = new Logger(GroqPredictionService.name);
@@ -23,8 +24,7 @@ export class GroqPredictionService {
 
   constructor(
     private readonly configService: ConfigService,
-
-    private readonly promptService: import('./ai-prediction-prompt.service').AiPredictionPromptService,
+    private readonly promptService: AiPredictionPromptService,
   ) {}
 
   async generate(request: AiPredictionRequest): Promise<AiPredictionResponse> {
@@ -71,7 +71,6 @@ export class GroqPredictionService {
 
           headers: {
             Authorization: `Bearer ${apiKey}`,
-
             'Content-Type': 'application/json',
           },
         },
@@ -97,7 +96,6 @@ export class GroqPredictionService {
 
       this.logger.error('Groq prediction request failed', {
         status: axiosError.response?.status,
-
         data: axiosError.response?.data,
       });
 
