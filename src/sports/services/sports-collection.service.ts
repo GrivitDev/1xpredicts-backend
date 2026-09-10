@@ -1,23 +1,42 @@
 import { Injectable, Logger } from '@nestjs/common';
 
 import { InjectModel } from '@nestjs/mongoose';
-
 import { Model } from 'mongoose';
 
-import { ApiFootballService } from '../providers/api-football.service';
+import { EspnService } from '../providers/espn.service';
+
 import { FootballDataService } from '../providers/football-data.service';
+
 import { TheOddsApiService } from '../providers/the-odds-api.service';
-import { YoutubeHighlightService } from './youtube-highlight.service';
 
 import {
-  ApiFootballFixture,
-  ApiFootballFixtureDocument,
-} from '../schemas/api-football/api-football-fixture.schema';
+  EspnLeague,
+  EspnLeagueDocument,
+} from '../schemas/espn/espn-league.schema';
 
 import {
-  ApiFootballStanding,
-  ApiFootballStandingDocument,
-} from '../schemas/api-football/api-football-standing.schema';
+  EspnFixture,
+  EspnFixtureDocument,
+} from '../schemas/espn/espn-fixture.schema';
+
+import {
+  EspnStanding,
+  EspnStandingDocument,
+} from '../schemas/espn/espn-standing.schema';
+
+import { EspnTeam, EspnTeamDocument } from '../schemas/espn/espn-team.schema';
+
+import {
+  EspnMatchEvent,
+  EspnMatchEventDocument,
+} from '../schemas/espn/espn-match-event.schema';
+
+import {
+  EspnMatchStatistics,
+  EspnMatchStatisticsDocument,
+} from '../schemas/espn/espn-match-statistics.schema';
+
+import { EspnOdds, EspnOddsDocument } from '../schemas/espn/espn-odds.schema';
 
 import {
   FootballDataCompetition,
@@ -49,19 +68,10 @@ import {
   SportsOddsSnapshotDocument,
 } from '../schemas/sports-odds-snapshot.schema';
 
-import { ApiFootballQueueJobType } from '../interfaces/api-football-queue.interface';
-
-import {
-  ApiFootballResponse,
-  ApiFootballFixture as ApiFootballFixturePayload,
-  ApiFootballStanding as ApiFootballStandingPayload,
-  ApiFootballStandingResponse,
-} from '../providers/api-football.interfaces';
-
 import {
   FootballDataCompetition as FootballDataCompetitionPayload,
   FootballDataMatch as FootballDataMatchPayload,
-  FootballDataStandingsResponse,
+  FootballDataStandingTable,
   FootballDataTeam as FootballDataTeamPayload,
 } from '../providers/football-data.interfaces';
 
@@ -75,19 +85,40 @@ export class SportsCollectionService {
   private readonly logger = new Logger(SportsCollectionService.name);
 
   constructor(
-    private readonly apiFootballService: ApiFootballService,
+    private readonly espnService: EspnService,
 
     private readonly footballDataService: FootballDataService,
 
     private readonly oddsApiService: TheOddsApiService,
 
-    private readonly youtubeHighlightService: YoutubeHighlightService,
+    // ----------------------------------------------------------
+    // ESPN
+    // ----------------------------------------------------------
 
-    @InjectModel(ApiFootballFixture.name)
-    private readonly apiFootballFixtureModel: Model<ApiFootballFixtureDocument>,
+    @InjectModel(EspnLeague.name)
+    private readonly espnLeagueModel: Model<EspnLeagueDocument>,
 
-    @InjectModel(ApiFootballStanding.name)
-    private readonly apiFootballStandingModel: Model<ApiFootballStandingDocument>,
+    @InjectModel(EspnFixture.name)
+    private readonly espnFixtureModel: Model<EspnFixtureDocument>,
+
+    @InjectModel(EspnStanding.name)
+    private readonly espnStandingModel: Model<EspnStandingDocument>,
+
+    @InjectModel(EspnTeam.name)
+    private readonly espnTeamModel: Model<EspnTeamDocument>,
+
+    @InjectModel(EspnMatchEvent.name)
+    private readonly espnMatchEventModel: Model<EspnMatchEventDocument>,
+
+    @InjectModel(EspnMatchStatistics.name)
+    private readonly espnMatchStatisticsModel: Model<EspnMatchStatisticsDocument>,
+
+    @InjectModel(EspnOdds.name)
+    private readonly espnOddsModel: Model<EspnOddsDocument>,
+
+    // ----------------------------------------------------------
+    // Football-Data
+    // ----------------------------------------------------------
 
     @InjectModel(FootballDataCompetition.name)
     private readonly footballDataCompetitionModel: Model<FootballDataCompetitionDocument>,
@@ -101,6 +132,10 @@ export class SportsCollectionService {
     @InjectModel(FootballDataTeam.name)
     private readonly footballDataTeamModel: Model<FootballDataTeamDocument>,
 
+    // ----------------------------------------------------------
+    // Odds API
+    // ----------------------------------------------------------
+
     @InjectModel(OddsApiSport.name)
     private readonly oddsApiSportModel: Model<OddsApiSportDocument>,
 
@@ -108,98 +143,153 @@ export class SportsCollectionService {
     private readonly sportsOddsSnapshotModel: Model<SportsOddsSnapshotDocument>,
   ) {}
 
-  async processApiFootballJob(job: {
-    type: ApiFootballQueueJobType;
-    competitionId: string;
-    leagueId: number;
-    season: number;
-    collectionDate: string;
+  // ============================================================
+  // ESPN — LEAGUE REFRESH
+  // ============================================================
+
+  async processEspnLeagueRefresh(params: {
+    leagueId: string;
+    season?: number;
   }): Promise<{
-    fixtureIds: number[];
+    fixtureIds: string[];
     collected: number;
+    standings: number;
+    leadersCollected: boolean;
   }> {
-    switch (job.type) {
-      case ApiFootballQueueJobType.FIXTURES:
-        return this.collectApiFootballFixtures(job.leagueId, job.season);
+    const scoreboard = await this.espnService.getFixtures(params.leagueId);
 
-      case ApiFootballQueueJobType.STANDINGS:
-        await this.collectApiFootballStandings(job.leagueId, job.season);
-
-        return {
-          fixtureIds: [],
-          collected: 0,
-        };
-
-      default:
-        throw new Error(`Unsupported API-Football job type: ${job.type}`);
-    }
-  }
-
-  private async collectApiFootballFixtures(
-    leagueId: number,
-    season: number,
-  ): Promise<{
-    fixtureIds: number[];
-    collected: number;
-  }> {
-    const response = await this.apiFootballService.getFixtures(
-      leagueId,
-      season,
+    const fixtureResult = await this.collectEspnFixtures(
+      params.leagueId,
+      scoreboard,
     );
 
-    const fixtures =
-      this.extractApiFootballResponse<ApiFootballFixturePayload>(response);
+    const standingsResponse = await this.espnService.getStandings(
+      params.leagueId,
+    );
 
-    const fixtureIds: number[] = [];
+    const standings = await this.collectEspnStandings(
+      params.leagueId,
+      standingsResponse,
+      params.season ?? this.getSeasonFromFixtures(scoreboard),
+    );
 
-    for (const fixture of fixtures) {
-      const fixtureId = fixture.fixture?.id;
+    const leadersResponse = await this.espnService.getLeaders(params.leagueId);
 
-      if (typeof fixtureId !== 'number') {
+    const leadersCollected = await this.collectEspnLeaders(
+      params.leagueId,
+      leadersResponse,
+      params.season ?? this.getSeasonFromFixtures(scoreboard),
+    );
+
+    return {
+      fixtureIds: fixtureResult.fixtureIds,
+
+      collected: fixtureResult.collected,
+
+      standings,
+
+      leadersCollected,
+    };
+  }
+
+  // ============================================================
+  // ESPN — FIXTURES / SCOREBOARD
+  // ============================================================
+
+  async collectEspnFixtures(
+    leagueId: string,
+    response: unknown,
+  ): Promise<{
+    fixtureIds: string[];
+    collected: number;
+  }> {
+    const events = this.extractArray(response, ['events', 'items']);
+
+    const fixtureIds: string[] = [];
+
+    for (const event of events) {
+      if (!event || typeof event !== 'object') {
         continue;
       }
 
-      const fixtureDate = this.parseDate(fixture.fixture?.date);
+      const eventId = this.toStringValue(event.id);
 
-      if (!fixtureDate) {
+      const fixtureDate = this.parseDate(event.date);
+
+      if (!eventId || !fixtureDate) {
         continue;
       }
 
-      const home = fixture.teams?.home;
-      const away = fixture.teams?.away;
+      const competition = event?.competitions?.[0];
 
-      const statusShort = fixture.fixture?.status?.short ?? 'UNKNOWN';
+      const competitors = competition?.competitors ?? [];
 
-      await this.apiFootballFixtureModel.updateOne(
-        {
-          fixtureId,
-        },
-        {
-          $set: {
-            fixtureId,
-            leagueId,
-            season,
-            fixtureDate,
-            statusShort,
-            homeTeamId: home?.id ?? 0,
-            awayTeamId: away?.id ?? 0,
-            payload: fixture as unknown as Record<string, unknown>,
-            collectedAt: new Date(),
+      const home =
+        competitors.find(
+          (item: any) => item?.homeAway === 'home' || item?.isHome === true,
+        ) ?? competitors[0];
+
+      const away =
+        competitors.find(
+          (item: any) => item?.homeAway === 'away' || item?.isAway === true,
+        ) ?? competitors[1];
+
+      const season =
+        this.toNumber(event?.season?.year) ??
+        this.toNumber(competition?.season?.year) ??
+        fixtureDate.getUTCFullYear();
+
+      const status = this.extractStatus(event);
+
+      const completed = this.isCompleted(event);
+
+      const payload = event as Record<string, unknown>;
+
+      await this.espnFixtureModel
+        .updateOne(
+          {
+            eventId,
           },
-        },
-        {
-          upsert: true,
-        },
-      );
+          {
+            $set: {
+              eventId,
+              leagueId,
+              season,
+              fixtureDate,
+              status,
+              statusDetail: this.getNestedString(competition, [
+                'status',
+                'type',
+                'description',
+              ]),
+              statusShortDetail: this.getNestedString(competition, [
+                'status',
+                'type',
+                'shortDetail',
+              ]),
+              period: this.toNumber(competition?.status?.period),
+              completed,
+              homeTeamId: this.getTeamId(home),
+              awayTeamId: this.getTeamId(away),
+              homeScore: this.toNumber(home?.score),
+              awayScore: this.toNumber(away?.score),
+              venueId: this.toStringValue(competition?.venue?.id),
+              venueName:
+                this.getNestedString(competition, ['venue', 'fullName']) ??
+                this.getNestedString(competition, ['venue', 'name']),
+              payload,
+              collectedAt: new Date(),
+            },
+          },
+          {
+            upsert: true,
+          },
+        )
+        .exec();
 
-      fixtureIds.push(fixtureId);
+      await this.collectEspnTeams(leagueId, competitors);
 
-      if (this.isCompletedFixture(fixture)) {
-        await this.youtubeHighlightService.queueFixture(
-          fixtureId,
-          String(leagueId),
-        );
-      }
+      fixtureIds.push(eventId);
     }
 
     return {
@@ -208,62 +298,575 @@ export class SportsCollectionService {
     };
   }
 
-  private async collectApiFootballStandings(
-    leagueId: number,
-    season: number,
-  ): Promise<void> {
-    const response = await this.apiFootballService.getStandings(
-      leagueId,
-      season,
-    );
+  // ============================================================
+  // ESPN — TEAMS FROM SCOREBOARD
+  // ============================================================
 
-    const standings = this.extractApiFootballStandings(response);
+  async collectEspnTeams(
+    leagueId: string,
+    competitors: unknown[],
+  ): Promise<number> {
+    let collected = 0;
 
-    const activeTeamIds = new Set<number>();
+    for (const competitor of competitors) {
+      const team = (competitor as any)?.team;
 
-    for (const standing of standings) {
-      const teamId = standing.team?.id;
+      const teamId = this.toStringValue(team?.id ?? (competitor as any)?.id);
 
-      if (typeof teamId !== 'number') {
+      if (!teamId) {
+        continue;
+      }
+
+      await this.espnTeamModel
+        .updateOne(
+          {
+            teamId,
+            leagueId,
+          },
+          {
+            $set: {
+              teamId,
+              leagueId,
+              name: team?.name ?? team?.displayName ?? `Team ${teamId}`,
+              displayName: team?.displayName ?? team?.name ?? `Team ${teamId}`,
+              shortDisplayName:
+                team?.shortDisplayName ?? team?.name ?? `Team ${teamId}`,
+              abbreviation: team?.abbreviation,
+              location: team?.location,
+              logo: this.getTeamLogo(team),
+              colors: team?.color || team?.colors,
+              active: team?.isActive ?? true,
+              payload: team ?? competitor,
+              collectedAt: new Date(),
+            },
+          },
+          {
+            upsert: true,
+          },
+        )
+        .exec();
+
+      collected += 1;
+    }
+
+    return collected;
+  }
+
+  // ============================================================
+  // ESPN — STANDINGS
+  // ============================================================
+
+  async collectEspnStandings(
+    leagueId: string,
+    response: unknown,
+    season?: number,
+  ): Promise<number> {
+    const entries = this.extractStandingEntries(response);
+
+    if (!entries.length) {
+      return 0;
+    }
+
+    const resolvedSeason =
+      season ??
+      this.toNumber((response as any)?.season?.year) ??
+      new Date().getUTCFullYear();
+
+    const activeTeamIds = new Set<string>();
+
+    let collected = 0;
+
+    for (const entry of entries) {
+      const teamId = this.toStringValue(entry?.team?.id ?? entry?.teamId);
+
+      if (!teamId) {
         continue;
       }
 
       activeTeamIds.add(teamId);
 
-      await this.apiFootballStandingModel.updateOne(
+      const statistics = Array.isArray(entry?.stats) ? entry.stats : [];
+
+      const value = (name: string): number | undefined =>
+        this.getStatisticNumber(statistics, name);
+
+      const form = this.getStatisticDisplayValue(statistics, ['form']);
+
+      await this.espnStandingModel
+        .updateOne(
+          {
+            leagueId,
+            season: resolvedSeason,
+            teamId,
+          },
+          {
+            $set: {
+              leagueId,
+              season: resolvedSeason,
+              teamId,
+              rank: this.toNumber(entry?.rank ?? entry?.position) ?? 0,
+              points: value('points'),
+              played: value('gamesPlayed') ?? value('played'),
+              wins: value('wins'),
+              draws: value('ties') ?? value('draws'),
+              losses: value('losses'),
+              goalsFor: value('pointsFor') ?? value('goalsFor'),
+              goalsAgainst: value('pointsAgainst') ?? value('goalsAgainst'),
+              goalDifference: value('goalDifference'),
+              form,
+              description: this.getStatisticDisplayValue(statistics, [
+                'description',
+              ]),
+              payload: entry as Record<string, unknown>,
+              collectedAt: new Date(),
+            },
+          },
+          {
+            upsert: true,
+          },
+        )
+        .exec();
+
+      collected += 1;
+    }
+
+    await this.espnStandingModel
+      .deleteMany({
+        leagueId,
+        season: resolvedSeason,
+        teamId: {
+          $nin: [...activeTeamIds],
+        },
+      })
+      .exec();
+
+    return collected;
+  }
+
+  // ============================================================
+  // ESPN — LEADERS
+  // ============================================================
+  //
+  // ESPN leader responses can vary by league. We retain the
+  // complete raw leader dataset inside the ESPN league document
+  // rather than inventing a rigid leader schema.
+  // ============================================================
+
+  async collectEspnLeaders(
+    leagueId: string,
+    response: unknown,
+    season?: number,
+  ): Promise<boolean> {
+    if (response === null || response === undefined) {
+      return false;
+    }
+
+    const league = await this.espnLeagueModel
+      .findOne({
+        leagueId,
+      })
+      .exec();
+
+    if (!league) {
+      return false;
+    }
+
+    const resolvedSeason =
+      season ??
+      this.toNumber((response as any)?.season?.year) ??
+      new Date().getUTCFullYear();
+
+    const existingPayload = league.payload ?? {};
+
+    await this.espnLeagueModel
+      .updateOne(
         {
           leagueId,
-          season,
-          teamId,
         },
         {
           $set: {
-            leagueId,
+            season: resolvedSeason,
+            payload: {
+              ...existingPayload,
+
+              leaders: response,
+
+              leadersCollectedAt: new Date(),
+            },
+
+            collectedAt: new Date(),
+          },
+        },
+      )
+      .exec();
+
+    return true;
+  }
+
+  // ============================================================
+  // ESPN — MATCH DETAILS
+  // ============================================================
+
+  async collectEspnMatchDetails(params: {
+    leagueId: string;
+    event: any;
+    competition?: any | null;
+  }): Promise<void> {
+    const event = params.event;
+
+    const competition = params.competition ?? event?.competitions?.[0];
+
+    const eventId = this.toStringValue(event?.id);
+
+    const fixtureDate = this.parseDate(
+      event?.date ?? competition?.date ?? competition?.startDate,
+    );
+
+    if (!eventId || !fixtureDate) {
+      throw new Error('Invalid ESPN match payload');
+    }
+
+    const competitors =
+      competition?.competitors ?? event?.competitions?.[0]?.competitors ?? [];
+
+    const home =
+      competitors.find(
+        (item: any) => item?.homeAway === 'home' || item?.isHome === true,
+      ) ?? competitors[0];
+
+    const away =
+      competitors.find(
+        (item: any) => item?.homeAway === 'away' || item?.isAway === true,
+      ) ?? competitors[1];
+
+    const season =
+      this.toNumber(event?.season?.year) ??
+      this.toNumber(competition?.season?.year) ??
+      fixtureDate.getUTCFullYear();
+
+    const status = this.extractStatus(event);
+
+    const completed = this.isCompleted(event);
+
+    await this.espnFixtureModel
+      .updateOne(
+        {
+          eventId,
+        },
+        {
+          $set: {
+            eventId,
+            leagueId: params.leagueId,
             season,
-            teamId,
-            rank: standing.rank ?? 0,
-            payload: standing as unknown as Record<string, unknown>,
+            fixtureDate,
+            status,
+            statusDetail: this.getNestedString(competition, [
+              'status',
+              'type',
+              'description',
+            ]),
+            statusShortDetail: this.getNestedString(competition, [
+              'status',
+              'type',
+              'shortDetail',
+            ]),
+            period: this.toNumber(competition?.status?.period),
+            completed,
+            homeTeamId: this.getTeamId(home),
+            awayTeamId: this.getTeamId(away),
+            homeScore: this.toNumber(home?.score),
+            awayScore: this.toNumber(away?.score),
+            venueId: this.toStringValue(competition?.venue?.id),
+            venueName: competition?.venue?.fullName ?? competition?.venue?.name,
+            payload: {
+              event,
+              competition,
+            },
             collectedAt: new Date(),
           },
         },
         {
           upsert: true,
         },
-      );
-    }
+      )
+      .exec();
 
-    if (activeTeamIds.size === 0) {
-      return;
-    }
-
-    await this.apiFootballStandingModel.deleteMany({
-      leagueId,
-      season,
-      teamId: {
-        $nin: [...activeTeamIds],
-      },
-    });
+    await this.collectEspnTeams(params.leagueId, competitors);
   }
+
+  // ============================================================
+  // ESPN — SUMMARY
+  // ============================================================
+
+  async collectEspnMatchSummary(params: {
+    leagueId: string;
+    eventId: string;
+    summary: unknown;
+  }): Promise<void> {
+    const fixture = await this.espnFixtureModel
+      .findOne({
+        eventId: params.eventId,
+      })
+      .lean()
+      .exec();
+
+    const existingPayload = fixture?.payload ?? {};
+
+    await this.espnFixtureModel
+      .updateOne(
+        {
+          eventId: params.eventId,
+        },
+        {
+          $set: {
+            leagueId: params.leagueId,
+
+            payload: {
+              ...existingPayload,
+
+              summary: params.summary,
+
+              summaryCollectedAt: new Date(),
+            },
+
+            collectedAt: new Date(),
+          },
+        },
+      )
+      .exec();
+  }
+
+  // ============================================================
+  // ESPN — MATCH EVENTS
+  // ============================================================
+
+  async collectEspnMatchEvents(params: {
+    leagueId: string;
+    eventId: string;
+    competitionId?: string;
+    events: unknown;
+  }): Promise<number> {
+    const plays = this.extractArray(params.events, [
+      'plays',
+      'events',
+      'items',
+    ]);
+
+    let collected = 0;
+
+    for (let index = 0; index < plays.length; index += 1) {
+      const play = plays[index];
+
+      const playId = this.toStringValue(
+        play?.id ?? play?.sequenceNumber ?? index,
+      );
+
+      if (!playId) {
+        continue;
+      }
+
+      const teamId = this.toStringValue(play?.team?.id ?? play?.teamId);
+
+      await this.espnMatchEventModel
+        .updateOne(
+          {
+            eventId: params.eventId,
+
+            playId,
+          },
+          {
+            $set: {
+              eventId: params.eventId,
+
+              leagueId: params.leagueId,
+
+              competitionId: params.competitionId,
+
+              playId,
+
+              clock: this.getClockValue(play),
+
+              clockDisplay:
+                this.getNestedString(play, ['clock', 'displayValue']) ??
+                this.toStringValue(play?.clockDisplay),
+
+              type:
+                this.getNestedString(play, ['type', 'text']) ??
+                this.getNestedString(play, ['type', 'name']),
+
+              text: play?.text,
+
+              teamId,
+
+              homeScore: this.toNumber(play?.homeScore),
+
+              awayScore: this.toNumber(play?.awayScore),
+
+              scoringPlay: Boolean(play?.scoringPlay),
+
+              redCard: Boolean(play?.redCard),
+
+              yellowCard: Boolean(play?.yellowCard),
+
+              penaltyKick: Boolean(play?.penaltyKick ?? play?.penalty),
+
+              ownGoal: Boolean(play?.ownGoal),
+
+              shootout: Boolean(play?.shootout),
+
+              payload: play as Record<string, unknown>,
+
+              collectedAt: new Date(),
+            },
+          },
+          {
+            upsert: true,
+          },
+        )
+        .exec();
+
+      collected += 1;
+    }
+
+    return collected;
+  }
+
+  // ============================================================
+  // ESPN — MATCH STATISTICS
+  // ============================================================
+
+  async collectEspnMatchStatistics(params: {
+    leagueId: string;
+    eventId: string;
+    competitionId?: string;
+    teamId: string;
+    statistics: unknown;
+  }): Promise<void> {
+    const rows = this.extractStatisticsRows(params.statistics);
+
+    const statistics =
+      rows.find(
+        (row: any) =>
+          this.toStringValue(row?.team?.id ?? row?.teamId) === params.teamId,
+      ) ?? rows[0];
+
+    const statsList = Array.isArray(statistics?.statistics)
+      ? statistics.statistics
+      : Array.isArray(statistics?.stats)
+        ? statistics.stats
+        : [];
+
+    const value = (names: string[]): number | undefined =>
+      this.getStatisticNumber(statsList, ...names);
+
+    await this.espnMatchStatisticsModel
+      .updateOne(
+        {
+          eventId: params.eventId,
+          teamId: params.teamId,
+        },
+        {
+          $set: {
+            eventId: params.eventId,
+
+            leagueId: params.leagueId,
+
+            competitionId: params.competitionId,
+
+            teamId: params.teamId,
+
+            possession: value(['possession', 'possessionPct']),
+
+            shots: value(['shots', 'totalShots']),
+
+            shotsOnTarget: value(['shotsOnTarget']),
+
+            corners: value(['corners', 'cornerKicks']),
+
+            fouls: value(['fouls', 'foulsCommitted']),
+
+            offsides: value(['offsides']),
+
+            yellow: value(['yellowCards', 'yellow']),
+
+            red: value(['redCards', 'red']),
+
+            saves: value(['saves']),
+
+            payload: statistics ?? params.statistics,
+
+            collectedAt: new Date(),
+          },
+        },
+        {
+          upsert: true,
+        },
+      )
+      .exec();
+  }
+
+  // ============================================================
+  // ESPN — ODDS
+  // ============================================================
+
+  async collectEspnMatchOdds(params: {
+    leagueId: string;
+    eventId: string;
+    competitionId?: string;
+    odds: unknown;
+  }): Promise<number> {
+    const odds = this.extractArray(params.odds, ['odds', 'items']);
+
+    if (!odds.length) {
+      return 0;
+    }
+
+    let collected = 0;
+
+    for (let index = 0; index < odds.length; index += 1) {
+      const item = odds[index];
+
+      const providerId =
+        this.toStringValue(item?.provider?.id ?? item?.providerId) ??
+        `unknown-${index}`;
+
+      await this.espnOddsModel
+        .updateOne(
+          {
+            eventId: params.eventId,
+
+            providerId,
+          },
+          {
+            $set: {
+              eventId: params.eventId,
+
+              leagueId: params.leagueId,
+
+              competitionId: params.competitionId,
+
+              providerId,
+
+              payload: item as Record<string, unknown>,
+
+              collectedAt: new Date(),
+            },
+          },
+          {
+            upsert: true,
+          },
+        )
+        .exec();
+
+      collected += 1;
+    }
+
+    return collected;
+  }
+
+  // ============================================================
+  // FOOTBALL-DATA — COMPETITION
+  // ============================================================
 
   async collectFootballDataCompetition(
     competition: FootballDataCompetitionPayload,
@@ -272,25 +875,36 @@ export class SportsCollectionService {
       return;
     }
 
-    await this.footballDataCompetitionModel.updateOne(
-      {
-        competitionId: competition.id,
-      },
-      {
-        $set: {
+    await this.footballDataCompetitionModel
+      .updateOne(
+        {
           competitionId: competition.id,
-          code: competition.code.trim().toUpperCase(),
-          name: competition.name ?? '',
-          type: competition.type,
-          payload: competition as unknown as Record<string, unknown>,
-          collectedAt: new Date(),
         },
-      },
-      {
-        upsert: true,
-      },
-    );
+        {
+          $set: {
+            competitionId: competition.id,
+
+            code: competition.code.trim().toUpperCase(),
+
+            name: competition.name ?? '',
+
+            type: competition.type,
+
+            payload: competition as unknown as Record<string, unknown>,
+
+            collectedAt: new Date(),
+          },
+        },
+        {
+          upsert: true,
+        },
+      )
+      .exec();
   }
+
+  // ============================================================
+  // FOOTBALL-DATA — MATCHES
+  // ============================================================
 
   async collectFootballDataMatches(
     matches: FootballDataMatchPayload[],
@@ -314,37 +928,40 @@ export class SportsCollectionService {
         continue;
       }
 
-      await this.footballDataMatchModel.updateOne(
-        {
-          matchId: match.id,
-        },
-        {
-          $set: {
+      await this.footballDataMatchModel
+        .updateOne(
+          {
             matchId: match.id,
-
-            competitionId: match.competition.id,
-
-            competitionCode: match.competition.code?.trim().toUpperCase() ?? '',
-
-            seasonId: match.season?.id ?? 0,
-
-            status: match.status ?? '',
-
-            utcDate,
-
-            homeTeamId: match.homeTeam.id,
-
-            awayTeamId: match.awayTeam.id,
-
-            payload: match as unknown as Record<string, unknown>,
-
-            collectedAt: new Date(),
           },
-        },
-        {
-          upsert: true,
-        },
-      );
+          {
+            $set: {
+              matchId: match.id,
+
+              competitionId: match.competition.id,
+
+              competitionCode:
+                match.competition.code?.trim().toUpperCase() ?? '',
+
+              seasonId: match.season?.id ?? 0,
+
+              status: match.status ?? '',
+
+              utcDate,
+
+              homeTeamId: match.homeTeam.id,
+
+              awayTeamId: match.awayTeam.id,
+
+              payload: match as unknown as Record<string, unknown>,
+
+              collectedAt: new Date(),
+            },
+          },
+          {
+            upsert: true,
+          },
+        )
+        .exec();
 
       collected += 1;
     }
@@ -352,19 +969,19 @@ export class SportsCollectionService {
     return collected;
   }
 
+  // ============================================================
+  // FOOTBALL-DATA — STANDINGS
+  // ============================================================
+
   async collectFootballDataStandings(
-    response: FootballDataStandingsResponse,
+    standings: FootballDataStandingTable[],
+    competition: FootballDataCompetitionPayload,
+    seasonId: number,
   ): Promise<number> {
-    const competition = response.competition;
-
-    const season = response.season;
-
     if (
-      !competition ||
       typeof competition.id !== 'number' ||
       !competition.code ||
-      !season ||
-      typeof season.id !== 'number'
+      typeof seasonId !== 'number'
     ) {
       return 0;
     }
@@ -373,45 +990,41 @@ export class SportsCollectionService {
 
     let collected = 0;
 
-    for (const standing of response.standings ?? []) {
-      const stage = standing.stage ?? 'REGULAR_SEASON';
-      const type = standing.type ?? 'TOTAL';
-      const group = standing.group ?? null;
-
+    for (const standing of standings) {
       for (const row of standing.table ?? []) {
         if (typeof row.team?.id !== 'number') {
           continue;
         }
 
-        const payload = row;
-
-        await this.footballDataStandingModel.updateOne(
-          {
-            competitionId: competition.id,
-            competitionCode,
-            seasonId: season.id,
-            stage,
-            type,
-            group,
-            teamId: row.team.id,
-          },
-          {
-            $set: {
+        await this.footballDataStandingModel
+          .updateOne(
+            {
               competitionId: competition.id,
               competitionCode,
-              seasonId: season.id,
-              stage,
-              type,
-              group,
+              seasonId,
+              stage: standing.stage ?? 'REGULAR_SEASON',
+              type: standing.type ?? 'TOTAL',
+              group: standing.group ?? null,
               teamId: row.team.id,
-              payload: payload as unknown as Record<string, unknown>,
-              collectedAt: new Date(),
             },
-          },
-          {
-            upsert: true,
-          },
-        );
+            {
+              $set: {
+                competitionId: competition.id,
+                competitionCode,
+                seasonId,
+                stage: standing.stage ?? 'REGULAR_SEASON',
+                type: standing.type ?? 'TOTAL',
+                group: standing.group ?? null,
+                teamId: row.team.id,
+                payload: row as unknown as Record<string, unknown>,
+                collectedAt: new Date(),
+              },
+            },
+            {
+              upsert: true,
+            },
+          )
+          .exec();
 
         collected += 1;
       }
@@ -419,6 +1032,10 @@ export class SportsCollectionService {
 
     return collected;
   }
+
+  // ============================================================
+  // FOOTBALL-DATA — TEAMS
+  // ============================================================
 
   async collectFootballDataTeams(
     teams: FootballDataTeamPayload[],
@@ -432,31 +1049,43 @@ export class SportsCollectionService {
         continue;
       }
 
-      await this.footballDataTeamModel.updateOne(
-        {
-          teamId: team.id,
-          competitionId,
-        },
-        {
-          $set: {
+      await this.footballDataTeamModel
+        .updateOne(
+          {
             teamId: team.id,
+
             competitionId,
-            competitionCode: competitionCode.trim().toUpperCase(),
-            name: team.name,
-            payload: team as unknown as Record<string, unknown>,
-            collectedAt: new Date(),
           },
-        },
-        {
-          upsert: true,
-        },
-      );
+          {
+            $set: {
+              teamId: team.id,
+
+              competitionId,
+
+              competitionCode: competitionCode.trim().toUpperCase(),
+
+              name: team.name,
+
+              payload: team as unknown as Record<string, unknown>,
+
+              collectedAt: new Date(),
+            },
+          },
+          {
+            upsert: true,
+          },
+        )
+        .exec();
 
       collected += 1;
     }
 
     return collected;
   }
+
+  // ============================================================
+  // ODDS API — SPORTS
+  // ============================================================
 
   async collectOddsSports(sports: OddsApiSportPayload[]): Promise<number> {
     let collected = 0;
@@ -466,30 +1095,41 @@ export class SportsCollectionService {
         continue;
       }
 
-      await this.oddsApiSportModel.updateOne(
-        {
-          sportKey: sport.key,
-        },
-        {
-          $set: {
+      await this.oddsApiSportModel
+        .updateOne(
+          {
             sportKey: sport.key,
-            title: sport.title ?? sport.key,
-            active: Boolean(sport.active),
-            hasOutrights: Boolean(sport.has_outrights),
-            payload: sport as unknown as Record<string, unknown>,
-            collectedAt: new Date(),
           },
-        },
-        {
-          upsert: true,
-        },
-      );
+          {
+            $set: {
+              sportKey: sport.key,
+
+              title: sport.title ?? sport.key,
+
+              active: Boolean(sport.active),
+
+              hasOutrights: Boolean(sport.has_outrights),
+
+              payload: sport as unknown as Record<string, unknown>,
+
+              collectedAt: new Date(),
+            },
+          },
+          {
+            upsert: true,
+          },
+        )
+        .exec();
 
       collected += 1;
     }
 
     return collected;
   }
+
+  // ============================================================
+  // ODDS API — EVENT ODDS
+  // ============================================================
 
   async collectOdds(events: OddsApiEventOdds[]): Promise<number> {
     let collected = 0;
@@ -510,25 +1150,33 @@ export class SportsCollectionService {
         continue;
       }
 
-      await this.sportsOddsSnapshotModel.updateOne(
-        {
-          eventId: event.id,
-        },
-        {
-          $set: {
+      await this.sportsOddsSnapshotModel
+        .updateOne(
+          {
             eventId: event.id,
-            sportKey: event.sport_key,
-            homeTeam: event.home_team,
-            awayTeam: event.away_team,
-            commenceTime,
-            payload: event as unknown as Record<string, unknown>,
-            collectedAt: new Date(),
           },
-        },
-        {
-          upsert: true,
-        },
-      );
+          {
+            $set: {
+              eventId: event.id,
+
+              sportKey: event.sport_key,
+
+              homeTeam: event.home_team,
+
+              awayTeam: event.away_team,
+
+              commenceTime,
+
+              payload: event as unknown as Record<string, unknown>,
+
+              collectedAt: new Date(),
+            },
+          },
+          {
+            upsert: true,
+          },
+        )
+        .exec();
 
       collected += 1;
     }
@@ -536,43 +1184,232 @@ export class SportsCollectionService {
     return collected;
   }
 
-  private extractApiFootballResponse<T>(
-    response: ApiFootballResponse<T[]>,
-  ): T[] {
-    if (!response || !Array.isArray(response.response)) {
+  // ============================================================
+  // HELPERS
+  // ============================================================
+
+  private extractArray(value: unknown, keys: string[] = []): any[] {
+    if (Array.isArray(value)) {
+      return value;
+    }
+
+    if (!value || typeof value !== 'object') {
       return [];
     }
 
-    return response.response;
+    const object = value as Record<string, unknown>;
+
+    for (const key of keys) {
+      if (Array.isArray(object[key])) {
+        return object[key];
+      }
+    }
+
+    return [];
   }
 
-  private extractApiFootballStandings(
-    response: ApiFootballResponse<ApiFootballStandingResponse[]>,
-  ): ApiFootballStandingPayload[] {
-    if (!response || !Array.isArray(response.response)) {
+  private extractStandingEntries(response: unknown): any[] {
+    if (!response || typeof response !== 'object') {
       return [];
     }
 
-    const groups = response.response[0]?.league?.standings;
+    const root = response as any;
 
-    if (!Array.isArray(groups)) {
+    if (Array.isArray(root.entries)) {
+      return root.entries;
+    }
+
+    if (Array.isArray(root.standings)) {
+      return root.standings.flatMap((group: any) =>
+        Array.isArray(group?.entries) ? group.entries : [],
+      );
+    }
+
+    const groups = root.groups ?? root.standings?.groups;
+
+    if (Array.isArray(groups)) {
+      return groups.flatMap((group: any) =>
+        Array.isArray(group?.entries) ? group.entries : [],
+      );
+    }
+
+    return [];
+  }
+
+  private extractStatisticsRows(response: unknown): any[] {
+    if (Array.isArray(response)) {
+      return response;
+    }
+
+    if (!response || typeof response !== 'object') {
       return [];
     }
 
-    return groups.flat();
+    const object = response as any;
+
+    if (Array.isArray(object.results)) {
+      return object.results;
+    }
+
+    if (Array.isArray(object.items)) {
+      return object.items;
+    }
+
+    if (Array.isArray(object.statistics)) {
+      return object.statistics;
+    }
+
+    return [];
   }
 
-  private isCompletedFixture(fixture: ApiFootballFixturePayload): boolean {
-    return ['FT', 'AET', 'PEN'].includes(fixture.fixture?.status?.short ?? '');
+  private getStatisticNumber(
+    stats: any[],
+    ...names: string[]
+  ): number | undefined {
+    for (const item of stats) {
+      const name = String(
+        item?.name ?? item?.type ?? item?.key ?? '',
+      ).toLowerCase();
+
+      if (names.some((candidate) => name === candidate.toLowerCase())) {
+        return this.toNumber(item?.value) ?? this.toNumber(item?.displayValue);
+      }
+    }
+
+    return undefined;
   }
 
-  private parseDate(value?: string | null): Date | undefined {
-    if (!value) {
+  private getStatisticDisplayValue(
+    stats: any[],
+    names: string[],
+  ): string | undefined {
+    for (const item of stats) {
+      const name = String(
+        item?.name ?? item?.type ?? item?.key ?? '',
+      ).toLowerCase();
+
+      if (names.some((candidate) => name === candidate.toLowerCase())) {
+        return this.toStringValue(item?.displayValue ?? item?.value);
+      }
+    }
+
+    return undefined;
+  }
+
+  private getClockValue(play: any): number | undefined {
+    return (
+      this.toNumber(play?.clock?.value) ??
+      this.toNumber(play?.clock?.minutes) ??
+      this.toNumber(play?.clock)
+    );
+  }
+
+  private getNestedString(value: any, path: string[]): string | undefined {
+    let current = value;
+
+    for (const key of path) {
+      if (current === null || current === undefined) {
+        return undefined;
+      }
+
+      current = current[key];
+    }
+
+    return this.toStringValue(current);
+  }
+
+  private getTeamId(competitor: any): string {
+    return this.toStringValue(competitor?.team?.id ?? competitor?.id) ?? '';
+  }
+
+  private getTeamLogo(team: any): string | undefined {
+    if (typeof team?.logo === 'string') {
+      return team.logo;
+    }
+
+    if (Array.isArray(team?.logos) && typeof team.logos[0]?.href === 'string') {
+      return team.logos[0].href;
+    }
+
+    return undefined;
+  }
+
+  private extractStatus(event: any): string {
+    const competition = event?.competitions?.[0];
+
+    return (
+      this.getNestedString(competition, ['status', 'type', 'name']) ??
+      this.getNestedString(competition, ['status', 'type', 'state']) ??
+      this.getNestedString(event, ['status', 'type', 'name']) ??
+      'UNKNOWN'
+    );
+  }
+
+  private isCompleted(event: any): boolean {
+    const competition = event?.competitions?.[0];
+
+    const status = competition?.status ?? event?.status;
+
+    if (status?.type?.completed === true || status?.completed === true) {
+      return true;
+    }
+
+    const state = String(
+      status?.type?.state ?? status?.state ?? '',
+    ).toLowerCase();
+
+    return ['post', 'final', 'completed', 'complete', 'finished'].includes(
+      state,
+    );
+  }
+
+  private getSeasonFromFixtures(response: unknown): number | undefined {
+    const events = this.extractArray(response, ['events', 'items']);
+
+    for (const event of events) {
+      const season = this.toNumber(event?.season?.year);
+
+      if (season !== undefined) {
+        return season;
+      }
+    }
+
+    return undefined;
+  }
+
+  private parseDate(value: unknown): Date | undefined {
+    if (typeof value !== 'string' && !(value instanceof Date)) {
       return undefined;
     }
 
     const date = new Date(value);
 
     return Number.isNaN(date.getTime()) ? undefined : date;
+  }
+
+  private toStringValue(value: unknown): string | undefined {
+    if (value === null || value === undefined) {
+      return undefined;
+    }
+
+    const result = String(value).trim();
+
+    return result ? result : undefined;
+  }
+
+  private toNumber(value: unknown): number | undefined {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return value;
+    }
+
+    if (typeof value !== 'string') {
+      return undefined;
+    }
+
+    const cleaned = value.replace('%', '').trim();
+
+    const result = Number(cleaned);
+
+    return Number.isFinite(result) ? result : undefined;
   }
 }

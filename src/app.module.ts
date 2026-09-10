@@ -42,6 +42,7 @@ import { PaymentGatewaysModule } from './payment-gateways/payment-gateways.modul
 import { WebsiteAnalyticsModule } from './website-analytics/website-analytics.module';
 
 import { AiModule } from './ai/ai.module';
+import { PredictionsEngineModule } from './predictions-engine/predictions-engine.module';
 
 @Module({
   imports: [
@@ -96,6 +97,7 @@ import { AiModule } from './ai/ai.module';
     ReferralsModule,
 
     AiModule,
+    PredictionsEngineModule,
 
     WebsiteAnalyticsModule,
   ],

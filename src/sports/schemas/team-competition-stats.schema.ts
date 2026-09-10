@@ -11,7 +11,7 @@ export type TeamCompetitionStatsDocument =
 })
 export class TeamCompetitionStats {
   /**
-   * Our internal competition ID.
+   * ESPN league slug.
    */
   @Prop({
     required: true,
@@ -31,14 +31,14 @@ export class TeamCompetitionStats {
   season!: number;
 
   /**
-   * Team identity from the primary provider used for
-   * this competition's statistical dataset.
+   * ESPN team ID.
    */
   @Prop({
     required: true,
     index: true,
+    trim: true,
   })
-  teamId!: number;
+  teamId!: string;
 
   @Prop({
     required: true,

@@ -23,8 +23,6 @@ import {
   isValidPredictionSelection,
 } from '../../predictions/constants/prediction-market-options';
 
-import { PredictionMarket } from '../../predictions/constants/prediction-markets';
-
 @Injectable()
 export class AiPredictionService {
   private readonly logger = new Logger(AiPredictionService.name);
@@ -230,14 +228,6 @@ export class AiPredictionService {
       return [];
     }
 
-    const playerMarkets = new Set<PredictionMarket>([
-      'ANYTIME_GOALSCORER',
-      'FIRST_GOALSCORER',
-      'PLAYER_SHOTS',
-      'PLAYER_SHOTS_ON_TARGET',
-      'PLAYER_ASSISTS',
-    ]);
-
     const seen = new Set<string>();
 
     return markets
@@ -268,10 +258,6 @@ export class AiPredictionService {
         }
 
         if (!isValidPredictionSelection(market.market, market.selection)) {
-          return false;
-        }
-
-        if (playerMarkets.has(market.market) && !market.playerName?.trim()) {
           return false;
         }
 

@@ -1,73 +1,99 @@
 import { CompetitionPriority } from '../enums/competition-priority.enum';
-
 import { CompetitionRegion } from '../enums/competition-region.enum';
-
 import { CompetitionType } from '../enums/competition-type.enum';
 
 export enum ActiveCompetitionStatus {
   UPCOMING = 'UPCOMING',
-
   ACTIVE = 'ACTIVE',
-
   INACTIVE = 'INACTIVE',
-
   FINISHED = 'FINISHED',
 }
 
 export interface ActiveCompetition {
   /**
-   * Stable internal competition ID.
+   * Stable internal competition identifier.
+   *
+   * For ESPN this is normally the configured competition ID.
    */
   competitionId: string;
 
+  /**
+   * Display name.
+   */
   name: string;
 
+  /**
+   * Competition category.
+   */
   type: CompetitionType;
 
+  /**
+   * Geographic region.
+   */
   region: CompetitionRegion;
 
+  /**
+   * Application priority.
+   */
   priority: CompetitionPriority;
 
   /**
-   * Runtime API-Football mapping.
+   * Canonical ESPN league slug.
+   *
+   * Examples:
+   * eng.1
+   * esp.1
+   * uefa.champions
    */
-  apiFootballLeagueId?: number;
+  espnLeagueSlug: string;
 
   /**
-   * Runtime Football-Data mapping.
+   * Optional Football-Data competition code.
    */
   footballDataCode?: string;
 
   /**
-   * Runtime Odds API mapping.
+   * Optional The Odds API sport key.
    */
   oddsApiSportKey?: string;
 
   /**
-   * Current provider season.
+   * Current season year.
    */
   season?: number;
 
+  /**
+   * Known season start date.
+   */
   seasonStartDate?: Date;
 
+  /**
+   * Known season end date.
+   */
   seasonEndDate?: Date;
 
   /**
-   * Latest known fixture for this competition.
+   * Latest known fixture.
    */
   lastFixtureDate?: Date;
 
   /**
-   * Next known fixture for this competition.
+   * Next known fixture.
    */
   nextFixtureDate?: Date;
 
+  /**
+   * Current derived competition status.
+   */
   status: ActiveCompetitionStatus;
 
   /**
-   * Complete latest API-Football league discovery payload.
+   * Complete latest ESPN league/discovery payload.
    */
-  apiFootballPayload?: Record<string, unknown>;
+  espnPayload?: Record<string, unknown>;
 
+  /**
+   * Last time this competition record was updated.
+   */
   lastUpdatedAt?: Date;
 }

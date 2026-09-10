@@ -5,14 +5,9 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 
 import {
-  FootballDataMatch,
-  FootballDataMatchDocument,
-} from '../schemas/football-data/football-data-match.schema';
-
-import {
-  ApiFootballFixture,
-  ApiFootballFixtureDocument,
-} from '../schemas/api-football/api-football-fixture.schema';
+  EspnFixture,
+  EspnFixtureDocument,
+} from '../schemas/espn/espn-fixture.schema';
 
 import {
   YouTubeHighlight,
@@ -25,11 +20,13 @@ import { YoutubeHighlightStatus } from '../interfaces/youtube-highlight.interfac
 
 import { SPORTS_DATA_COLLECTION_CONFIG } from '../config/sports-data-collection.config';
 
+import { SportsProviderRateLimitService } from './sports-provider-rate-limit.service';
+
 interface MatchInfo {
   fixtureId: string;
   competitionId?: string;
-  homeTeamId?: number;
-  awayTeamId?: number;
+  homeTeamId?: string;
+  awayTeamId?: string;
   homeTeam: string;
   awayTeam: string;
   date: Date;
@@ -44,23 +41,32 @@ export class YoutubeHighlightService {
   constructor(
     private readonly youtubeService: YoutubeService,
 
-    @InjectModel(ApiFootballFixture.name)
-    private readonly apiFootballFixtureModel: Model<ApiFootballFixtureDocument>,
+    private readonly sportsProviderRateLimitService: SportsProviderRateLimitService,
 
-    @InjectModel(FootballDataMatch.name)
-    private readonly footballDataMatchModel: Model<FootballDataMatchDocument>,
+    @InjectModel(EspnFixture.name)
+    private readonly espnFixtureModel: Model<EspnFixtureDocument>,
 
     @InjectModel(YouTubeHighlight.name)
     private readonly highlightModel: Model<YouTubeHighlightDocument>,
   ) {}
 
+  // ============================================================
+  // QUEUE FIXTURE
+  // ============================================================
+
   async queueFixture(
-    fixtureId: number,
+    fixtureId: string,
     competitionId?: string,
   ): Promise<YouTubeHighlightDocument | null> {
+    const normalizedFixtureId = fixtureId.trim();
+
+    if (!normalizedFixtureId) {
+      return null;
+    }
+
     const existing = await this.highlightModel
       .findOne({
-        fixtureId: String(fixtureId),
+        fixtureId: normalizedFixtureId,
       })
       .exec();
 
@@ -72,23 +78,29 @@ export class YoutubeHighlightService {
       return existing;
     }
 
-    const match = await this.getMatchInfo(String(fixtureId));
+    const match = await this.getMatchInfo(normalizedFixtureId);
 
     if (!match) {
+      this.logger.warn(
+        `Unable to queue YouTube highlight: ESPN fixture ${normalizedFixtureId} was not found`,
+      );
+
       return null;
     }
 
     return this.highlightModel
       .findOneAndUpdate(
         {
-          fixtureId: String(fixtureId),
+          fixtureId: normalizedFixtureId,
         },
         {
-          $setOnInsert: {
-            fixtureId: String(fixtureId),
+          $set: {
             competitionId: competitionId ?? match.competitionId,
             homeTeam: match.homeTeam,
             awayTeam: match.awayTeam,
+          },
+          $setOnInsert: {
+            fixtureId: normalizedFixtureId,
             status: YoutubeHighlightStatus.PENDING,
             retryCount: 0,
           },
@@ -101,10 +113,16 @@ export class YoutubeHighlightService {
       .exec();
   }
 
+  // ============================================================
+  // PROCESS PENDING
+  // ============================================================
+
   async processPending(limit = 1): Promise<number> {
     let processed = 0;
 
     for (let index = 0; index < limit; index += 1) {
+      const now = new Date();
+
       const job = await this.highlightModel
         .findOneAndUpdate(
           {
@@ -114,6 +132,7 @@ export class YoutubeHighlightService {
                 YoutubeHighlightStatus.RETRY,
               ],
             },
+
             $or: [
               {
                 nextRetryAt: {
@@ -122,7 +141,7 @@ export class YoutubeHighlightService {
               },
               {
                 nextRetryAt: {
-                  $lte: new Date(),
+                  $lte: now,
                 },
               },
             ],
@@ -130,8 +149,9 @@ export class YoutubeHighlightService {
           {
             $set: {
               status: YoutubeHighlightStatus.SEARCHING,
-              searchedAt: new Date(),
+              searchedAt: now,
             },
+
             $inc: {
               retryCount: 1,
             },
@@ -140,6 +160,7 @@ export class YoutubeHighlightService {
             sort: {
               createdAt: 1,
             },
+
             returnDocument: 'after',
           },
         )
@@ -150,10 +171,34 @@ export class YoutubeHighlightService {
       }
 
       try {
+        const remaining =
+          (await this.sportsProviderRateLimitService.getRemainingDailyRequests(
+            'youtube',
+          )) ?? 0;
+
+        if (remaining <= 0) {
+          await this.highlightModel
+            .updateOne(
+              {
+                _id: job._id,
+              },
+              {
+                $set: {
+                  status: YoutubeHighlightStatus.RETRY,
+                  nextRetryAt: this.getNextRetryDate(),
+                  error: 'YouTube daily provider quota exhausted',
+                },
+              },
+            )
+            .exec();
+
+          break;
+        }
+
         const match = await this.getMatchInfo(job.fixtureId);
 
         if (!match) {
-          await this.markFailed(job, 'Match data not found');
+          await this.markFailed(job, 'ESPN match data not found');
 
           continue;
         }
@@ -170,39 +215,46 @@ export class YoutubeHighlightService {
           continue;
         }
 
-        await this.highlightModel.updateOne(
-          {
-            _id: job._id,
-          },
-          {
-            $set: {
-              competitionId: match.competitionId ?? job.competitionId,
-
-              homeTeam: match.homeTeam,
-              awayTeam: match.awayTeam,
-
-              videoId: result.videoId,
-              videoUrl: result.videoUrl,
-              title: result.title,
-
-              channelId: result.channelId,
-              channelTitle: result.channelTitle,
-
-              publishedAt: result.publishedAt
-                ? new Date(result.publishedAt)
-                : undefined,
-
-              thumbnailUrl: result.thumbnailUrl,
-
-              status: YoutubeHighlightStatus.FOUND,
-
-              nextRetryAt: null,
-              error: undefined,
-
-              payload: result as unknown as Record<string, unknown>,
+        await this.highlightModel
+          .updateOne(
+            {
+              _id: job._id,
             },
-          },
-        );
+            {
+              $set: {
+                competitionId: match.competitionId ?? job.competitionId,
+
+                homeTeam: match.homeTeam,
+
+                awayTeam: match.awayTeam,
+
+                videoId: result.videoId,
+
+                videoUrl: result.videoUrl,
+
+                title: result.title,
+
+                channelId: result.channelId,
+
+                channelTitle: result.channelTitle,
+
+                publishedAt: result.publishedAt
+                  ? new Date(result.publishedAt)
+                  : undefined,
+
+                thumbnailUrl: result.thumbnailUrl,
+
+                status: YoutubeHighlightStatus.FOUND,
+
+                nextRetryAt: null,
+
+                error: undefined,
+
+                payload: result as unknown as Record<string, unknown>,
+              },
+            },
+          )
+          .exec();
 
         processed += 1;
       } catch (error) {
@@ -215,91 +267,159 @@ export class YoutubeHighlightService {
     return processed;
   }
 
+  // ============================================================
+  // REMAINING DAILY QUOTA
+  // ============================================================
+
   async getRemainingDailyQuota(): Promise<number> {
-    return (await this.getDailyUsedRequests()) >= this.config.dailyRequestLimit
-      ? 0
-      : this.config.dailyRequestLimit - (await this.getDailyUsedRequests());
+    return (
+      (await this.sportsProviderRateLimitService.getRemainingDailyRequests(
+        'youtube',
+      )) ?? 0
+    );
   }
+
+  // ============================================================
+  // DAILY USAGE
+  // ============================================================
 
   private async getDailyUsedRequests(): Promise<number> {
-    const start = this.getStartOfWATDay();
+    const remaining = await this.getRemainingDailyQuota();
 
-    return this.highlightModel.countDocuments({
-      searchedAt: {
-        $gte: start,
-      },
-    });
+    return Math.max(this.config.dailyRequestLimit - remaining, 0);
   }
 
+  // ============================================================
+  // MATCH INFORMATION
+  // ============================================================
+
   private async getMatchInfo(fixtureId: string): Promise<MatchInfo | null> {
-    const numericFixtureId = Number(fixtureId);
+    const normalizedFixtureId = fixtureId.trim();
 
-    if (Number.isInteger(numericFixtureId)) {
-      const fixture = await this.apiFootballFixtureModel
-        .findOne({
-          fixtureId: numericFixtureId,
-        })
-        .lean()
-        .exec();
-
-      if (fixture) {
-        const payload = fixture.payload as any;
-
-        const home = payload?.teams?.home;
-        const away = payload?.teams?.away;
-
-        const dateValue = payload?.fixture?.date ?? fixture.fixtureDate;
-
-        if (home?.name && away?.name && dateValue) {
-          return {
-            fixtureId: String(numericFixtureId),
-            competitionId:
-              fixture.leagueId !== undefined
-                ? String(fixture.leagueId)
-                : undefined,
-            homeTeamId: typeof home.id === 'number' ? home.id : undefined,
-            awayTeamId: typeof away.id === 'number' ? away.id : undefined,
-            homeTeam: home.name,
-            awayTeam: away.name,
-            date: new Date(dateValue),
-          };
-        }
-      }
-    }
-
-    if (!Number.isInteger(numericFixtureId)) {
+    if (!normalizedFixtureId) {
       return null;
     }
 
-    const footballDataMatch = await this.footballDataMatchModel
+    const fixture = await this.espnFixtureModel
       .findOne({
-        matchId: numericFixtureId,
+        eventId: normalizedFixtureId,
       })
       .lean()
       .exec();
 
-    if (!footballDataMatch) {
+    if (!fixture) {
       return null;
     }
 
-    const payload = footballDataMatch.payload as any;
+    const payload =
+      fixture.payload && typeof fixture.payload === 'object'
+        ? fixture.payload
+        : {};
+
+    const event =
+      payload['event'] && typeof payload['event'] === 'object'
+        ? (payload['event'] as Record<string, unknown>)
+        : payload;
+
+    const competitionsValue = event['competitions'] ?? payload['competitions'];
+
+    const competitions = Array.isArray(competitionsValue)
+      ? competitionsValue
+      : [];
+
+    const firstCompetition =
+      competitions.length > 0 &&
+      competitions[0] &&
+      typeof competitions[0] === 'object'
+        ? (competitions[0] as Record<string, unknown>)
+        : undefined;
+
+    const competitionValue = payload['competition'] ?? event['competition'];
+
+    const competition =
+      competitionValue && typeof competitionValue === 'object'
+        ? (competitionValue as Record<string, unknown>)
+        : firstCompetition;
+
+    const competitorsValue = firstCompetition?.['competitors'];
+
+    const competitors = Array.isArray(competitorsValue) ? competitorsValue : [];
+
+    const competitorObjects = competitors.filter(
+      (item): item is Record<string, unknown> =>
+        Boolean(item) && typeof item === 'object',
+    );
+
+    const home =
+      competitorObjects.find((item) => item['homeAway'] === 'home') ??
+      competitorObjects[0];
+
+    const away =
+      competitorObjects.find((item) => item['homeAway'] === 'away') ??
+      competitorObjects[1];
+
+    const homeTeamValue = home?.['team'];
+
+    const awayTeamValue = away?.['team'];
 
     const homeTeam =
-      payload?.homeTeam?.name ?? `Team ${footballDataMatch.homeTeamId}`;
+      homeTeamValue && typeof homeTeamValue === 'object'
+        ? (homeTeamValue as Record<string, unknown>)
+        : undefined;
 
     const awayTeam =
-      payload?.awayTeam?.name ?? `Team ${footballDataMatch.awayTeamId}`;
+      awayTeamValue && typeof awayTeamValue === 'object'
+        ? (awayTeamValue as Record<string, unknown>)
+        : undefined;
+
+    const homeName = this.getTeamName(homeTeam);
+
+    const awayName = this.getTeamName(awayTeam);
+
+    const dateValue =
+      event['date'] ?? firstCompetition?.['date'] ?? fixture.fixtureDate;
+
+    if (!homeName || !awayName || !dateValue) {
+      return null;
+    }
+
+    const date =
+      dateValue instanceof Date
+        ? dateValue
+        : typeof dateValue === 'string' || typeof dateValue === 'number'
+          ? new Date(dateValue)
+          : new Date(Number.NaN);
+
+    if (Number.isNaN(date.getTime())) {
+      return null;
+    }
+
+    const competitionId =
+      this.getStringValue(competition?.['id']) ??
+      this.getStringValue(competition?.['uid']);
+
+    const homeTeamId =
+      this.getStringValue(homeTeam?.['id']) ??
+      this.getStringValue(fixture.homeTeamId);
+
+    const awayTeamId =
+      this.getStringValue(awayTeam?.['id']) ??
+      this.getStringValue(fixture.awayTeamId);
 
     return {
-      fixtureId: String(footballDataMatch.matchId),
-      competitionId: footballDataMatch.competitionCode,
-      homeTeamId: footballDataMatch.homeTeamId || undefined,
-      awayTeamId: footballDataMatch.awayTeamId || undefined,
-      homeTeam,
-      awayTeam,
-      date: new Date(footballDataMatch.utcDate),
+      fixtureId: normalizedFixtureId,
+      competitionId,
+      homeTeamId,
+      awayTeamId,
+      homeTeam: homeName,
+      awayTeam: awayName,
+      date,
     };
   }
+
+  // ============================================================
+  // RETRY
+  // ============================================================
 
   private async scheduleRetry(
     job: YouTubeHighlightDocument,
@@ -311,67 +431,99 @@ export class YoutubeHighlightService {
 
     if (job.retryCount >= maxAttempts) {
       await this.markFailed(job, reason);
+
       return;
     }
 
-    await this.highlightModel.updateOne(
-      {
-        _id: job._id,
-      },
-      {
-        $set: {
-          status: YoutubeHighlightStatus.RETRY,
-
-          nextRetryAt: new Date(Date.now() + retryDelayMinutes * 60_000),
-
-          error: reason,
+    await this.highlightModel
+      .updateOne(
+        {
+          _id: job._id,
         },
-      },
-    );
+        {
+          $set: {
+            status: YoutubeHighlightStatus.RETRY,
+
+            nextRetryAt: new Date(Date.now() + retryDelayMinutes * 60_000),
+
+            error: reason,
+          },
+        },
+      )
+      .exec();
   }
+
+  // ============================================================
+  // FAILED
+  // ============================================================
 
   private async markFailed(
     job: YouTubeHighlightDocument,
     reason: string,
   ): Promise<void> {
-    await this.highlightModel.updateOne(
-      {
-        _id: job._id,
-      },
-      {
-        $set: {
-          status: YoutubeHighlightStatus.FAILED,
-
-          error: reason,
-
-          nextRetryAt: null,
+    await this.highlightModel
+      .updateOne(
+        {
+          _id: job._id,
         },
-      },
-    );
+        {
+          $set: {
+            status: YoutubeHighlightStatus.FAILED,
+
+            error: reason,
+
+            nextRetryAt: null,
+          },
+        },
+      )
+      .exec();
   }
 
-  private getStartOfWATDay(): Date {
-    const now = new Date();
+  // ============================================================
+  // HELPERS
+  // ============================================================
 
-    const formatter = new Intl.DateTimeFormat('en-CA', {
-      timeZone: 'Africa/Lagos',
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-    });
+  private getTeamName(team?: Record<string, unknown>): string | undefined {
+    if (!team) {
+      return undefined;
+    }
 
-    const parts = formatter.formatToParts(now);
+    const displayName = team['displayName'];
 
-    const year = Number(parts.find((part) => part.type === 'year')?.value);
+    if (typeof displayName === 'string' && displayName.trim()) {
+      return displayName.trim();
+    }
 
-    const month = Number(parts.find((part) => part.type === 'month')?.value);
+    const name = team['name'];
 
-    const day = Number(parts.find((part) => part.type === 'day')?.value);
+    if (typeof name === 'string' && name.trim()) {
+      return name.trim();
+    }
 
-    const start = new Date(Date.UTC(year, month - 1, day, 0, 0, 0, 0));
+    const shortDisplayName = team['shortDisplayName'];
 
-    start.setUTCHours(start.getUTCHours() - 1);
+    if (typeof shortDisplayName === 'string' && shortDisplayName.trim()) {
+      return shortDisplayName.trim();
+    }
 
-    return start;
+    return undefined;
+  }
+
+  private getStringValue(value: unknown): string | undefined {
+    if (typeof value === 'string' && value.trim()) {
+      return value.trim();
+    }
+
+    if (typeof value === 'number') {
+      return String(value);
+    }
+
+    return undefined;
+  }
+
+  private getNextRetryDate(): Date {
+    const retryDelayMinutes = this.config.queue.retryDelayMinutes;
+
+    return new Date(Date.now() + retryDelayMinutes * 60_000);
   }
 }

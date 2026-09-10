@@ -4,7 +4,7 @@ import { InjectModel } from '@nestjs/mongoose';
 
 import { Model } from 'mongoose';
 
-import { SupportedCompetitionService } from '../../sports/services/supported-competition.service';
+import { PriorityCompetitionService } from '../../sports/services/priority-competition.service';
 
 import { TavilyService } from '../../tavily/tavily.service';
 
@@ -30,7 +30,7 @@ export class AiLeagueIntelligenceService {
     @InjectModel(AiLeagueIntelligence.name)
     private readonly model: Model<AiLeagueIntelligenceDocument>,
 
-    private readonly supportedCompetitionService: SupportedCompetitionService,
+    private readonly supportedCompetitionService: PriorityCompetitionService,
 
     private readonly tavilyService: TavilyService,
   ) {}
@@ -44,7 +44,8 @@ export class AiLeagueIntelligenceService {
       this.supportedCompetitionService
         .getAll()
         .filter(
-          (competition) => competition.type === 'LEAGUE' && competition.enabled,
+          (competition) =>
+            String(competition.type) === 'LEAGUE' && competition.enabled,
         )
         .map((competition) => ({
           id: competition.id,

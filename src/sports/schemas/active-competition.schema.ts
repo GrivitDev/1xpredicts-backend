@@ -1,14 +1,11 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-
 import { HydratedDocument } from 'mongoose';
 
 import { CompetitionPriority } from '../enums/competition-priority.enum';
+import { CompetitionRegion } from '../enums/competition-region.enum';
+import { CompetitionType } from '../enums/competition-type.enum';
 
 import { ActiveCompetitionStatus } from '../interfaces/active-competition.interface';
-
-import { CompetitionRegion } from '../enums/competition-region.enum';
-
-import { CompetitionType } from '../enums/competition-type.enum';
 
 export type ActiveCompetitionDocument = HydratedDocument<ActiveCompetition>;
 
@@ -57,10 +54,12 @@ export class ActiveCompetition {
   priority!: CompetitionPriority;
 
   @Prop({
-    type: Number,
+    required: true,
+    trim: true,
+    lowercase: true,
     index: true,
   })
-  apiFootballLeagueId?: number;
+  espnLeagueSlug!: string;
 
   @Prop({
     type: String,
@@ -116,20 +115,16 @@ export class ActiveCompetition {
   })
   status!: ActiveCompetitionStatus;
 
-  /**
-   * Complete latest API-Football league discovery record.
-   */
   @Prop({
     type: Object,
   })
-  apiFootballPayload?: Record<string, unknown>;
+  espnPayload?: Record<string, unknown>;
 
   @Prop({
-    required: true,
     type: Date,
     index: true,
   })
-  lastUpdatedAt!: Date;
+  lastUpdatedAt?: Date;
 }
 
 export const ActiveCompetitionSchema =
@@ -142,6 +137,14 @@ ActiveCompetitionSchema.index({
 });
 
 ActiveCompetitionSchema.index({
-  apiFootballLeagueId: 1,
+  espnLeagueSlug: 1,
   season: 1,
+});
+
+ActiveCompetitionSchema.index({
+  footballDataCode: 1,
+});
+
+ActiveCompetitionSchema.index({
+  oddsApiSportKey: 1,
 });

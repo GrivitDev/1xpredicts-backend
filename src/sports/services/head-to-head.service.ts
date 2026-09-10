@@ -5,57 +5,31 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 
 import {
-  ApiFootballFixture,
-  ApiFootballFixtureDocument,
-} from '../schemas/api-football/api-football-fixture.schema';
-
-import {
-  ActiveCompetition,
-  ActiveCompetitionDocument,
-} from '../schemas/active-competition.schema';
+  EspnFixture,
+  EspnFixtureDocument,
+} from '../schemas/espn/espn-fixture.schema';
 
 import { HeadToHead, HeadToHeadDocument } from '../schemas/head-to-head.schema';
 
-interface FixtureTeam {
-  id?: number;
-  name?: string;
-}
-
-interface FixturePayload {
-  fixture?: {
-    id?: number;
-    date?: string;
-    status?: {
-      short?: string;
-    };
-  };
-
-  league?: {
-    id?: number;
-    season?: number;
-  };
-
-  teams?: {
-    home?: FixtureTeam;
-    away?: FixtureTeam;
-  };
-
-  goals?: {
-    home?: number | null;
-    away?: number | null;
-  };
-}
-
 interface MeetingRecord {
-  fixtureId: number;
+  fixtureId: string;
+
   competitionId: string;
+
   season: number;
+
   date: Date;
-  homeTeamId: number;
+
+  homeTeamId: string;
+
   homeTeamName: string;
-  awayTeamId: number;
+
+  awayTeamId: string;
+
   awayTeamName: string;
+
   homeGoals: number;
+
   awayGoals: number;
 }
 
@@ -63,53 +37,69 @@ interface MeetingRecord {
 export class HeadToHeadService {
   private readonly logger = new Logger(HeadToHeadService.name);
 
-  private readonly completedStatuses = new Set(['FT', 'AET', 'PEN']);
+  private readonly completedStatuses = new Set([
+    'FT',
+    'AET',
+    'PEN',
+    'STATUS_FINAL',
+    'FINAL',
+    'FINISHED',
+  ]);
 
   constructor(
-    @InjectModel(ApiFootballFixture.name)
-    private readonly fixtureModel: Model<ApiFootballFixtureDocument>,
-
-    @InjectModel(ActiveCompetition.name)
-    private readonly activeCompetitionModel: Model<ActiveCompetitionDocument>,
+    @InjectModel(EspnFixture.name)
+    private readonly fixtureModel: Model<EspnFixtureDocument>,
 
     @InjectModel(HeadToHead.name)
     private readonly headToHeadModel: Model<HeadToHeadDocument>,
   ) {}
 
+  // ============================================================
+  // REBUILD PAIR
+  // ============================================================
+
   async rebuildPair(
-    teamOneId: number,
-    teamTwoId: number,
+    teamOneId: string,
+    teamTwoId: string,
   ): Promise<HeadToHeadDocument | null> {
-    if (teamOneId === teamTwoId) {
+    const normalizedTeamOneId = teamOneId.trim();
+
+    const normalizedTeamTwoId = teamTwoId.trim();
+
+    if (
+      !normalizedTeamOneId ||
+      !normalizedTeamTwoId ||
+      normalizedTeamOneId === normalizedTeamTwoId
+    ) {
       return null;
     }
 
     const { teamAId, teamBId, pairKey } = this.normalizePair(
-      teamOneId,
-      teamTwoId,
+      normalizedTeamOneId,
+      normalizedTeamTwoId,
     );
 
+    const pairCriteria = {
+      completed: true,
+      $or: [
+        {
+          homeTeamId: teamAId,
+          awayTeamId: teamBId,
+        },
+        {
+          homeTeamId: teamBId,
+          awayTeamId: teamAId,
+        },
+      ],
+    };
+
     const fixtures = await this.fixtureModel
-      .find({
-        $or: [
-          {
-            'payload.teams.home.id': teamAId,
-            'payload.teams.away.id': teamBId,
-          },
-          {
-            'payload.teams.home.id': teamBId,
-            'payload.teams.away.id': teamAId,
-          },
-        ],
+      .find(pairCriteria)
+      .sort({
+        fixtureDate: -1,
       })
       .lean()
       .exec();
-
-    const completedFixtures = fixtures.filter((fixture) =>
-      this.isCompletedFixture(fixture.payload),
-    );
-
-    const competitionMap = await this.buildCompetitionMap(completedFixtures);
 
     const meetings: MeetingRecord[] = [];
 
@@ -117,68 +107,61 @@ export class HeadToHeadService {
 
     let teamBName = `Team ${teamBId}`;
 
-    for (const fixture of completedFixtures) {
-      const payload = fixture.payload as FixturePayload;
-
-      const home = payload.teams?.home;
-
-      const away = payload.teams?.away;
-
-      if (
-        !home?.id ||
-        !away?.id ||
-        !this.isPair(home.id, away.id, teamAId, teamBId)
-      ) {
+    for (const fixture of fixtures) {
+      if (!this.isCompletedFixture(fixture)) {
         continue;
       }
 
-      const fixtureId = payload.fixture?.id ?? fixture.fixtureId;
-
-      if (typeof fixtureId !== 'number') {
+      if (fixture.homeScore === undefined || fixture.awayScore === undefined) {
         continue;
       }
 
-      const date = this.getFixtureDate(payload, fixture.fixtureDate);
+      const homeTeamId = fixture.homeTeamId;
 
-      const season = this.getSeason(payload, fixture.season);
+      const awayTeamId = fixture.awayTeamId;
 
-      const leagueId = payload.league?.id;
+      if (!this.isPair(homeTeamId, awayTeamId, teamAId, teamBId)) {
+        continue;
+      }
 
-      const competitionId =
-        typeof leagueId === 'number' && typeof season === 'number'
-          ? (competitionMap.get(this.getCompetitionMapKey(leagueId, season)) ??
-            String(leagueId))
-          : 'unknown';
+      const homeTeamName = this.extractTeamName(
+        fixture.payload,
+        'home',
+        homeTeamId,
+      );
 
-      const homeGoals = this.toNumber(payload.goals?.home);
+      const awayTeamName = this.extractTeamName(
+        fixture.payload,
+        'away',
+        awayTeamId,
+      );
 
-      const awayGoals = this.toNumber(payload.goals?.away);
+      teamAName = homeTeamId === teamAId ? homeTeamName : awayTeamName;
 
-      teamAName =
-        home.id === teamAId
-          ? (home.name ?? teamAName)
-          : (away.name ?? teamAName);
-
-      teamBName =
-        home.id === teamBId
-          ? (home.name ?? teamBName)
-          : (away.name ?? teamBName);
+      teamBName = homeTeamId === teamBId ? homeTeamName : awayTeamName;
 
       meetings.push({
-        fixtureId,
-        competitionId,
-        season,
-        date,
-        homeTeamId: home.id,
-        homeTeamName: home.name ?? `Team ${home.id}`,
-        awayTeamId: away.id,
-        awayTeamName: away.name ?? `Team ${away.id}`,
-        homeGoals,
-        awayGoals,
+        fixtureId: fixture.eventId,
+
+        competitionId: fixture.leagueId,
+
+        season: fixture.season,
+
+        date: fixture.fixtureDate,
+
+        homeTeamId,
+
+        homeTeamName,
+
+        awayTeamId,
+
+        awayTeamName,
+
+        homeGoals: fixture.homeScore,
+
+        awayGoals: fixture.awayScore,
       });
     }
-
-    meetings.sort((a, b) => b.date.getTime() - a.date.getTime());
 
     if (meetings.length === 0) {
       await this.headToHeadModel.deleteOne({
@@ -200,12 +183,14 @@ export class HeadToHeadService {
             pairKey,
 
             teamAId,
+
             teamAName,
 
             teamBId,
+
             teamBName,
 
-            totalMatches: meetings.length,
+            totalMeetings: meetings.length,
 
             teamAWins: stats.teamAWins,
 
@@ -219,6 +204,8 @@ export class HeadToHeadService {
 
             meetings,
 
+            lastMeetingAt: meetings[0]?.date ?? null,
+
             calculatedAt: new Date(),
           },
         },
@@ -229,13 +216,16 @@ export class HeadToHeadService {
       )
       .exec();
   }
+  // ============================================================
+  // REFRESH FOR FIXTURE
+  // ============================================================
 
   async refreshForFixture(
-    fixtureId: number,
+    fixtureId: string,
   ): Promise<HeadToHeadDocument | null> {
     const fixture = await this.fixtureModel
       .findOne({
-        fixtureId,
+        eventId: fixtureId.trim(),
       })
       .lean()
       .exec();
@@ -244,32 +234,30 @@ export class HeadToHeadService {
       return null;
     }
 
-    const payload = fixture.payload as FixturePayload;
-
-    if (!this.isCompletedFixture(payload)) {
+    if (!this.isCompletedFixture(fixture)) {
       return null;
     }
 
-    const homeId = payload.teams?.home?.id;
-
-    const awayId = payload.teams?.away?.id;
-
     if (
-      typeof homeId !== 'number' ||
-      typeof awayId !== 'number' ||
-      homeId === awayId
+      !fixture.homeTeamId ||
+      !fixture.awayTeamId ||
+      fixture.homeTeamId === fixture.awayTeamId
     ) {
       return null;
     }
 
-    return this.rebuildPair(homeId, awayId);
+    return this.rebuildPair(fixture.homeTeamId, fixture.awayTeamId);
   }
 
+  // ============================================================
+  // GET PAIR
+  // ============================================================
+
   async getPair(
-    teamOneId: number,
-    teamTwoId: number,
+    teamOneId: string,
+    teamTwoId: string,
   ): Promise<HeadToHeadDocument | null> {
-    if (teamOneId === teamTwoId) {
+    if (!teamOneId || !teamTwoId || teamOneId === teamTwoId) {
       return null;
     }
 
@@ -283,9 +271,13 @@ export class HeadToHeadService {
       .exec();
   }
 
-  async rebuildPairsForTeams(teamIds: number[]): Promise<number> {
+  // ============================================================
+  // REBUILD PAIRS
+  // ============================================================
+
+  async rebuildPairsForTeams(teamIds: string[]): Promise<number> {
     const uniqueTeamIds = [
-      ...new Set(teamIds.filter((id) => Number.isInteger(id) && id > 0)),
+      ...new Set(teamIds.map((id) => id.trim()).filter(Boolean)),
     ];
 
     if (uniqueTeamIds.length < 2) {
@@ -294,14 +286,16 @@ export class HeadToHeadService {
 
     const fixtures = await this.fixtureModel
       .find({
+        completed: true,
+
         $or: [
           {
-            'payload.teams.home.id': {
+            homeTeamId: {
               $in: uniqueTeamIds,
             },
           },
           {
-            'payload.teams.away.id': {
+            awayTeamId: {
               $in: uniqueTeamIds,
             },
           },
@@ -313,19 +307,17 @@ export class HeadToHeadService {
     const pairs = new Set<string>();
 
     for (const fixture of fixtures) {
-      const payload = fixture.payload as FixturePayload;
-
-      if (!this.isCompletedFixture(payload)) {
+      if (!this.isCompletedFixture(fixture)) {
         continue;
       }
 
-      const homeId = payload.teams?.home?.id;
+      const homeId = fixture.homeTeamId;
 
-      const awayId = payload.teams?.away?.id;
+      const awayId = fixture.awayTeamId;
 
       if (
-        typeof homeId !== 'number' ||
-        typeof awayId !== 'number' ||
+        !homeId ||
+        !awayId ||
         homeId === awayId ||
         !uniqueTeamIds.includes(homeId) ||
         !uniqueTeamIds.includes(awayId)
@@ -333,17 +325,15 @@ export class HeadToHeadService {
         continue;
       }
 
-      const { pairKey } = this.normalizePair(homeId, awayId);
-
-      pairs.add(pairKey);
+      pairs.add(this.normalizePair(homeId, awayId).pairKey);
     }
 
     let rebuilt = 0;
 
     for (const pairKey of pairs) {
-      const [teamAId, teamBId] = pairKey.split(':').map(Number);
+      const [teamAId, teamBId] = pairKey.split(':');
 
-      if (!Number.isInteger(teamAId) || !Number.isInteger(teamBId)) {
+      if (!teamAId || !teamBId) {
         continue;
       }
 
@@ -357,73 +347,13 @@ export class HeadToHeadService {
     return rebuilt;
   }
 
-  private async buildCompetitionMap(
-    fixtures: ApiFootballFixtureDocument[],
-  ): Promise<Map<string, string>> {
-    const keys = new Set<string>();
-
-    for (const fixture of fixtures) {
-      const payload = fixture.payload as FixturePayload;
-
-      const leagueId = payload.league?.id;
-
-      const season = this.getSeason(payload, fixture.season);
-
-      if (typeof leagueId === 'number' && typeof season === 'number') {
-        keys.add(this.getCompetitionMapKey(leagueId, season));
-      }
-    }
-
-    if (keys.size === 0) {
-      return new Map();
-    }
-
-    const leagueIds = [
-      ...new Set([...keys].map((key) => Number(key.split(':')[0]))),
-    ];
-
-    const seasons = [
-      ...new Set([...keys].map((key) => Number(key.split(':')[1]))),
-    ];
-
-    const competitions = await this.activeCompetitionModel
-      .find({
-        apiFootballLeagueId: {
-          $in: leagueIds,
-        },
-
-        season: {
-          $in: seasons,
-        },
-      })
-      .lean()
-      .exec();
-
-    const map = new Map<string, string>();
-
-    for (const competition of competitions) {
-      if (
-        typeof competition.apiFootballLeagueId !== 'number' ||
-        typeof competition.season !== 'number'
-      ) {
-        continue;
-      }
-
-      map.set(
-        this.getCompetitionMapKey(
-          competition.apiFootballLeagueId,
-          competition.season,
-        ),
-        String(competition.competitionId),
-      );
-    }
-
-    return map;
-  }
+  // ============================================================
+  // STATS
+  // ============================================================
 
   private calculateStats(
-    teamAId: number,
-    teamBId: number,
+    teamAId: string,
+    teamBId: string,
     meetings: MeetingRecord[],
   ): {
     teamAWins: number;
@@ -447,6 +377,7 @@ export class HeadToHeadService {
         meeting.homeTeamId === teamBId ? meeting.homeGoals : meeting.awayGoals;
 
       teamAGoals += teamAGoalsInMatch;
+
       teamBGoals += teamBGoalsInMatch;
 
       if (teamAGoalsInMatch > teamBGoalsInMatch) {
@@ -467,30 +398,36 @@ export class HeadToHeadService {
     };
   }
 
+  // ============================================================
+  // HELPERS
+  // ============================================================
+
   private normalizePair(
-    teamOneId: number,
-    teamTwoId: number,
+    teamOneId: string,
+    teamTwoId: string,
   ): {
-    teamAId: number;
-    teamBId: number;
+    teamAId: string;
+    teamBId: string;
     pairKey: string;
   } {
-    const teamAId = Math.min(teamOneId, teamTwoId);
-
-    const teamBId = Math.max(teamOneId, teamTwoId);
+    const ids = [teamOneId.trim(), teamTwoId.trim()].sort((a, b) =>
+      a.localeCompare(b, undefined, {
+        numeric: true,
+      }),
+    );
 
     return {
-      teamAId,
-      teamBId,
-      pairKey: `${teamAId}:${teamBId}`,
+      teamAId: ids[0],
+      teamBId: ids[1],
+      pairKey: `${ids[0]}:${ids[1]}`,
     };
   }
 
   private isPair(
-    homeId: number,
-    awayId: number,
-    teamAId: number,
-    teamBId: number,
+    homeId: string,
+    awayId: string,
+    teamAId: string,
+    teamBId: string,
   ): boolean {
     return (
       (homeId === teamAId && awayId === teamBId) ||
@@ -498,37 +435,46 @@ export class HeadToHeadService {
     );
   }
 
-  private isCompletedFixture(payload: unknown): boolean {
-    const fixturePayload = payload as FixturePayload;
-
-    return this.completedStatuses.has(
-      fixturePayload.fixture?.status?.short ?? '',
-    );
-  }
-
-  private getFixtureDate(payload: FixturePayload, fallback: Date): Date {
-    const value = payload.fixture?.date;
-
-    if (!value) {
-      return fallback;
+  private isCompletedFixture(fixture: EspnFixtureDocument): boolean {
+    if (fixture.completed === true) {
+      return true;
     }
 
-    const date = new Date(value);
+    const status = fixture.status?.trim().toUpperCase();
 
-    return Number.isNaN(date.getTime()) ? fallback : date;
+    return this.completedStatuses.has(status);
   }
 
-  private getSeason(payload: FixturePayload, fallback: number): number {
-    return typeof payload.league?.season === 'number'
-      ? payload.league.season
-      : fallback;
-  }
+  private extractTeamName(
+    payload: Record<string, unknown>,
+    side: 'home' | 'away',
+    fallbackId: string,
+  ): string {
+    const competitions = payload['competitions'];
 
-  private getCompetitionMapKey(leagueId: number, season: number): string {
-    return `${leagueId}:${season}`;
-  }
+    if (Array.isArray(competitions)) {
+      const competitors = (competitions[0] as Record<string, unknown>)?.[
+        'competitors'
+      ];
 
-  private toNumber(value: unknown): number {
-    return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+      if (Array.isArray(competitors)) {
+        const competitor = competitors.find(
+          (item) => (item as Record<string, unknown>)?.['homeAway'] === side,
+        ) as Record<string, unknown> | undefined;
+
+        const team = competitor?.['team'] as
+          | Record<string, unknown>
+          | undefined;
+
+        const name =
+          team?.['displayName'] ?? team?.['name'] ?? team?.['shortDisplayName'];
+
+        if (typeof name === 'string' && name.trim()) {
+          return name.trim();
+        }
+      }
+    }
+
+    return `Team ${fallbackId}`;
   }
 }

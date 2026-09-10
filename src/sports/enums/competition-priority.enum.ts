@@ -1,11 +1,14 @@
 export enum CompetitionPriority {
   /**
-   * Core global and Nigerian betting competitions.
+   * Highest-priority competitions.
+   *
+   * These competitions are considered first when
+   * allocating prediction and fixture-collection resources.
    */
   ELITE = 'ELITE',
 
   /**
-   * Strong global or regional betting competitions.
+   * Strong global and regional competitions.
    */
   HIGH = 'HIGH',
 
@@ -15,8 +18,11 @@ export enum CompetitionPriority {
   REGIONAL = 'REGIONAL',
 
   /**
-   * Supported competitions that should receive
-   * conservative collection resources.
+   * Lower-priority competitions.
+   *
+   * These remain supported when present in the ESPN catalogue,
+   * but they receive lower priority when resources are allocated.
    */
   SELECTIVE = 'SELECTIVE',
+  indexOf = "indexOf",
 }

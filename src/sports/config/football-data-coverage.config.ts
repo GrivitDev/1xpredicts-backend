@@ -1,69 +1,69 @@
 export interface FootballDataCompetitionConfig {
   code: string;
   name: string;
-  internalCompetitionId: string;
+  espnLeagueSlug: string;
 }
 
 export const FOOTBALL_DATA_COVERAGE: FootballDataCompetitionConfig[] = [
   {
     code: 'PL',
     name: 'Premier League',
-    internalCompetitionId: 'PREMIER_LEAGUE',
+    espnLeagueSlug: 'eng.1',
   },
   {
     code: 'ELC',
     name: 'Championship',
-    internalCompetitionId: 'CHAMPIONSHIP',
+    espnLeagueSlug: 'eng.2',
   },
   {
     code: 'PD',
     name: 'La Liga',
-    internalCompetitionId: 'LA_LIGA',
+    espnLeagueSlug: 'esp.1',
   },
   {
     code: 'SA',
     name: 'Serie A',
-    internalCompetitionId: 'SERIE_A',
+    espnLeagueSlug: 'ita.1',
   },
   {
     code: 'BL1',
     name: 'Bundesliga',
-    internalCompetitionId: 'BUNDESLIGA',
+    espnLeagueSlug: 'ger.1',
   },
   {
     code: 'FL1',
     name: 'Ligue 1',
-    internalCompetitionId: 'LIGUE_1',
+    espnLeagueSlug: 'fra.1',
   },
   {
     code: 'DED',
     name: 'Eredivisie',
-    internalCompetitionId: 'EREDIVISIE',
+    espnLeagueSlug: 'ned.1',
   },
   {
     code: 'PPL',
     name: 'Primeira Liga',
-    internalCompetitionId: 'PRIMEIRA_LIGA',
+    espnLeagueSlug: 'por.1',
   },
   {
     code: 'BSA',
     name: 'Brazil Serie A',
-    internalCompetitionId: 'BRAZIL_SERIE_A',
+    espnLeagueSlug: 'bra.1',
   },
   {
     code: 'CL',
     name: 'UEFA Champions League',
-    internalCompetitionId: 'UEFA_CHAMPIONS_LEAGUE',
+    espnLeagueSlug: 'uefa.champions',
   },
   {
     code: 'WC',
     name: 'FIFA World Cup',
-    internalCompetitionId: 'FIFA_WORLD_CUP',
+    espnLeagueSlug: 'fifa.world',
   },
   {
     code: 'EC',
     name: 'UEFA European Championship',
-    internalCompetitionId: 'UEFA_EURO',
+    espnLeagueSlug: 'uefa.euro',
   },
 ];
 
@@ -71,20 +71,19 @@ export const FOOTBALL_DATA_CODES = new Set(
   FOOTBALL_DATA_COVERAGE.map((competition) => competition.code),
 );
 
-export function getFootballDataCompetitionByInternalId(
-  internalCompetitionId: string,
+export function getFootballDataCompetitionByEspnLeagueSlug(
+  espnLeagueSlug: string,
 ): FootballDataCompetitionConfig | undefined {
-  const normalizedId = internalCompetitionId.trim().toUpperCase();
+  const normalizedSlug = espnLeagueSlug.trim().toLowerCase();
 
   return FOOTBALL_DATA_COVERAGE.find(
-    (competition) => competition.internalCompetitionId === normalizedId,
+    (competition) =>
+      competition.espnLeagueSlug.toLowerCase() === normalizedSlug,
   );
 }
 
-export function hasFootballDataCoverage(
-  internalCompetitionId: string,
-): boolean {
+export function hasFootballDataCoverage(espnLeagueSlug: string): boolean {
   return (
-    getFootballDataCompetitionByInternalId(internalCompetitionId) !== undefined
+    getFootballDataCompetitionByEspnLeagueSlug(espnLeagueSlug) !== undefined
   );
 }

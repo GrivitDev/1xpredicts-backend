@@ -1,23 +1,72 @@
 import { Injectable } from '@nestjs/common';
-
 import { InjectModel } from '@nestjs/mongoose';
-
 import { Model } from 'mongoose';
+
+// ============================================================
+// ACTIVE COMPETITION
+// ============================================================
 
 import {
   ActiveCompetition,
   ActiveCompetitionDocument,
 } from '../schemas/active-competition.schema';
 
-import {
-  ApiFootballFixture,
-  ApiFootballFixtureDocument,
-} from '../schemas/api-football/api-football-fixture.schema';
+import { ActiveCompetitionStatus } from '../interfaces/active-competition.interface';
+
+// ============================================================
+// ESPN
+// ============================================================
 
 import {
-  ApiFootballStanding,
-  ApiFootballStandingDocument,
-} from '../schemas/api-football/api-football-standing.schema';
+  EspnFixture,
+  EspnFixtureDocument,
+} from '../schemas/espn/espn-fixture.schema';
+
+import {
+  EspnLeague,
+  EspnLeagueDocument,
+} from '../schemas/espn/espn-league.schema';
+
+import {
+  EspnLiveMatch,
+  EspnLiveMatchDocument,
+} from '../schemas/espn/espn-livematch.schema';
+
+import {
+  EspnMatchEvent,
+  EspnMatchEventDocument,
+} from '../schemas/espn/espn-match-event.schema';
+
+import {
+  EspnMatchStatistics,
+  EspnMatchStatisticsDocument,
+} from '../schemas/espn/espn-match-statistics.schema';
+
+import { EspnNews, EspnNewsDocument } from '../schemas/espn/espn-news.schema';
+
+import { EspnOdds, EspnOddsDocument } from '../schemas/espn/espn-odds.schema';
+
+import {
+  EspnStanding,
+  EspnStandingDocument,
+} from '../schemas/espn/espn-standing.schema';
+
+import { EspnTeam, EspnTeamDocument } from '../schemas/espn/espn-team.schema';
+
+// ============================================================
+// ESPN QUEUE
+// ============================================================
+
+import { EspnQueue, EspnQueueDocument } from '../schemas/espn-queue.schema';
+
+import {
+  EspnQueueJobType,
+  EspnQueueStatus,
+} from '../interfaces/espn-queue.interface';
+
+// ============================================================
+// FOOTBALL-DATA
+// ============================================================
 
 import {
   FootballDataCompetition,
@@ -39,42 +88,140 @@ import {
   FootballDataTeamDocument,
 } from '../schemas/football-data/football-data-team.schema';
 
-import {
-  TeamCompetitionStats,
-  TeamCompetitionStatsDocument,
-} from '../schemas/team-competition-stats.schema';
+// ============================================================
+// ODDS API
+// ============================================================
 
-import { HeadToHead, HeadToHeadDocument } from '../schemas/head-to-head.schema';
+import {
+  OddsApiSport,
+  OddsApiSportDocument,
+} from '../schemas/odds-api-sport.schema';
 
 import {
   SportsOddsSnapshot,
   SportsOddsSnapshotDocument,
 } from '../schemas/sports-odds-snapshot.schema';
 
+// ============================================================
+// RATE LIMIT
+// ============================================================
+
+import {
+  SportsProviderRateLimit,
+  SportsProviderRateLimitDocument,
+} from '../schemas/sports-provider-rate-limit.schema';
+
+// ============================================================
+// DERIVED DATA
+// ============================================================
+
+import {
+  TeamCompetitionStats,
+  TeamCompetitionStatsDocument,
+} from '../schemas/team-competition-stats.schema';
+
+import {
+  TeamPerformanceProfile,
+  TeamPerformanceProfileDocument,
+} from '../schemas/team-performance-profile.schema';
+
+import { HeadToHead, HeadToHeadDocument } from '../schemas/head-to-head.schema';
+
+// ============================================================
+// YOUTUBE
+// ============================================================
+
 import {
   YouTubeHighlight,
   YouTubeHighlightDocument,
 } from '../schemas/youtube-highlight.schema';
 
-import { SupportedCompetitionService } from './supported-competition.service';
+// ============================================================
+// QUERY TYPES
+// ============================================================
 
-import { ActiveCompetitionStatus } from '../interfaces/active-competition.interface';
+export interface SportsAdminQuery {
+  page?: number;
+  limit?: number;
+  sortBy?: string;
+  sortOrder?: 'asc' | 'desc';
 
-import { YoutubeHighlightStatus } from '../interfaces/youtube-highlight.interface';
+  status?: string;
+  type?: string;
+  leagueId?: string;
+  season?: number;
+  eventId?: string;
+  competitionId?: string;
+  teamId?: string;
+  provider?: string;
+
+  from?: Date;
+  to?: Date;
+}
+
+interface PaginatedResult<T> {
+  data: T[];
+  page: number;
+  limit: number;
+  total: number;
+  totalPages: number;
+}
+
+// ============================================================
+// SERVICE
+// ============================================================
 
 @Injectable()
 export class SportsDataReadService {
   constructor(
-    private readonly supportedCompetitionService: SupportedCompetitionService,
+    // ----------------------------------------------------------
+    // ACTIVE COMPETITION
+    // ----------------------------------------------------------
 
     @InjectModel(ActiveCompetition.name)
     private readonly activeCompetitionModel: Model<ActiveCompetitionDocument>,
 
-    @InjectModel(ApiFootballFixture.name)
-    private readonly apiFootballFixtureModel: Model<ApiFootballFixtureDocument>,
+    // ----------------------------------------------------------
+    // ESPN
+    // ----------------------------------------------------------
 
-    @InjectModel(ApiFootballStanding.name)
-    private readonly apiFootballStandingModel: Model<ApiFootballStandingDocument>,
+    @InjectModel(EspnFixture.name)
+    private readonly espnFixtureModel: Model<EspnFixtureDocument>,
+
+    @InjectModel(EspnLeague.name)
+    private readonly espnLeagueModel: Model<EspnLeagueDocument>,
+
+    @InjectModel(EspnLiveMatch.name)
+    private readonly espnLiveMatchModel: Model<EspnLiveMatchDocument>,
+
+    @InjectModel(EspnMatchEvent.name)
+    private readonly espnMatchEventModel: Model<EspnMatchEventDocument>,
+
+    @InjectModel(EspnMatchStatistics.name)
+    private readonly espnMatchStatisticsModel: Model<EspnMatchStatisticsDocument>,
+
+    @InjectModel(EspnNews.name)
+    private readonly espnNewsModel: Model<EspnNewsDocument>,
+
+    @InjectModel(EspnOdds.name)
+    private readonly espnOddsModel: Model<EspnOddsDocument>,
+
+    @InjectModel(EspnStanding.name)
+    private readonly espnStandingModel: Model<EspnStandingDocument>,
+
+    @InjectModel(EspnTeam.name)
+    private readonly espnTeamModel: Model<EspnTeamDocument>,
+
+    // ----------------------------------------------------------
+    // ESPN QUEUE
+    // ----------------------------------------------------------
+
+    @InjectModel(EspnQueue.name)
+    private readonly espnQueueModel: Model<EspnQueueDocument>,
+
+    // ----------------------------------------------------------
+    // FOOTBALL-DATA
+    // ----------------------------------------------------------
 
     @InjectModel(FootballDataCompetition.name)
     private readonly footballDataCompetitionModel: Model<FootballDataCompetitionDocument>,
@@ -88,379 +235,95 @@ export class SportsDataReadService {
     @InjectModel(FootballDataTeam.name)
     private readonly footballDataTeamModel: Model<FootballDataTeamDocument>,
 
+    // ----------------------------------------------------------
+    // ODDS API
+    // ----------------------------------------------------------
+
+    @InjectModel(OddsApiSport.name)
+    private readonly oddsApiSportModel: Model<OddsApiSportDocument>,
+
+    @InjectModel(SportsOddsSnapshot.name)
+    private readonly sportsOddsSnapshotModel: Model<SportsOddsSnapshotDocument>,
+
+    // ----------------------------------------------------------
+    // RATE LIMIT
+    // ----------------------------------------------------------
+
+    @InjectModel(SportsProviderRateLimit.name)
+    private readonly sportsProviderRateLimitModel: Model<SportsProviderRateLimitDocument>,
+
+    // ----------------------------------------------------------
+    // DERIVED DATA
+    // ----------------------------------------------------------
+
     @InjectModel(TeamCompetitionStats.name)
     private readonly teamCompetitionStatsModel: Model<TeamCompetitionStatsDocument>,
+
+    @InjectModel(TeamPerformanceProfile.name)
+    private readonly teamPerformanceProfileModel: Model<TeamPerformanceProfileDocument>,
 
     @InjectModel(HeadToHead.name)
     private readonly headToHeadModel: Model<HeadToHeadDocument>,
 
-    @InjectModel(SportsOddsSnapshot.name)
-    private readonly oddsModel: Model<SportsOddsSnapshotDocument>,
+    // ----------------------------------------------------------
+    // YOUTUBE
+    // ----------------------------------------------------------
 
     @InjectModel(YouTubeHighlight.name)
     private readonly youtubeHighlightModel: Model<YouTubeHighlightDocument>,
   ) {}
 
-  async getLive(): Promise<FootballDataMatchDocument[]> {
+  // ============================================================
+  // PUBLIC / APPLICATION READS
+  // ============================================================
+
+  async getLive(): Promise<unknown[]> {
     return this.getLiveFixtures();
-  }
-
-  async getLiveFixtures(
-    competitionId?: string,
-  ): Promise<FootballDataMatchDocument[]> {
-    const filter: Record<string, unknown> = {
-      status: {
-        $in: ['IN_PLAY', 'PAUSED'],
-      },
-    };
-
-    if (competitionId) {
-      const competition = await this.getCompetition(competitionId);
-
-      if (!competition) {
-        return [];
-      }
-
-      if (competition.footballDataCode) {
-        filter.competitionCode = competition.footballDataCode
-          .trim()
-          .toUpperCase();
-      } else if (competition.apiFootballLeagueId !== undefined) {
-        return [];
-      } else {
-        return [];
-      }
-    }
-
-    return this.footballDataMatchModel
-      .find(filter)
-      .sort({
-        utcDate: 1,
-      })
-      .lean()
-      .exec();
   }
 
   async getFixtures(competitionId?: string): Promise<unknown[]> {
     return this.getUpcomingFixtures(undefined, undefined, competitionId);
   }
 
-  async getUpcomingFixtures(
-    from?: Date,
-    to?: Date,
-    competitionId?: string,
-  ): Promise<unknown[]> {
-    const start = from ?? new Date();
-
-    if (competitionId) {
-      const competition = await this.getCompetition(competitionId);
-
-      if (!competition) {
-        return [];
-      }
-
-      if (
-        typeof competition.apiFootballLeagueId === 'number' &&
-        typeof competition.season === 'number'
-      ) {
-        const filter: Record<string, unknown> = {
-          leagueId: competition.apiFootballLeagueId,
-          season: competition.season,
-          fixtureDate: {
-            $gte: start,
-          },
-          'payload.fixture.status.short': {
-            $nin: ['FT', 'AET', 'PEN', 'CANC', 'ABD'],
-          },
-        };
-
-        if (to) {
-          (filter.fixtureDate as Record<string, Date>).$lt = to;
-        }
-
-        return this.apiFootballFixtureModel
-          .find(filter)
-          .sort({
-            fixtureDate: 1,
-          })
-          .lean()
-          .exec();
-      }
-
-      if (competition.footballDataCode) {
-        const filter: Record<string, unknown> = {
-          competitionCode: competition.footballDataCode.trim().toUpperCase(),
-          status: {
-            $in: ['SCHEDULED', 'TIMED'],
-          },
-          utcDate: {
-            $gte: start,
-          },
-        };
-
-        if (to) {
-          (filter.utcDate as Record<string, Date>).$lt = to;
-        }
-
-        return this.footballDataMatchModel
-          .find(filter)
-          .sort({
-            utcDate: 1,
-          })
-          .lean()
-          .exec();
-      }
-
-      return [];
-    }
-
-    const apiFootballFilter: Record<string, unknown> = {
-      fixtureDate: {
-        $gte: start,
-      },
-      'payload.fixture.status.short': {
-        $nin: ['FT', 'AET', 'PEN', 'CANC', 'ABD'],
-      },
-    };
-
-    if (to) {
-      (apiFootballFilter.fixtureDate as Record<string, Date>).$lt = to;
-    }
-
-    const footballDataFilter: Record<string, unknown> = {
-      status: {
-        $in: ['SCHEDULED', 'TIMED'],
-      },
-      utcDate: {
-        $gte: start,
-      },
-    };
-
-    if (to) {
-      (footballDataFilter.utcDate as Record<string, Date>).$lt = to;
-    }
-
-    const [apiFootballFixtures, footballDataMatches] = await Promise.all([
-      this.apiFootballFixtureModel
-        .find(apiFootballFilter)
-        .sort({
-          fixtureDate: 1,
-        })
-        .lean()
-        .exec(),
-
-      this.footballDataMatchModel
-        .find(footballDataFilter)
-        .sort({
-          utcDate: 1,
-        })
-        .lean()
-        .exec(),
-    ]);
-
-    return [...apiFootballFixtures, ...footballDataMatches].sort(
-      (a: any, b: any) => {
-        const aDate = a.fixtureDate ?? a.utcDate;
-        const bDate = b.fixtureDate ?? b.utcDate;
-
-        return new Date(aDate).getTime() - new Date(bDate).getTime();
-      },
-    );
-  }
-
   async getResults(competitionId?: string): Promise<unknown[]> {
     return this.getFinishedFixtures(undefined, undefined, competitionId);
-  }
-
-  async getFinishedFixtures(
-    from?: Date,
-    to?: Date,
-    competitionId?: string,
-  ): Promise<unknown[]> {
-    if (competitionId) {
-      const competition = await this.getCompetition(competitionId);
-
-      if (!competition) {
-        return [];
-      }
-
-      if (
-        typeof competition.apiFootballLeagueId === 'number' &&
-        typeof competition.season === 'number'
-      ) {
-        const filter: Record<string, unknown> = {
-          leagueId: competition.apiFootballLeagueId,
-          season: competition.season,
-          'payload.fixture.status.short': {
-            $in: ['FT', 'AET', 'PEN'],
-          },
-        };
-
-        if (from || to) {
-          filter.fixtureDate = {};
-
-          if (from) {
-            (filter.fixtureDate as Record<string, Date>).$gte = from;
-          }
-
-          if (to) {
-            (filter.fixtureDate as Record<string, Date>).$lt = to;
-          }
-        }
-
-        return this.apiFootballFixtureModel
-          .find(filter)
-          .sort({
-            fixtureDate: -1,
-          })
-          .lean()
-          .exec();
-      }
-
-      if (competition.footballDataCode) {
-        const filter: Record<string, unknown> = {
-          competitionCode: competition.footballDataCode.trim().toUpperCase(),
-          status: 'FINISHED',
-        };
-
-        if (from || to) {
-          filter.utcDate = {};
-
-          if (from) {
-            (filter.utcDate as Record<string, Date>).$gte = from;
-          }
-
-          if (to) {
-            (filter.utcDate as Record<string, Date>).$lt = to;
-          }
-        }
-
-        return this.footballDataMatchModel
-          .find(filter)
-          .sort({
-            utcDate: -1,
-          })
-          .lean()
-          .exec();
-      }
-
-      return [];
-    }
-
-    const apiFootballFilter: Record<string, unknown> = {
-      'payload.fixture.status.short': {
-        $in: ['FT', 'AET', 'PEN'],
-      },
-    };
-
-    if (from || to) {
-      apiFootballFilter.fixtureDate = {};
-
-      if (from) {
-        (apiFootballFilter.fixtureDate as Record<string, Date>).$gte = from;
-      }
-
-      if (to) {
-        (apiFootballFilter.fixtureDate as Record<string, Date>).$lt = to;
-      }
-    }
-
-    const footballDataFilter: Record<string, unknown> = {
-      status: 'FINISHED',
-    };
-
-    if (from || to) {
-      footballDataFilter.utcDate = {};
-
-      if (from) {
-        (footballDataFilter.utcDate as Record<string, Date>).$gte = from;
-      }
-
-      if (to) {
-        (footballDataFilter.utcDate as Record<string, Date>).$lt = to;
-      }
-    }
-
-    const [apiFootballFixtures, footballDataMatches] = await Promise.all([
-      this.apiFootballFixtureModel
-        .find(apiFootballFilter)
-        .sort({
-          fixtureDate: -1,
-        })
-        .limit(200)
-        .lean()
-        .exec(),
-
-      this.footballDataMatchModel
-        .find(footballDataFilter)
-        .sort({
-          utcDate: -1,
-        })
-        .limit(200)
-        .lean()
-        .exec(),
-    ]);
-
-    return [...apiFootballFixtures, ...footballDataMatches].sort(
-      (a: any, b: any) => {
-        const aDate = a.fixtureDate ?? a.utcDate;
-        const bDate = b.fixtureDate ?? b.utcDate;
-
-        return new Date(bDate).getTime() - new Date(aDate).getTime();
-      },
-    );
   }
 
   async getStandings(competitionId: string): Promise<unknown[]> {
     return this.getLeagueTable(competitionId);
   }
 
-  async getLeagueTable(
-    competitionId: string,
-    season?: number,
-  ): Promise<unknown[]> {
-    const competition = await this.getCompetition(competitionId, season);
+  async getTeams(competitionId: string): Promise<unknown[]> {
+    const competition = competitionId?.trim().toLowerCase();
 
-    if (!competition) {
-      return [];
+    const espnTeams = await this.espnTeamModel
+      .find({
+        leagueId: competition,
+      })
+      .sort({
+        name: 1,
+      })
+      .lean()
+      .exec();
+
+    if (espnTeams.length > 0) {
+      return espnTeams;
     }
 
-    if (
-      typeof competition.apiFootballLeagueId === 'number' &&
-      typeof competition.season === 'number'
-    ) {
-      return this.apiFootballStandingModel
-        .find({
-          leagueId: competition.apiFootballLeagueId,
-          season: competition.season,
-        })
-        .sort({
-          rank: 1,
-        })
-        .lean()
-        .exec();
-    }
-
-    if (competition.footballDataCode) {
-      const filter: Record<string, unknown> = {
-        competitionCode: competition.footballDataCode.trim().toUpperCase(),
-      };
-
-      if (typeof season === 'number') {
-        filter.seasonId = season;
-      }
-
-      return this.footballDataStandingModel
-        .find(filter)
-        .sort({
-          'payload.position': 1,
-        })
-        .lean()
-        .exec();
-    }
-
-    return [];
+    return this.footballDataTeamModel
+      .find({
+        competitionCode: competitionId?.trim().toUpperCase(),
+      })
+      .sort({
+        name: 1,
+      })
+      .lean()
+      .exec();
   }
+
+  // ============================================================
+  // COMPETITIONS
+  // ============================================================
 
   async getCompetitions(
     options: {
@@ -468,49 +331,31 @@ export class SportsDataReadService {
       predictionEnabled?: boolean;
     } = {},
   ) {
-    let competitions = this.supportedCompetitionService.getAll();
-
-    if (options.activeOnly) {
-      const activeCompetitions = await this.getActiveCompetitions();
-
-      const activeIds = new Set(
-        activeCompetitions.map((competition) =>
-          competition.competitionId.trim().toLowerCase(),
-        ),
-      );
-
-      competitions = competitions.filter((competition) =>
-        activeIds.has(competition.id.trim().toLowerCase()),
-      );
-    }
-
-    if (options.predictionEnabled) {
-      competitions = competitions.filter(
-        (competition) => competition.predictionEnabled,
-      );
-    }
-
-    return competitions;
-  }
-
-  async getTeams(competitionId: string): Promise<FootballDataTeamDocument[]> {
-    const competition = this.supportedCompetitionService.getById(competitionId);
-
-    if (!competition?.providers.footballDataCode) {
-      return [];
-    }
-
-    return this.footballDataTeamModel
-      .find({
-        competitionCode: competition.providers.footballDataCode
-          .trim()
-          .toUpperCase(),
-      })
+    let competitions = await this.activeCompetitionModel
+      .find()
       .sort({
+        priority: 1,
         name: 1,
       })
       .lean()
       .exec();
+
+    if (options.activeOnly) {
+      competitions = competitions.filter(
+        (competition) =>
+          competition.status === ActiveCompetitionStatus.ACTIVE ||
+          competition.status === ActiveCompetitionStatus.UPCOMING,
+      );
+    }
+
+    if (options.predictionEnabled) {
+      // ActiveCompetition does not own predictionEnabled.
+      // The application-level competition registry remains the
+      // source of that configuration.
+      return competitions;
+    }
+
+    return competitions;
   }
 
   async getActiveCompetitions(): Promise<ActiveCompetitionDocument[]> {
@@ -536,25 +381,164 @@ export class SportsDataReadService {
     season?: number,
   ): Promise<ActiveCompetitionDocument | null> {
     const filter: Record<string, unknown> = {
-      competitionId: competitionId.trim().toLowerCase(),
+      competitionId: String(competitionId).trim().toLowerCase(),
     };
 
-    if (typeof season === 'number') {
+    if (typeof season === 'number' && Number.isFinite(season)) {
       filter.season = season;
     }
 
     return this.activeCompetitionModel.findOne(filter).lean().exec();
   }
 
+  // ============================================================
+  // FIXTURES
+  // ============================================================
+
+  async getUpcomingFixtures(
+    from?: Date,
+    to?: Date,
+    competitionId?: string,
+  ): Promise<unknown[]> {
+    const start = from ?? new Date();
+
+    const filter: Record<string, unknown> = {
+      fixtureDate: {
+        $gte: start,
+      },
+    };
+
+    if (to) {
+      (filter.fixtureDate as Record<string, Date>).$lt = to;
+    }
+
+    if (competitionId) {
+      filter.leagueId = String(competitionId).trim().toLowerCase();
+    }
+
+    return this.espnFixtureModel
+      .find(filter)
+      .sort({
+        fixtureDate: 1,
+      })
+      .lean()
+      .exec();
+  }
+
+  async getLiveFixtures(competitionId?: string): Promise<unknown[]> {
+    const filter: Record<string, unknown> = {
+      status: {
+        $in: ['IN_PROGRESS', 'INPROGRESS', 'LIVE', 'PAUSED'],
+      },
+    };
+
+    if (competitionId) {
+      filter.leagueId = String(competitionId).trim().toLowerCase();
+    }
+
+    const fixtures = await this.espnFixtureModel
+      .find(filter)
+      .sort({
+        fixtureDate: 1,
+      })
+      .lean()
+      .exec();
+
+    if (fixtures.length > 0) {
+      return fixtures;
+    }
+
+    const liveMatchesFilter: Record<string, unknown> = {};
+
+    if (competitionId) {
+      liveMatchesFilter.leagueId = competitionId.trim();
+    }
+
+    return this.espnLiveMatchModel
+      .find(liveMatchesFilter)
+      .sort({
+        updatedAt: -1,
+      })
+      .lean()
+      .exec();
+  }
+
+  async getFinishedFixtures(
+    from?: Date,
+    to?: Date,
+    competitionId?: string,
+  ): Promise<unknown[]> {
+    const filter: Record<string, unknown> = {
+      status: {
+        $in: ['FINAL', 'FINISHED', 'POST', 'FT'],
+      },
+    };
+
+    if (competitionId) {
+      filter.leagueId = competitionId.trim();
+    }
+
+    if (from || to) {
+      filter.fixtureDate = {};
+
+      if (from) {
+        (filter.fixtureDate as Record<string, Date>).$gte = from;
+      }
+
+      if (to) {
+        (filter.fixtureDate as Record<string, Date>).$lt = to;
+      }
+    }
+
+    return this.espnFixtureModel
+      .find(filter)
+      .sort({
+        fixtureDate: -1,
+      })
+      .lean()
+      .exec();
+  }
+
+  // ============================================================
+  // LEAGUE TABLE
+  // ============================================================
+
+  async getLeagueTable(
+    competitionId: string,
+    season?: number,
+  ): Promise<unknown[]> {
+    const filter: Record<string, unknown> = {
+      leagueId: competitionId.trim(),
+    };
+
+    if (typeof season === 'number' && Number.isFinite(season)) {
+      filter.season = season;
+    }
+
+    return this.espnStandingModel
+      .find(filter)
+      .sort({
+        rank: 1,
+      })
+      .lean()
+      .exec();
+  }
+
+  // ============================================================
+  // TEAM STATS
+  // ============================================================
+
   async getTeamCompetitionStats(
     competitionId: string,
     season: number,
   ): Promise<TeamCompetitionStatsDocument[]> {
+    const filter: Record<string, unknown> = {
+      competitionId: String(competitionId).trim().toLowerCase(),
+      season,
+    };
+
     return this.teamCompetitionStatsModel
-      .find({
-        competitionId: competitionId.trim().toLowerCase(),
-        season,
-      })
+      .find(filter)
       .sort({
         position: 1,
         teamName: 1,
@@ -568,159 +552,850 @@ export class SportsDataReadService {
     season: number,
     teamId: number,
   ): Promise<TeamCompetitionStatsDocument | null> {
-    return this.teamCompetitionStatsModel
-      .findOne({
-        competitionId: competitionId.trim().toLowerCase(),
-        season,
-        teamId,
-      })
-      .lean()
-      .exec();
+    const filter: Record<string, unknown> = {
+      competitionId: String(competitionId).trim().toLowerCase(),
+      season,
+      teamId,
+    };
+
+    return this.teamCompetitionStatsModel.findOne(filter).lean().exec();
   }
+
+  // ============================================================
+  // HEAD TO HEAD
+  // ============================================================
 
   async getHeadToHead(
     teamOneId: number,
     teamTwoId: number,
   ): Promise<HeadToHeadDocument | null> {
-    if (teamOneId === teamTwoId) {
-      return null;
-    }
+    const direct = await this.headToHeadModel
+      .findOne({
+        teamOneId,
+        teamTwoId,
+      })
+      .sort({
+        createdAt: -1,
+      })
+      .lean()
+      .exec();
 
-    const teamAId = Math.min(teamOneId, teamTwoId);
-    const teamBId = Math.max(teamOneId, teamTwoId);
+    if (direct) {
+      return direct;
+    }
 
     return this.headToHeadModel
       .findOne({
-        pairKey: `${teamAId}:${teamBId}`,
+        teamOneId: teamTwoId,
+        teamTwoId: teamOneId,
+      })
+      .sort({
+        createdAt: -1,
       })
       .lean()
       .exec();
   }
 
-  async getOddsForEvent(
-    eventId: string,
-  ): Promise<SportsOddsSnapshotDocument | null> {
-    return this.oddsModel
-      .findOne({
-        eventId,
-      })
-      .lean()
-      .exec();
-  }
+  // ============================================================
+  // ODDS
+  // ============================================================
 
-  async getOddsForEvents(
-    eventIds: string[],
-  ): Promise<SportsOddsSnapshotDocument[]> {
-    const ids = [...new Set(eventIds.filter(Boolean))];
+  async getOddsForEvent(eventId: string): Promise<unknown[]> {
+    const normalizedEventId = eventId.trim();
 
-    if (ids.length === 0) {
-      return [];
-    }
-
-    return this.oddsModel
+    const espnOdds = await this.espnOddsModel
       .find({
-        eventId: {
-          $in: ids,
-        },
+        eventId: normalizedEventId,
+      })
+      .sort({
+        collectedAt: -1,
       })
       .lean()
       .exec();
+
+    const snapshots = await this.sportsOddsSnapshotModel
+      .find({
+        eventId: normalizedEventId,
+      })
+      .sort({
+        collectedAt: -1,
+      })
+      .lean()
+      .exec();
+
+    return [...espnOdds, ...snapshots];
   }
+
+  // ============================================================
+  // YOUTUBE
+  // ============================================================
 
   async getYoutubeHighlight(
     fixtureId: string,
   ): Promise<YouTubeHighlightDocument | null> {
     return this.youtubeHighlightModel
       .findOne({
-        fixtureId,
-        status: YoutubeHighlightStatus.FOUND,
+        fixtureId: fixtureId.trim(),
+      })
+      .sort({
+        searchedAt: -1,
       })
       .lean()
       .exec();
   }
 
-  async getYoutubeHighlights(
-    fixtureIds: string[],
-  ): Promise<YouTubeHighlightDocument[]> {
-    const ids = [...new Set(fixtureIds.filter(Boolean))];
+  // ============================================================
+  // ADMIN PAGINATION
+  // ============================================================
 
-    if (ids.length === 0) {
-      return [];
+  private async paginateModel<T = any>(
+    // Mongoose's hydrated-document types are invariant across schema/model
+    // versions. Pagination only uses the model query API, so avoid imposing
+    // an incompatible document generic here.
+    model: Model<any>,
+    query: SportsAdminQuery,
+    filter: Record<string, unknown> = {},
+  ): Promise<PaginatedResult<T>> {
+    const page = this.normalizePage(query.page);
+    const limit = this.normalizeLimit(query.limit);
+
+    const sortBy = this.normalizeSortField(query.sortBy);
+    const sortOrder = query.sortOrder === 'asc' ? 1 : -1;
+
+    const skip = (page - 1) * limit;
+
+    const [data, total] = await Promise.all([
+      model
+        .find(filter)
+        .sort({
+          [sortBy]: sortOrder,
+        })
+        .skip(skip)
+        .limit(limit)
+        .lean<T[]>()
+        .exec(),
+
+      model.countDocuments(filter).exec(),
+    ]);
+
+    return {
+      data,
+      page,
+      limit,
+      total,
+      totalPages: Math.ceil(total / limit),
+    };
+  }
+
+  private normalizePage(value?: number): number {
+    if (!Number.isFinite(value)) {
+      return 1;
     }
 
-    return this.youtubeHighlightModel
-      .find({
-        fixtureId: {
-          $in: ids,
-        },
-        status: YoutubeHighlightStatus.FOUND,
-      })
-      .lean()
-      .exec();
+    return Math.max(Math.floor(value as number), 1);
   }
 
-  async getFootballDataCompetitions(): Promise<
-    FootballDataCompetitionDocument[]
-  > {
-    return this.footballDataCompetitionModel
-      .find({})
-      .sort({
-        name: 1,
-      })
-      .lean()
-      .exec();
+  private normalizeLimit(value?: number): number {
+    if (!Number.isFinite(value)) {
+      return 50;
+    }
+
+    return Math.min(Math.max(Math.floor(value as number), 1), 200);
   }
 
-  async getFootballDataMatches(
+  private normalizeSortField(value?: string): string {
+    if (!value?.trim()) {
+      return 'createdAt';
+    }
+
+    const normalized = value.trim();
+
+    if (!/^[a-zA-Z0-9_]+$/.test(normalized)) {
+      return 'createdAt';
+    }
+
+    return normalized;
+  }
+
+  private addDateRange(
+    filter: Record<string, unknown>,
+    field: string,
     from?: Date,
     to?: Date,
-    competitionCode?: string,
-  ): Promise<FootballDataMatchDocument[]> {
-    const filter: Record<string, unknown> = {};
-
-    if (from || to) {
-      filter.utcDate = {};
-
-      if (from) {
-        (filter.utcDate as Record<string, Date>).$gte = from;
-      }
-
-      if (to) {
-        (filter.utcDate as Record<string, Date>).$lt = to;
-      }
+  ): void {
+    if (!from && !to) {
+      return;
     }
 
-    if (competitionCode) {
-      filter.competitionCode = competitionCode.trim().toUpperCase();
+    filter[field] = {};
+
+    if (from) {
+      (filter[field] as Record<string, Date>).$gte = from;
     }
 
-    return this.footballDataMatchModel
-      .find(filter)
-      .sort({
-        utcDate: 1,
-      })
-      .lean()
-      .exec();
+    if (to) {
+      (filter[field] as Record<string, Date>).$lt = to;
+    }
   }
 
-  async getFootballDataStandings(
-    competitionCode: string,
-    seasonId?: number,
-  ): Promise<FootballDataStandingDocument[]> {
-    const filter: Record<string, unknown> = {
-      competitionCode: competitionCode.trim().toUpperCase(),
-    };
+  // ============================================================
+  // ADMIN: ACTIVE COMPETITIONS
+  // ============================================================
 
-    if (typeof seasonId === 'number') {
-      filter.seasonId = seasonId;
+  async getAdminActiveCompetitions(query: SportsAdminQuery = {}) {
+    const filter: Record<string, unknown> = {};
+
+    if (query.status) {
+      filter.status = query.status;
     }
 
-    return this.footballDataStandingModel
-      .find(filter)
-      .sort({
-        'payload.position': 1,
-      })
-      .lean()
-      .exec();
+    if (query.competitionId) {
+      filter.competitionId = query.competitionId.trim().toLowerCase();
+    }
+
+    if (typeof query.season === 'number') {
+      filter.season = query.season;
+    }
+
+    return this.paginateModel(this.activeCompetitionModel, query, filter);
+  }
+
+  // ============================================================
+  // ADMIN: ESPN QUEUE
+  // ============================================================
+
+  async getAdminEspnQueues(query: SportsAdminQuery = {}) {
+    const filter: Record<string, unknown> = {};
+
+    if (query.status) {
+      filter.status = query.status;
+    }
+
+    if (query.type) {
+      filter.type = query.type;
+    }
+
+    if (query.leagueId) {
+      filter.leagueId = query.leagueId.trim();
+    }
+
+    if (query.eventId) {
+      filter.eventId = query.eventId.trim();
+    }
+
+    if (query.competitionId) {
+      filter.competitionId = query.competitionId.trim();
+    }
+
+    if (typeof query.season === 'number') {
+      filter.season = query.season;
+    }
+
+    this.addDateRange(filter, 'scheduledFor', query.from, query.to);
+
+    return this.paginateModel(
+      this.espnQueueModel,
+      {
+        ...query,
+        sortBy: query.sortBy ?? 'scheduledFor',
+      },
+      filter,
+    );
+  }
+
+  async getAdminEspnQueueSummary() {
+    const [
+      pending,
+      processing,
+      completed,
+      failed,
+      leagueRefresh,
+      upcomingMatch,
+      finishedMatch,
+      total,
+    ] = await Promise.all([
+      this.espnQueueModel.countDocuments({
+        status: EspnQueueStatus.PENDING,
+      }),
+
+      this.espnQueueModel.countDocuments({
+        status: EspnQueueStatus.PROCESSING,
+      }),
+
+      this.espnQueueModel.countDocuments({
+        status: EspnQueueStatus.COMPLETED,
+      }),
+
+      this.espnQueueModel.countDocuments({
+        status: EspnQueueStatus.FAILED,
+      }),
+
+      this.espnQueueModel.countDocuments({
+        type: EspnQueueJobType.LEAGUE_REFRESH,
+      }),
+
+      this.espnQueueModel.countDocuments({
+        type: EspnQueueJobType.UPCOMING_MATCH,
+      }),
+
+      this.espnQueueModel.countDocuments({
+        type: EspnQueueJobType.FINISHED_MATCH,
+      }),
+
+      this.espnQueueModel.countDocuments(),
+    ]);
+
+    return {
+      total,
+      status: {
+        pending,
+        processing,
+        completed,
+        failed,
+      },
+      type: {
+        leagueRefresh,
+        upcomingMatch,
+        finishedMatch,
+      },
+    };
+  }
+
+  // ============================================================
+  // ADMIN: ESPN FIXTURES
+  // ============================================================
+
+  async getAdminEspnFixtures(query: SportsAdminQuery = {}) {
+    const filter: Record<string, unknown> = {};
+
+    if (query.leagueId) {
+      filter.leagueId = query.leagueId.trim();
+    }
+
+    if (query.eventId) {
+      filter.eventId = query.eventId.trim();
+    }
+
+    if (query.status) {
+      filter.status = query.status;
+    }
+
+    if (typeof query.season === 'number') {
+      filter.season = query.season;
+    }
+
+    if (query.teamId) {
+      filter.$or = [
+        {
+          homeTeamId: query.teamId.trim(),
+        },
+        {
+          awayTeamId: query.teamId.trim(),
+        },
+      ];
+    }
+
+    this.addDateRange(filter, 'fixtureDate', query.from, query.to);
+
+    return this.paginateModel(
+      this.espnFixtureModel,
+      {
+        ...query,
+        sortBy: query.sortBy ?? 'fixtureDate',
+      },
+      filter,
+    );
+  }
+
+  // ============================================================
+  // ADMIN: ESPN LEAGUES
+  // ============================================================
+
+  async getAdminEspnLeagues(query: SportsAdminQuery = {}) {
+    const filter: Record<string, unknown> = {};
+
+    if (query.leagueId) {
+      filter.leagueId = query.leagueId.trim();
+    }
+
+    if (query.status) {
+      filter.isActive = query.status === 'active';
+    }
+
+    return this.paginateModel(
+      this.espnLeagueModel,
+      {
+        ...query,
+        sortBy: query.sortBy ?? 'name',
+        sortOrder: query.sortOrder ?? 'asc',
+      },
+      filter,
+    );
+  }
+
+  // ============================================================
+  // ADMIN: ESPN LIVE MATCHES
+  // ============================================================
+
+  async getAdminEspnLiveMatches(query: SportsAdminQuery = {}) {
+    const filter: Record<string, unknown> = {};
+
+    if (query.leagueId) {
+      filter.leagueId = query.leagueId.trim();
+    }
+
+    if (query.eventId) {
+      filter.eventId = query.eventId.trim();
+    }
+
+    return this.paginateModel(
+      this.espnLiveMatchModel,
+      {
+        ...query,
+        sortBy: query.sortBy ?? 'updatedAt',
+      },
+      filter,
+    );
+  }
+
+  // ============================================================
+  // ADMIN: ESPN MATCH EVENTS
+  // ============================================================
+
+  async getAdminEspnMatchEvents(query: SportsAdminQuery = {}) {
+    const filter: Record<string, unknown> = {};
+
+    if (query.eventId) {
+      filter.eventId = query.eventId.trim();
+    }
+
+    if (query.leagueId) {
+      filter.leagueId = query.leagueId.trim();
+    }
+
+    if (query.teamId) {
+      filter.teamId = query.teamId.trim();
+    }
+
+    return this.paginateModel(
+      this.espnMatchEventModel,
+      {
+        ...query,
+        sortBy: query.sortBy ?? 'collectedAt',
+      },
+      filter,
+    );
+  }
+
+  // ============================================================
+  // ADMIN: ESPN MATCH STATISTICS
+  // ============================================================
+
+  async getAdminEspnMatchStatistics(query: SportsAdminQuery = {}) {
+    const filter: Record<string, unknown> = {};
+
+    if (query.eventId) {
+      filter.eventId = query.eventId.trim();
+    }
+
+    if (query.leagueId) {
+      filter.leagueId = query.leagueId.trim();
+    }
+
+    if (query.teamId) {
+      filter.teamId = query.teamId.trim();
+    }
+
+    return this.paginateModel(
+      this.espnMatchStatisticsModel,
+      {
+        ...query,
+        sortBy: query.sortBy ?? 'collectedAt',
+      },
+      filter,
+    );
+  }
+
+  // ============================================================
+  // ADMIN: ESPN NEWS
+  // ============================================================
+
+  async getAdminEspnNews(query: SportsAdminQuery = {}) {
+    const filter: Record<string, unknown> = {};
+
+    this.addDateRange(filter, 'collectedAt', query.from, query.to);
+
+    return this.paginateModel(
+      this.espnNewsModel,
+      {
+        ...query,
+        sortBy: query.sortBy ?? 'collectedAt',
+      },
+      filter,
+    );
+  }
+
+  // ============================================================
+  // ADMIN: ESPN ODDS
+  // ============================================================
+
+  async getAdminEspnOdds(query: SportsAdminQuery = {}) {
+    const filter: Record<string, unknown> = {};
+
+    if (query.eventId) {
+      filter.eventId = query.eventId.trim();
+    }
+
+    if (query.leagueId) {
+      filter.leagueId = query.leagueId.trim();
+    }
+
+    if (query.provider) {
+      filter.providerId = query.provider.trim();
+    }
+
+    return this.paginateModel(
+      this.espnOddsModel,
+      {
+        ...query,
+        sortBy: query.sortBy ?? 'collectedAt',
+      },
+      filter,
+    );
+  }
+
+  // ============================================================
+  // ADMIN: ESPN STANDINGS
+  // ============================================================
+
+  async getAdminEspnStandings(query: SportsAdminQuery = {}) {
+    const filter: Record<string, unknown> = {};
+
+    if (query.leagueId) {
+      filter.leagueId = query.leagueId.trim();
+    }
+
+    if (query.teamId) {
+      filter.teamId = query.teamId.trim();
+    }
+
+    if (typeof query.season === 'number') {
+      filter.season = query.season;
+    }
+
+    return this.paginateModel(
+      this.espnStandingModel,
+      {
+        ...query,
+        sortBy: query.sortBy ?? 'rank',
+        sortOrder: query.sortOrder ?? 'asc',
+      },
+      filter,
+    );
+  }
+
+  // ============================================================
+  // ADMIN: ESPN TEAMS
+  // ============================================================
+
+  async getAdminEspnTeams(query: SportsAdminQuery = {}) {
+    const filter: Record<string, unknown> = {};
+
+    if (query.leagueId) {
+      filter.leagueId = query.leagueId.trim();
+    }
+
+    if (query.teamId) {
+      filter.teamId = query.teamId.trim();
+    }
+
+    return this.paginateModel(
+      this.espnTeamModel,
+      {
+        ...query,
+        sortBy: query.sortBy ?? 'name',
+        sortOrder: query.sortOrder ?? 'asc',
+      },
+      filter,
+    );
+  }
+
+  // ============================================================
+  // ADMIN: FOOTBALL-DATA COMPETITIONS
+  // ============================================================
+
+  async getAdminFootballDataCompetitions(query: SportsAdminQuery = {}) {
+    return this.paginateModel(this.footballDataCompetitionModel, {
+      ...query,
+      sortBy: query.sortBy ?? 'name',
+      sortOrder: query.sortOrder ?? 'asc',
+    });
+  }
+
+  // ============================================================
+  // ADMIN: FOOTBALL-DATA MATCHES
+  // ============================================================
+
+  async getAdminFootballDataMatches(query: SportsAdminQuery = {}) {
+    const filter: Record<string, unknown> = {};
+
+    if (query.competitionId) {
+      filter.competitionCode = query.competitionId.trim().toUpperCase();
+    }
+
+    if (query.status) {
+      filter.status = query.status;
+    }
+
+    this.addDateRange(filter, 'utcDate', query.from, query.to);
+
+    return this.paginateModel(
+      this.footballDataMatchModel,
+      {
+        ...query,
+        sortBy: query.sortBy ?? 'utcDate',
+      },
+      filter,
+    );
+  }
+
+  // ============================================================
+  // ADMIN: FOOTBALL-DATA STANDINGS
+  // ============================================================
+
+  async getAdminFootballDataStandings(query: SportsAdminQuery = {}) {
+    const filter: Record<string, unknown> = {};
+
+    if (query.competitionId) {
+      filter.competitionCode = query.competitionId.trim().toUpperCase();
+    }
+
+    if (typeof query.season === 'number') {
+      filter.seasonId = query.season;
+    }
+
+    return this.paginateModel(
+      this.footballDataStandingModel,
+      {
+        ...query,
+        sortBy: query.sortBy ?? 'seasonId',
+      },
+      filter,
+    );
+  }
+
+  // ============================================================
+  // ADMIN: FOOTBALL-DATA TEAMS
+  // ============================================================
+
+  async getAdminFootballDataTeams(query: SportsAdminQuery = {}) {
+    const filter: Record<string, unknown> = {};
+
+    if (query.competitionId) {
+      filter.competitionCode = query.competitionId.trim().toUpperCase();
+    }
+
+    if (query.teamId) {
+      filter.teamId = Number(query.teamId);
+    }
+
+    return this.paginateModel(
+      this.footballDataTeamModel,
+      {
+        ...query,
+        sortBy: query.sortBy ?? 'name',
+        sortOrder: query.sortOrder ?? 'asc',
+      },
+      filter,
+    );
+  }
+
+  // ============================================================
+  // ADMIN: ODDS API SPORTS
+  // ============================================================
+
+  async getAdminOddsApiSports(query: SportsAdminQuery = {}) {
+    const filter: Record<string, unknown> = {};
+
+    if (query.provider) {
+      filter.key = query.provider.trim();
+    }
+
+    return this.paginateModel(
+      this.oddsApiSportModel,
+      {
+        ...query,
+        sortBy: query.sortBy ?? 'title',
+        sortOrder: query.sortOrder ?? 'asc',
+      },
+      filter,
+    );
+  }
+
+  // ============================================================
+  // ADMIN: SPORTS ODDS SNAPSHOTS
+  // ============================================================
+
+  async getAdminSportsOddsSnapshots(query: SportsAdminQuery = {}) {
+    const filter: Record<string, unknown> = {};
+
+    if (query.eventId) {
+      filter.eventId = query.eventId.trim();
+    }
+
+    if (query.provider) {
+      filter.provider = query.provider.trim();
+    }
+
+    this.addDateRange(filter, 'collectedAt', query.from, query.to);
+
+    return this.paginateModel(
+      this.sportsOddsSnapshotModel,
+      {
+        ...query,
+        sortBy: query.sortBy ?? 'collectedAt',
+      },
+      filter,
+    );
+  }
+
+  // ============================================================
+  // ADMIN: PROVIDER RATE LIMITS
+  // ============================================================
+
+  async getAdminProviderRateLimits(query: SportsAdminQuery = {}) {
+    const filter: Record<string, unknown> = {};
+
+    if (query.provider) {
+      filter.provider = query.provider.trim();
+    }
+
+    return this.paginateModel(
+      this.sportsProviderRateLimitModel,
+      {
+        ...query,
+        sortBy: query.sortBy ?? 'provider',
+        sortOrder: query.sortOrder ?? 'asc',
+      },
+      filter,
+    );
+  }
+
+  // ============================================================
+  // ADMIN: TEAM COMPETITION STATS
+  // ============================================================
+
+  async getAdminTeamCompetitionStats(query: SportsAdminQuery = {}) {
+    const filter: Record<string, unknown> = {};
+
+    if (query.competitionId) {
+      filter.competitionId = query.competitionId.trim().toLowerCase();
+    }
+
+    if (typeof query.season === 'number') {
+      filter.season = query.season;
+    }
+
+    if (query.teamId) {
+      filter.teamId = Number(query.teamId);
+    }
+
+    return this.paginateModel(
+      this.teamCompetitionStatsModel,
+      {
+        ...query,
+        sortBy: query.sortBy ?? 'position',
+        sortOrder: query.sortOrder ?? 'asc',
+      },
+      filter,
+    );
+  }
+
+  // ============================================================
+  // ADMIN: TEAM PERFORMANCE PROFILES
+  // ============================================================
+
+  async getAdminTeamPerformanceProfiles(query: SportsAdminQuery = {}) {
+    const filter: Record<string, unknown> = {};
+
+    if (query.teamId) {
+      filter.teamId = query.teamId.trim();
+    }
+
+    if (query.competitionId) {
+      filter.competitionId = query.competitionId.trim().toLowerCase();
+    }
+
+    return this.paginateModel(
+      this.teamPerformanceProfileModel,
+      {
+        ...query,
+        sortBy: query.sortBy ?? 'updatedAt',
+      },
+      filter,
+    );
+  }
+
+  // ============================================================
+  // ADMIN: HEAD TO HEAD
+  // ============================================================
+
+  async getAdminHeadToHead(query: SportsAdminQuery = {}) {
+    const filter: Record<string, unknown> = {};
+
+    if (query.teamId) {
+      const numericTeamId = Number(query.teamId);
+
+      if (Number.isFinite(numericTeamId)) {
+        filter.$or = [
+          {
+            teamOneId: numericTeamId,
+          },
+          {
+            teamTwoId: numericTeamId,
+          },
+        ];
+      }
+    }
+
+    return this.paginateModel(
+      this.headToHeadModel,
+      {
+        ...query,
+        sortBy: query.sortBy ?? 'createdAt',
+      },
+      filter,
+    );
+  }
+
+  // ============================================================
+  // ADMIN: YOUTUBE HIGHLIGHTS
+  // ============================================================
+
+  async getAdminYoutubeHighlights(query: SportsAdminQuery = {}) {
+    const filter: Record<string, unknown> = {};
+
+    if (query.status) {
+      filter.status = query.status;
+    }
+
+    if (query.eventId) {
+      filter.fixtureId = query.eventId.trim();
+    }
+
+    if (query.competitionId) {
+      filter.competitionId = query.competitionId.trim();
+    }
+
+    this.addDateRange(filter, 'searchedAt', query.from, query.to);
+
+    return this.paginateModel(
+      this.youtubeHighlightModel,
+      {
+        ...query,
+        sortBy: query.sortBy ?? 'searchedAt',
+      },
+      filter,
+    );
   }
 }

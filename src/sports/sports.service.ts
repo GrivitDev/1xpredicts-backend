@@ -10,20 +10,23 @@ export class SportsService {
     return this.sportsDataReadService.getLive();
   }
 
-  async getFixtures(competitionCode: string) {
-    return this.sportsDataReadService.getFixtures(competitionCode);
+  async getFixtures(competitionId?: string) {
+    return this.sportsDataReadService.getFixtures(competitionId);
   }
 
-  async getResults(competitionCode: string) {
-    return this.sportsDataReadService.getResults(competitionCode);
+  async getResults(competitionId?: string) {
+    return this.sportsDataReadService.getResults(competitionId);
   }
 
-  async getStandings(competitionCode: string) {
-    return this.sportsDataReadService.getStandings(competitionCode);
+  async getStandings(competitionId: string) {
+    return this.sportsDataReadService.getStandings(competitionId);
   }
 
-  async getCompetitions() {
-    return this.sportsDataReadService.getCompetitions();
+  async getCompetitions(options?: {
+    activeOnly?: boolean;
+    predictionEnabled?: boolean;
+  }) {
+    return this.sportsDataReadService.getCompetitions(options);
   }
 
   async getTeams(competitionId: string) {

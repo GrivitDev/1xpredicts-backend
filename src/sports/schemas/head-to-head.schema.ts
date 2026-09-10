@@ -8,34 +8,59 @@ export type HeadToHeadDocument = HydratedDocument<HeadToHead>;
   _id: false,
 })
 export class HeadToHeadMeeting {
-  @Prop({ required: true })
-  fixtureId!: number;
+  @Prop({
+    required: true,
+    trim: true,
+  })
+  fixtureId!: string;
 
-  @Prop({ required: true })
+  @Prop({
+    required: true,
+    trim: true,
+    lowercase: true,
+  })
   competitionId!: string;
 
-  @Prop({ required: true })
+  @Prop({
+    required: true,
+  })
   season!: number;
 
-  @Prop({ required: true })
+  @Prop({
+    required: true,
+  })
   date!: Date;
 
-  @Prop({ required: true })
-  homeTeamId!: number;
+  @Prop({
+    required: true,
+    trim: true,
+  })
+  homeTeamId!: string;
 
-  @Prop({ required: true })
+  @Prop({
+    required: true,
+  })
   homeTeamName!: string;
 
-  @Prop({ required: true })
-  awayTeamId!: number;
+  @Prop({
+    required: true,
+    trim: true,
+  })
+  awayTeamId!: string;
 
-  @Prop({ required: true })
+  @Prop({
+    required: true,
+  })
   awayTeamName!: string;
 
-  @Prop({ required: true })
+  @Prop({
+    required: true,
+  })
   homeGoals!: number;
 
-  @Prop({ required: true })
+  @Prop({
+    required: true,
+  })
   awayGoals!: number;
 }
 
@@ -57,8 +82,9 @@ export class HeadToHead {
   @Prop({
     required: true,
     index: true,
+    trim: true,
   })
-  teamAId!: number;
+  teamAId!: string;
 
   @Prop({
     required: true,
@@ -68,8 +94,9 @@ export class HeadToHead {
   @Prop({
     required: true,
     index: true,
+    trim: true,
   })
-  teamBId!: number;
+  teamBId!: string;
 
   @Prop({
     required: true,

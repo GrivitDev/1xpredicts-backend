@@ -5,14 +5,14 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 
 import {
-  ApiFootballFixture,
-  ApiFootballFixtureDocument,
-} from '../schemas/api-football/api-football-fixture.schema';
+  EspnFixture,
+  EspnFixtureDocument,
+} from '../schemas/espn/espn-fixture.schema';
 
 import {
-  ApiFootballStanding,
-  ApiFootballStandingDocument,
-} from '../schemas/api-football/api-football-standing.schema';
+  EspnStanding,
+  EspnStandingDocument,
+} from '../schemas/espn/espn-standing.schema';
 
 import {
   ActiveCompetition,
@@ -24,52 +24,43 @@ import {
   TeamCompetitionStatsDocument,
 } from '../schemas/team-competition-stats.schema';
 
-interface FixtureTeam {
-  id?: number;
-  name?: string;
-}
-
-interface FixtureData {
-  fixture?: {
-    id?: number;
-    date?: string;
-    status?: {
-      short?: string;
-    };
-  };
-
-  teams?: {
-    home?: FixtureTeam;
-    away?: FixtureTeam;
-  };
-
-  goals?: {
-    home?: number | null;
-    away?: number | null;
-  };
-}
-
 interface MatchStats {
   played: number;
+
   wins: number;
+
   draws: number;
+
   losses: number;
+
   goalsFor: number;
+
   goalsAgainst: number;
+
   goalDifference: number;
+
   points: number;
+
   cleanSheets: number;
+
   failedToScore: number;
 }
 
 interface RecentMatch {
   date: Date;
+
   competitionId: string;
-  opponentId: number;
+
+  opponentId: string;
+
   opponentName: string;
+
   home: boolean;
+
   goalsFor: number;
+
   goalsAgainst: number;
+
   result: 'W' | 'D' | 'L';
 }
 
@@ -77,14 +68,21 @@ interface RecentMatch {
 export class TeamCompetitionStatsService {
   private readonly logger = new Logger(TeamCompetitionStatsService.name);
 
-  private readonly completedStatuses = new Set(['FT', 'AET', 'PEN']);
+  private readonly completedStatuses = new Set([
+    'FT',
+    'AET',
+    'PEN',
+    'STATUS_FINAL',
+    'FINAL',
+    'FINISHED',
+  ]);
 
   constructor(
-    @InjectModel(ApiFootballFixture.name)
-    private readonly fixtureModel: Model<ApiFootballFixtureDocument>,
+    @InjectModel(EspnFixture.name)
+    private readonly fixtureModel: Model<EspnFixtureDocument>,
 
-    @InjectModel(ApiFootballStanding.name)
-    private readonly standingModel: Model<ApiFootballStandingDocument>,
+    @InjectModel(EspnStanding.name)
+    private readonly standingModel: Model<EspnStandingDocument>,
 
     @InjectModel(ActiveCompetition.name)
     private readonly activeCompetitionModel: Model<ActiveCompetitionDocument>,
@@ -93,10 +91,15 @@ export class TeamCompetitionStatsService {
     private readonly statsModel: Model<TeamCompetitionStatsDocument>,
   ) {}
 
-  async rebuildCompetition(leagueId: number, season: number): Promise<number> {
+  // ============================================================
+  // REBUILD COMPETITION
+  // ============================================================
+
+  async rebuildCompetition(leagueId: string, season: number): Promise<number> {
     const competition = await this.activeCompetitionModel
       .findOne({
-        apiFootballLeagueId: leagueId,
+        competitionId: leagueId.trim().toLowerCase(),
+
         season,
       })
       .lean()
@@ -108,51 +111,53 @@ export class TeamCompetitionStatsService {
 
     const fixtures = await this.fixtureModel
       .find({
-        leagueId,
+        leagueId: leagueId.trim().toLowerCase(),
+
         season,
       })
       .lean()
       .exec();
 
     const completedFixtures = fixtures.filter((fixture) =>
-      this.isCompletedFixture(fixture.payload),
+      this.isCompletedFixture(fixture),
     );
 
     const standings = await this.standingModel
       .find({
-        leagueId,
+        leagueId: leagueId.trim().toLowerCase(),
+
         season,
       })
       .lean()
       .exec();
 
-    const teams = new Map<number, string>();
+    const teams = new Map<string, string>();
 
     for (const standing of standings) {
-      const payload = standing.payload as any;
+      const teamId = standing.teamId;
 
-      const teamId = standing.teamId ?? payload?.team?.id;
-
-      if (typeof teamId !== 'number') {
+      if (!teamId) {
         continue;
       }
 
-      teams.set(teamId, payload?.team?.name ?? `Team ${teamId}`);
+      const name = this.extractStandingTeamName(standing, teamId);
+
+      teams.set(teamId, name);
     }
 
     for (const fixture of completedFixtures) {
-      const payload = fixture.payload as FixtureData;
-
-      const home = payload.teams?.home;
-
-      const away = payload.teams?.away;
-
-      if (typeof home?.id === 'number') {
-        teams.set(home.id, home.name ?? `Team ${home.id}`);
+      if (fixture.homeTeamId) {
+        teams.set(
+          fixture.homeTeamId,
+          this.extractFixtureTeamName(fixture, 'home'),
+        );
       }
 
-      if (typeof away?.id === 'number') {
-        teams.set(away.id, away.name ?? `Team ${away.id}`);
+      if (fixture.awayTeamId) {
+        teams.set(
+          fixture.awayTeamId,
+          this.extractFixtureTeamName(fixture, 'away'),
+        );
       }
     }
 
@@ -171,14 +176,19 @@ export class TeamCompetitionStatsService {
     return teams.size;
   }
 
+  // ============================================================
+  // REFRESH FOR FIXTURE
+  // ============================================================
+
   async refreshForFixture(
-    leagueId: number,
+    leagueId: string,
     season: number,
-    fixtureId: number,
+    fixtureId: string,
   ): Promise<number> {
     const competition = await this.activeCompetitionModel
       .findOne({
-        apiFootballLeagueId: leagueId,
+        competitionId: leagueId.trim().toLowerCase(),
+
         season,
       })
       .lean()
@@ -190,25 +200,21 @@ export class TeamCompetitionStatsService {
 
     const fixture = await this.fixtureModel
       .findOne({
-        fixtureId,
-        leagueId,
+        eventId: fixtureId.trim(),
+
+        leagueId: leagueId.trim().toLowerCase(),
+
         season,
       })
       .lean()
       .exec();
 
-    if (!fixture || !this.isCompletedFixture(fixture.payload)) {
+    if (!fixture || !this.isCompletedFixture(fixture)) {
       return 0;
     }
 
-    const payload = fixture.payload as FixtureData;
-
-    const home = payload.teams?.home;
-
-    const away = payload.teams?.away;
-
-    const teamIds = [home?.id, away?.id].filter(
-      (id): id is number => typeof id === 'number',
+    const teamIds = [fixture.homeTeamId, fixture.awayTeamId].filter(
+      (id): id is string => Boolean(id),
     );
 
     if (teamIds.length === 0) {
@@ -217,19 +223,21 @@ export class TeamCompetitionStatsService {
 
     const fixtures = await this.fixtureModel
       .find({
-        leagueId,
+        leagueId: leagueId.trim().toLowerCase(),
+
         season,
       })
       .lean()
       .exec();
 
     const completedFixtures = fixtures.filter((item) =>
-      this.isCompletedFixture(item.payload),
+      this.isCompletedFixture(item),
     );
 
     const standings = await this.standingModel
       .find({
-        leagueId,
+        leagueId: leagueId.trim().toLowerCase(),
+
         season,
       })
       .lean()
@@ -237,9 +245,9 @@ export class TeamCompetitionStatsService {
 
     for (const teamId of teamIds) {
       const teamName =
-        teamId === home?.id
-          ? (home?.name ?? `Team ${teamId}`)
-          : (away?.name ?? `Team ${teamId}`);
+        teamId === fixture.homeTeamId
+          ? this.extractFixtureTeamName(fixture, 'home')
+          : this.extractFixtureTeamName(fixture, 'away');
 
       await this.rebuildTeam(
         competition.competitionId,
@@ -255,14 +263,18 @@ export class TeamCompetitionStatsService {
     return teamIds.length;
   }
 
+  // ============================================================
+  // REBUILD TEAM
+  // ============================================================
+
   private async rebuildTeam(
     competitionId: string,
-    leagueId: number,
+    leagueId: string,
     season: number,
-    teamId: number,
+    teamId: string,
     teamName: string,
-    fixtures: ApiFootballFixtureDocument[],
-    standings: ApiFootballStandingDocument[],
+    fixtures: EspnFixtureDocument[],
+    standings: EspnStandingDocument[],
   ): Promise<void> {
     const overall = this.emptyStats();
 
@@ -273,34 +285,21 @@ export class TeamCompetitionStatsService {
     const recentMatches: RecentMatch[] = [];
 
     for (const fixture of fixtures) {
-      const payload = fixture.payload as FixtureData;
+      const isHome = fixture.homeTeamId === teamId;
 
-      const fixtureHome = payload.teams?.home;
-
-      const fixtureAway = payload.teams?.away;
-
-      if (
-        typeof fixtureHome?.id !== 'number' ||
-        typeof fixtureAway?.id !== 'number'
-      ) {
-        continue;
-      }
-
-      const isHome = fixtureHome.id === teamId;
-
-      const isAway = fixtureAway.id === teamId;
+      const isAway = fixture.awayTeamId === teamId;
 
       if (!isHome && !isAway) {
         continue;
       }
 
-      const goalsHome = this.toNumber(payload.goals?.home);
+      if (fixture.homeScore === undefined || fixture.awayScore === undefined) {
+        continue;
+      }
 
-      const goalsAway = this.toNumber(payload.goals?.away);
+      const goalsFor = isHome ? fixture.homeScore : fixture.awayScore;
 
-      const goalsFor = isHome ? goalsHome : goalsAway;
-
-      const goalsAgainst = isHome ? goalsAway : goalsHome;
+      const goalsAgainst = isHome ? fixture.awayScore : fixture.homeScore;
 
       const result =
         goalsFor > goalsAgainst ? 'W' : goalsFor === goalsAgainst ? 'D' : 'L';
@@ -309,18 +308,24 @@ export class TeamCompetitionStatsService {
 
       this.applyMatch(isHome ? home : away, goalsFor, goalsAgainst);
 
-      const date = this.getFixtureDate(payload, fixture.fixtureDate);
+      const opponentId = isHome ? fixture.awayTeamId : fixture.homeTeamId;
+
+      if (!opponentId) {
+        continue;
+      }
+
+      const opponentName = isHome
+        ? this.extractFixtureTeamName(fixture, 'away')
+        : this.extractFixtureTeamName(fixture, 'home');
 
       recentMatches.push({
-        date,
+        date: fixture.fixtureDate,
 
-        competitionId,
+        competitionId: fixture.leagueId,
 
-        opponentId: isHome ? fixtureAway.id : fixtureHome.id,
+        opponentId,
 
-        opponentName: isHome
-          ? (fixtureAway.name ?? `Team ${fixtureAway.id}`)
-          : (fixtureHome.name ?? `Team ${fixtureHome.id}`),
+        opponentName,
 
         home: isHome,
 
@@ -336,7 +341,7 @@ export class TeamCompetitionStatsService {
 
     const lastFive = recentMatches.slice(0, 5);
 
-    const standing = this.getTeamStanding(standings, teamId);
+    const standing = standings.find((item) => item.teamId === teamId);
 
     const averages = this.calculateAverages(overall);
 
@@ -379,161 +384,234 @@ export class TeamCompetitionStatsService {
 
     const nextFixture = await this.getNextFixture(leagueId, season, teamId);
 
-    await this.statsModel.updateOne(
-      {
-        competitionId,
-        season,
-        teamId,
-      },
-      {
-        $set: {
+    await this.statsModel
+      .updateOne(
+        {
           competitionId,
           season,
           teamId,
-          teamName,
-
-          position: standing?.rank ?? 0,
-
-          points: standing?.points ?? overall.points,
-
-          played: standing?.played ?? overall.played,
-
-          wins: standing?.wins ?? overall.wins,
-
-          draws: standing?.draws ?? overall.draws,
-
-          losses: standing?.losses ?? overall.losses,
-
-          goalsFor: standing?.goalsFor ?? overall.goalsFor,
-
-          goalsAgainst: standing?.goalsAgainst ?? overall.goalsAgainst,
-
-          goalDifference: standing?.goalDifference ?? overall.goalDifference,
-
-          averageGoalsFor: averages.goalsFor,
-
-          averageGoalsAgainst: averages.goalsAgainst,
-
-          pointsPerGame: averages.pointsPerGame,
-
-          bttsRate,
-
-          over15Rate,
-
-          over25Rate,
-
-          over35Rate,
-
-          cleanSheetRate: this.calculateSimpleRate(
-            overall.cleanSheets,
-            overall.played,
-          ),
-
-          failedToScoreRate: this.calculateSimpleRate(
-            overall.failedToScore,
-            overall.played,
-          ),
-
-          homePlayed: home.played,
-
-          homeWins: home.wins,
-
-          homeDraws: home.draws,
-
-          homeLosses: home.losses,
-
-          homeGoalsFor: home.goalsFor,
-
-          homeGoalsAgainst: home.goalsAgainst,
-
-          homeAverageGoalsFor: homeAverages.goalsFor,
-
-          homeAverageGoalsAgainst: homeAverages.goalsAgainst,
-
-          awayPlayed: away.played,
-
-          awayWins: away.wins,
-
-          awayDraws: away.draws,
-
-          awayLosses: away.losses,
-
-          awayGoalsFor: away.goalsFor,
-
-          awayGoalsAgainst: away.goalsAgainst,
-
-          awayAverageGoalsFor: awayAverages.goalsFor,
-
-          awayAverageGoalsAgainst: awayAverages.goalsAgainst,
-
-          lastFive: lastFive.map(
-            (match) => `${match.competitionId}:${match.result}`,
-          ),
-
-          lastFivePoints: this.getFormPoints(lastFive),
-
-          lastFiveWins: lastFive.filter((match) => match.result === 'W').length,
-
-          lastFiveDraws: lastFive.filter((match) => match.result === 'D')
-            .length,
-
-          lastFiveLosses: lastFive.filter((match) => match.result === 'L')
-            .length,
-
-          lastFiveGoalsFor: lastFive.reduce(
-            (sum, match) => sum + match.goalsFor,
-            0,
-          ),
-
-          lastFiveGoalsAgainst: lastFive.reduce(
-            (sum, match) => sum + match.goalsAgainst,
-            0,
-          ),
-
-          previousMatchDate: previousMatch?.date ?? null,
-
-          daysSincePreviousMatch: previousMatch
-            ? this.daysBetween(previousMatch.date, new Date())
-            : null,
-
-          nextMatchDate: nextFixture?.fixtureDate ?? null,
-
-          daysUntilNextMatch: nextFixture
-            ? this.daysBetween(new Date(), nextFixture.fixtureDate)
-            : null,
-
-          recentFormScore,
-
-          homeStrengthScore,
-
-          awayStrengthScore,
-
-          overallStrengthScore,
-
-          calculatedAt: new Date(),
         },
-      },
-      {
-        upsert: true,
-      },
-    );
+        {
+          $set: {
+            competitionId,
+            season,
+            teamId,
+            teamName,
+
+            position: standing?.rank ?? 0,
+
+            points: standing?.points ?? overall.points,
+
+            played: standing?.played ?? overall.played,
+
+            wins: standing?.wins ?? overall.wins,
+
+            draws: standing?.draws ?? overall.draws,
+
+            losses: standing?.losses ?? overall.losses,
+
+            goalsFor: standing?.goalsFor ?? overall.goalsFor,
+
+            goalsAgainst: standing?.goalsAgainst ?? overall.goalsAgainst,
+
+            goalDifference: standing?.goalDifference ?? overall.goalDifference,
+
+            averageGoalsScored: averages.goalsFor,
+
+            averageGoalsConceded: averages.goalsAgainst,
+
+            winRate: this.calculateSimpleRate(overall.wins, overall.played),
+
+            drawRate: this.calculateSimpleRate(overall.draws, overall.played),
+
+            lossRate: this.calculateSimpleRate(overall.losses, overall.played),
+
+            bttsRate,
+
+            over15Rate,
+
+            over25Rate,
+
+            over35Rate,
+
+            cleanSheetRate: this.calculateSimpleRate(
+              overall.cleanSheets,
+              overall.played,
+            ),
+
+            failedToScoreRate: this.calculateSimpleRate(
+              overall.failedToScore,
+              overall.played,
+            ),
+
+            homePlayed: home.played,
+
+            homeWins: home.wins,
+
+            homeDraws: home.draws,
+
+            homeLosses: home.losses,
+
+            homeGoalsFor: home.goalsFor,
+
+            homeGoalsAgainst: home.goalsAgainst,
+
+            homeAverageGoalsScored: homeAverages.goalsFor,
+
+            homeAverageGoalsConceded: homeAverages.goalsAgainst,
+
+            homeBttsRate: this.calculateRate(
+              recentMatches.filter((match) => match.home),
+              (match) => match.goalsFor > 0 && match.goalsAgainst > 0,
+            ),
+
+            homeOver25Rate: this.calculateRate(
+              recentMatches.filter((match) => match.home),
+              (match) => match.goalsFor + match.goalsAgainst > 2,
+            ),
+
+            homeCleanSheetRate: this.calculateSimpleRate(
+              home.cleanSheets,
+              home.played,
+            ),
+
+            homeFailedToScoreRate: this.calculateSimpleRate(
+              home.failedToScore,
+              home.played,
+            ),
+
+            awayPlayed: away.played,
+
+            awayWins: away.wins,
+
+            awayDraws: away.draws,
+
+            awayLosses: away.losses,
+
+            awayGoalsFor: away.goalsFor,
+
+            awayGoalsAgainst: away.goalsAgainst,
+
+            awayAverageGoalsScored: awayAverages.goalsFor,
+
+            awayAverageGoalsConceded: awayAverages.goalsAgainst,
+
+            awayBttsRate: this.calculateRate(
+              recentMatches.filter((match) => !match.home),
+              (match) => match.goalsFor > 0 && match.goalsAgainst > 0,
+            ),
+
+            awayOver25Rate: this.calculateRate(
+              recentMatches.filter((match) => !match.home),
+              (match) => match.goalsFor + match.goalsAgainst > 2,
+            ),
+
+            awayCleanSheetRate: this.calculateSimpleRate(
+              away.cleanSheets,
+              away.played,
+            ),
+
+            awayFailedToScoreRate: this.calculateSimpleRate(
+              away.failedToScore,
+              away.played,
+            ),
+
+            lastFive: lastFive.map(
+              (match) => `${match.competitionId}:${match.result}`,
+            ),
+
+            lastFiveHome: lastFive
+              .filter((match) => match.home)
+              .map((match) => `${match.competitionId}:${match.result}`),
+
+            lastFiveAway: lastFive
+              .filter((match) => !match.home)
+              .map((match) => `${match.competitionId}:${match.result}`),
+
+            lastFivePoints: this.getFormPoints(lastFive),
+
+            lastFiveGoalsScored: lastFive.reduce(
+              (sum, match) => sum + match.goalsFor,
+              0,
+            ),
+
+            lastFiveGoalsConceded: lastFive.reduce(
+              (sum, match) => sum + match.goalsAgainst,
+              0,
+            ),
+
+            lastFiveAverageGoalsScored: this.average(
+              lastFive.map((match) => match.goalsFor),
+            ),
+
+            lastFiveAverageGoalsConceded: this.average(
+              lastFive.map((match) => match.goalsAgainst),
+            ),
+
+            lastFiveBttsRate: this.calculateRate(
+              lastFive,
+              (match) => match.goalsFor > 0 && match.goalsAgainst > 0,
+            ),
+
+            lastFiveOver25Rate: this.calculateRate(
+              lastFive,
+              (match) => match.goalsFor + match.goalsAgainst > 2,
+            ),
+
+            lastFiveCleanSheetRate: this.calculateSimpleRate(
+              lastFive.filter((match) => match.goalsAgainst === 0).length,
+              lastFive.length,
+            ),
+
+            previousMatchDate: previousMatch?.date ?? null,
+
+            daysSincePreviousMatch: previousMatch
+              ? this.daysSince(previousMatch.date)
+              : 0,
+
+            nextMatchDate: nextFixture?.fixtureDate ?? null,
+
+            daysUntilNextMatch: nextFixture
+              ? this.daysUntil(nextFixture.fixtureDate)
+              : 0,
+
+            recentFormScore,
+
+            homeStrengthScore,
+
+            awayStrengthScore,
+
+            overallStrengthScore,
+
+            calculatedAt: new Date(),
+          },
+        },
+        {
+          upsert: true,
+        },
+      )
+      .exec();
   }
 
+  // ============================================================
+  // NEXT FIXTURE
+  // ============================================================
+
   private async getNextFixture(
-    leagueId: number,
+    leagueId: string,
     season: number,
-    teamId: number,
-  ): Promise<ApiFootballFixtureDocument | null> {
+    teamId: string,
+  ): Promise<EspnFixtureDocument | null> {
     return this.fixtureModel
       .findOne({
-        leagueId,
+        leagueId: leagueId.trim().toLowerCase(),
+
         season,
+
         fixtureDate: {
           $gte: new Date(),
         },
-        statusShort: {
-          $nin: ['FT', 'AET', 'PEN'],
-        },
+
         $or: [
           {
             homeTeamId: teamId,
@@ -550,52 +628,9 @@ export class TeamCompetitionStatsService {
       .exec();
   }
 
-  private getTeamStanding(
-    standings: ApiFootballStandingDocument[],
-    teamId: number,
-  ): {
-    rank: number | null;
-    points: number;
-    played: number;
-    wins: number;
-    draws: number;
-    losses: number;
-    goalsFor: number;
-    goalsAgainst: number;
-    goalDifference: number;
-  } | null {
-    for (const standing of standings) {
-      const payload = standing.payload as any;
-
-      const payloadTeamId = payload?.team?.id;
-
-      if (standing.teamId !== teamId && payloadTeamId !== teamId) {
-        continue;
-      }
-
-      return {
-        rank: this.toNullableNumber(standing.rank ?? payload?.rank),
-
-        points: this.toNumber(payload?.points),
-
-        played: this.toNumber(payload?.all?.played),
-
-        wins: this.toNumber(payload?.all?.win),
-
-        draws: this.toNumber(payload?.all?.draw),
-
-        losses: this.toNumber(payload?.all?.lose),
-
-        goalsFor: this.toNumber(payload?.all?.goals?.for),
-
-        goalsAgainst: this.toNumber(payload?.all?.goals?.against),
-
-        goalDifference: this.toNumber(payload?.goalsDiff),
-      };
-    }
-
-    return null;
-  }
+  // ============================================================
+  // MATCH APPLICATION
+  // ============================================================
 
   private applyMatch(
     stats: MatchStats,
@@ -629,16 +664,18 @@ export class TeamCompetitionStatsService {
     }
   }
 
+  // ============================================================
+  // CALCULATIONS
+  // ============================================================
+
   private calculateAverages(stats: MatchStats): {
     goalsFor: number;
     goalsAgainst: number;
-    pointsPerGame: number;
   } {
     if (stats.played === 0) {
       return {
         goalsFor: 0,
         goalsAgainst: 0,
-        pointsPerGame: 0,
       };
     }
 
@@ -646,8 +683,6 @@ export class TeamCompetitionStatsService {
       goalsFor: Number((stats.goalsFor / stats.played).toFixed(3)),
 
       goalsAgainst: Number((stats.goalsAgainst / stats.played).toFixed(3)),
-
-      pointsPerGame: Number((stats.points / stats.played).toFixed(3)),
     };
   }
 
@@ -659,9 +694,9 @@ export class TeamCompetitionStatsService {
       return 0;
     }
 
-    const count = matches.filter(predicate).length;
-
-    return Number((count / matches.length).toFixed(3));
+    return Number(
+      (matches.filter(predicate).length / matches.length).toFixed(3),
+    );
   }
 
   private calculateSimpleRate(numerator: number, denominator: number): number {
@@ -691,8 +726,8 @@ export class TeamCompetitionStatsService {
       pointsPerGame * 30 +
       attack * 20 +
       Math.max(0, 2.5 - defence) * 20 +
-      this.calculateSimpleRate(stats.cleanSheets, stats.played) * 15 +
-      this.calculateSimpleRate(stats.failedToScore, stats.played) * -10;
+      this.calculateSimpleRate(stats.cleanSheets, stats.played) * 15 -
+      this.calculateSimpleRate(stats.failedToScore, stats.played) * 10;
 
     return Number(Math.max(0, Math.min(100, score)).toFixed(2));
   }
@@ -743,40 +778,85 @@ export class TeamCompetitionStatsService {
     };
   }
 
-  private isCompletedFixture(payload: unknown): boolean {
-    const fixture = payload as FixtureData;
+  // ============================================================
+  // ESPN DATA HELPERS
+  // ============================================================
 
-    return this.completedStatuses.has(fixture.fixture?.status?.short ?? '');
-  }
-
-  private getFixtureDate(payload: FixtureData, fallback: Date): Date {
-    const value = payload.fixture?.date;
-
-    if (!value) {
-      return fallback;
+  private isCompletedFixture(fixture: EspnFixtureDocument): boolean {
+    if (fixture.completed === true) {
+      return true;
     }
 
-    const date = new Date(value);
-
-    return Number.isNaN(date.getTime()) ? fallback : date;
+    return this.completedStatuses.has(fixture.status.trim().toUpperCase());
   }
 
-  private daysBetween(from: Date, to: Date): number {
-    return Math.max(
-      0,
-      Math.floor((to.getTime() - from.getTime()) / (24 * 60 * 60 * 1000)),
+  private extractFixtureTeamName(
+    fixture: EspnFixtureDocument,
+    side: 'home' | 'away',
+  ): string {
+    const competitors = (
+      fixture.payload['competitions'] as
+        | Array<Record<string, unknown>>
+        | undefined
+    )?.[0]?.['competitors'];
+
+    if (Array.isArray(competitors)) {
+      const competitor = competitors.find(
+        (item) => (item as Record<string, unknown>)?.['homeAway'] === side,
+      ) as Record<string, unknown> | undefined;
+
+      const team = competitor?.['team'] as Record<string, unknown> | undefined;
+
+      const name =
+        team?.['displayName'] ?? team?.['name'] ?? team?.['shortDisplayName'];
+
+      if (typeof name === 'string' && name.trim()) {
+        return name.trim();
+      }
+    }
+
+    const teamId = side === 'home' ? fixture.homeTeamId : fixture.awayTeamId;
+
+    return `Team ${teamId}`;
+  }
+
+  private extractStandingTeamName(
+    standing: EspnStandingDocument,
+    teamId: string,
+  ): string {
+    const team = standing.payload['team'] as
+      | Record<string, unknown>
+      | undefined;
+
+    const name =
+      team?.['displayName'] ?? team?.['name'] ?? team?.['shortDisplayName'];
+
+    return typeof name === 'string' && name.trim()
+      ? name.trim()
+      : `Team ${teamId}`;
+  }
+
+  // ============================================================
+  // DATE HELPERS
+  // ============================================================
+
+  private daysSince(date: Date): number {
+    return Math.max(0, Math.floor((Date.now() - date.getTime()) / 86_400_000));
+  }
+
+  private daysUntil(date: Date): number {
+    return Math.max(0, Math.floor((date.getTime() - Date.now()) / 86_400_000));
+  }
+
+  private average(values: number[]): number {
+    if (values.length === 0) {
+      return 0;
+    }
+
+    return Number(
+      (values.reduce((sum, value) => sum + value, 0) / values.length).toFixed(
+        3,
+      ),
     );
-  }
-
-  private toNumber(value: unknown): number {
-    return typeof value === 'number' && Number.isFinite(value)
-      ? value
-      : Number.isFinite(Number(value))
-        ? Number(value)
-        : 0;
-  }
-
-  private toNullableNumber(value: unknown): number | null {
-    return typeof value === 'number' && Number.isFinite(value) ? value : null;
   }
 }

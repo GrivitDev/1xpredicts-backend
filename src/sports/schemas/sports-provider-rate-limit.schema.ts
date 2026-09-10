@@ -1,5 +1,4 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-
 import { HydratedDocument } from 'mongoose';
 
 export type SportsProviderRateLimitDocument =
@@ -19,8 +18,8 @@ export class SportsProviderRateLimit {
   provider!: string;
 
   /**
-   * Prevents another request from being started before
-   * the provider's minimum interval has elapsed.
+   * Prevents a second request from starting
+   * before the provider interval expires.
    */
   @Prop({
     type: Date,
@@ -29,7 +28,7 @@ export class SportsProviderRateLimit {
   lockedUntil?: Date;
 
   /**
-   * Time at which the last request slot was acquired.
+   * Last provider request slot acquisition.
    */
   @Prop({
     type: Date,
@@ -38,9 +37,7 @@ export class SportsProviderRateLimit {
   lastRequestAt?: Date;
 
   /**
-   * Current UTC day represented by dailyRequests.
-   *
-   * Format: YYYY-MM-DD
+   * Current UTC day: YYYY-MM-DD
    */
   @Prop({
     required: true,
@@ -49,6 +46,9 @@ export class SportsProviderRateLimit {
   })
   dailyPeriod!: string;
 
+  /**
+   * Requests used during dailyPeriod.
+   */
   @Prop({
     required: true,
     default: 0,
@@ -57,9 +57,7 @@ export class SportsProviderRateLimit {
   dailyRequests!: number;
 
   /**
-   * Current UTC month represented by monthlyRequests.
-   *
-   * Format: YYYY-MM
+   * Current UTC month: YYYY-MM
    */
   @Prop({
     required: true,
@@ -68,6 +66,9 @@ export class SportsProviderRateLimit {
   })
   monthlyPeriod!: string;
 
+  /**
+   * Requests used during monthlyPeriod.
+   */
   @Prop({
     required: true,
     default: 0,

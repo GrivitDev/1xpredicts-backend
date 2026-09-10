@@ -1,150 +1,111 @@
 import { Injectable, Logger } from '@nestjs/common';
-
 import { InjectModel } from '@nestjs/mongoose';
-
 import { Model } from 'mongoose';
 
+import { CompetitionPriority } from '../enums/competition-priority.enum';
+import { CompetitionRegion } from '../enums/competition-region.enum';
+import { CompetitionType } from '../enums/competition-type.enum';
+
 import {
+  ActiveCompetitionStatus,
   ActiveCompetition,
+} from '../interfaces/active-competition.interface';
+
+import {
   ActiveCompetitionDocument,
+  ActiveCompetition as ActiveCompetitionSchema,
 } from '../schemas/active-competition.schema';
-
-import { ActiveCompetitionStatus } from '../interfaces/active-competition.interface';
-
-import { SupportedCompetitionConfig } from '../interfaces/supported-competition-config.interface';
 
 @Injectable()
 export class ActiveCompetitionService {
   private readonly logger = new Logger(ActiveCompetitionService.name);
 
   constructor(
-    @InjectModel(ActiveCompetition.name)
+    @InjectModel(ActiveCompetitionSchema.name)
     private readonly activeCompetitionModel: Model<ActiveCompetitionDocument>,
   ) {}
 
-  // ============================================================
-  // CREATE / UPDATE
-  // ============================================================
-
   async upsert(
-    competition: SupportedCompetitionConfig,
-    data: {
-      apiFootballLeagueId?: number;
-
-      footballDataCode?: string;
-
-      oddsApiSportKey?: string;
-
-      season?: number;
-
-      seasonStartDate?: Date;
-
-      seasonEndDate?: Date;
-
-      status: ActiveCompetitionStatus;
-
-      lastFixtureDate?: Date;
-
-      nextFixtureDate?: Date;
-
-      apiFootballPayload?: Record<string, unknown>;
-    },
+    competition: Omit<ActiveCompetition, 'status' | 'lastUpdatedAt'>,
   ): Promise<ActiveCompetitionDocument> {
-    const competitionId = competition.id.trim().toLowerCase();
+    const now = new Date();
 
-    const update: Record<string, unknown> = {
-      competitionId,
+    const status = this.calculateStatus(
+      competition.seasonStartDate,
+      competition.seasonEndDate,
+      competition.lastFixtureDate,
+      competition.nextFixtureDate,
+      now,
+    );
 
-      name: competition.name,
-
-      type: competition.type,
-
-      region: competition.region,
-
-      priority: competition.priority,
-
-      status: data.status,
-
-      lastUpdatedAt: new Date(),
+    const update: Partial<ActiveCompetition> = {
+      ...competition,
+      competitionId: competition.competitionId.trim().toLowerCase(),
+      espnLeagueSlug: competition.espnLeagueSlug.trim().toLowerCase(),
+      status,
+      lastUpdatedAt: now,
     };
-
-    if (data.apiFootballLeagueId !== undefined) {
-      update.apiFootballLeagueId = data.apiFootballLeagueId;
-    }
-
-    if (data.footballDataCode !== undefined) {
-      update.footballDataCode = data.footballDataCode.trim().toUpperCase();
-    } else if (competition.providers.footballDataCode) {
-      update.footballDataCode = competition.providers.footballDataCode
-        .trim()
-        .toUpperCase();
-    }
-
-    if (data.oddsApiSportKey !== undefined) {
-      update.oddsApiSportKey = data.oddsApiSportKey.trim();
-    } else if (competition.providers.oddsApiSportKey) {
-      update.oddsApiSportKey = competition.providers.oddsApiSportKey.trim();
-    }
-
-    if (data.season !== undefined) {
-      update.season = data.season;
-    }
-
-    if (data.seasonStartDate !== undefined) {
-      update.seasonStartDate = data.seasonStartDate;
-    }
-
-    if (data.seasonEndDate !== undefined) {
-      update.seasonEndDate = data.seasonEndDate;
-    }
-
-    if (data.lastFixtureDate !== undefined) {
-      update.lastFixtureDate = data.lastFixtureDate;
-    }
-
-    if (data.nextFixtureDate !== undefined) {
-      update.nextFixtureDate = data.nextFixtureDate;
-    }
-
-    if (data.apiFootballPayload !== undefined) {
-      update.apiFootballPayload = data.apiFootballPayload;
-    }
 
     return this.activeCompetitionModel
       .findOneAndUpdate(
         {
-          competitionId,
+          competitionId: update.competitionId,
         },
         {
           $set: update,
         },
         {
+          new: true,
           upsert: true,
-          returnDocument: 'after',
           setDefaultsOnInsert: true,
         },
       )
       .exec();
   }
 
-  // ============================================================
-  // GET ALL
-  // ============================================================
+  async syncLeague(params: {
+    competitionId: string;
+    espnLeagueSlug: string;
+    name: string;
+    type: CompetitionType;
+    region: CompetitionRegion;
+    priority: CompetitionPriority;
+    footballDataCode?: string;
+    oddsApiSportKey?: string;
+    season?: number | null;
+    seasonStartDate?: Date | null;
+    seasonEndDate?: Date | null;
+    lastFixtureDate?: Date | null;
+    nextFixtureDate?: Date | null;
+    espnPayload?: Record<string, unknown>;
+  }): Promise<ActiveCompetitionDocument> {
+    return this.upsert({
+      competitionId: params.competitionId,
+      espnLeagueSlug: params.espnLeagueSlug,
+      name: params.name,
+      type: params.type,
+      region: params.region,
+      priority: params.priority,
+      footballDataCode: params.footballDataCode,
+      oddsApiSportKey: params.oddsApiSportKey,
+      season: params.season ?? undefined,
+      seasonStartDate: params.seasonStartDate ?? undefined,
+      seasonEndDate: params.seasonEndDate ?? undefined,
+      lastFixtureDate: params.lastFixtureDate ?? undefined,
+      nextFixtureDate: params.nextFixtureDate ?? undefined,
+      espnPayload: params.espnPayload,
+    });
+  }
 
   async getAll(): Promise<ActiveCompetitionDocument[]> {
     return this.activeCompetitionModel
-      .find()
+      .find({})
       .sort({
         priority: 1,
         name: 1,
       })
-      .lean()
       .exec();
   }
-
-  // ============================================================
-  // ACTIVE
-  // ============================================================
 
   async getActive(): Promise<ActiveCompetitionDocument[]> {
     return this.activeCompetitionModel
@@ -156,13 +117,8 @@ export class ActiveCompetitionService {
         nextFixtureDate: 1,
         name: 1,
       })
-      .lean()
       .exec();
   }
-
-  // ============================================================
-  // UPCOMING
-  // ============================================================
 
   async getUpcoming(): Promise<ActiveCompetitionDocument[]> {
     return this.activeCompetitionModel
@@ -170,16 +126,12 @@ export class ActiveCompetitionService {
         status: ActiveCompetitionStatus.UPCOMING,
       })
       .sort({
-        seasonStartDate: 1,
+        priority: 1,
+        nextFixtureDate: 1,
         name: 1,
       })
-      .lean()
       .exec();
   }
-
-  // ============================================================
-  // ACTIVE OR UPCOMING
-  // ============================================================
 
   async getActiveOrUpcoming(): Promise<ActiveCompetitionDocument[]> {
     return this.activeCompetitionModel
@@ -196,13 +148,26 @@ export class ActiveCompetitionService {
         nextFixtureDate: 1,
         name: 1,
       })
-      .lean()
       .exec();
   }
 
-  // ============================================================
-  // FINISHED
-  // ============================================================
+  async getPriorityActive(): Promise<ActiveCompetitionDocument[]> {
+    return this.activeCompetitionModel
+      .find({
+        status: {
+          $in: [
+            ActiveCompetitionStatus.ACTIVE,
+            ActiveCompetitionStatus.UPCOMING,
+          ],
+        },
+      })
+      .sort({
+        priority: 1,
+        nextFixtureDate: 1,
+        name: 1,
+      })
+      .exec();
+  }
 
   async getFinished(): Promise<ActiveCompetitionDocument[]> {
     return this.activeCompetitionModel
@@ -210,16 +175,11 @@ export class ActiveCompetitionService {
         status: ActiveCompetitionStatus.FINISHED,
       })
       .sort({
-        seasonEndDate: -1,
+        priority: 1,
         name: 1,
       })
-      .lean()
       .exec();
   }
-
-  // ============================================================
-  // BY ID
-  // ============================================================
 
   async getByCompetitionId(
     competitionId: string,
@@ -228,109 +188,58 @@ export class ActiveCompetitionService {
       .findOne({
         competitionId: competitionId.trim().toLowerCase(),
       })
-      .lean()
       .exec();
   }
 
-  // ============================================================
-  // STATUS
-  // ============================================================
-
-  calculateStatus(
-    seasonStartDate?: Date,
-    seasonEndDate?: Date,
-    lastFixtureDate?: Date,
-    nextFixtureDate?: Date,
-    now = new Date(),
-  ): ActiveCompetitionStatus {
-    if (seasonStartDate && now < seasonStartDate) {
-      return ActiveCompetitionStatus.UPCOMING;
-    }
-
-    if (seasonEndDate && now > seasonEndDate && !nextFixtureDate) {
-      return ActiveCompetitionStatus.FINISHED;
-    }
-
-    if (nextFixtureDate && nextFixtureDate >= now) {
-      return ActiveCompetitionStatus.ACTIVE;
-    }
-
-    if (
-      seasonStartDate &&
-      seasonEndDate &&
-      now >= seasonStartDate &&
-      now <= seasonEndDate
-    ) {
-      return ActiveCompetitionStatus.ACTIVE;
-    }
-
-    if (lastFixtureDate && lastFixtureDate <= now) {
-      return ActiveCompetitionStatus.ACTIVE;
-    }
-
-    return ActiveCompetitionStatus.INACTIVE;
-  }
-
-  // ============================================================
-  // REFRESH STATUSES
-  // ============================================================
-
-  async refreshStatuses(): Promise<void> {
-    const competitions = await this.activeCompetitionModel.find().exec();
-
-    const now = new Date();
-
-    for (const competition of competitions) {
-      const status = this.calculateStatus(
-        competition.seasonStartDate,
-        competition.seasonEndDate,
-        competition.lastFixtureDate,
-        competition.nextFixtureDate,
-        now,
-      );
-
-      if (competition.status !== status) {
-        competition.status = status;
-
-        competition.lastUpdatedAt = now;
-
-        await competition.save();
-      }
-    }
-
-    this.logger.log(`Refreshed ${competitions.length} competition statuses`);
-  }
-
-  // ============================================================
-  // UPDATE FIXTURE ACTIVITY
-  // ============================================================
-
-  async updateFixtureActivity(
-    competitionId: string,
-    data: {
-      lastFixtureDate?: Date;
-
-      nextFixtureDate?: Date;
-    },
-  ): Promise<void> {
-    const competition = await this.activeCompetitionModel
+  async getByEspnLeagueSlug(
+    espnLeagueSlug: string,
+  ): Promise<ActiveCompetitionDocument | null> {
+    return this.activeCompetitionModel
       .findOne({
-        competitionId: competitionId.trim().toLowerCase(),
+        espnLeagueSlug: espnLeagueSlug.trim().toLowerCase(),
       })
       .exec();
+  }
+
+  async updateFixtureActivity(params: {
+    competitionId: string;
+    lastFixtureDate?: Date | null;
+    nextFixtureDate?: Date | null;
+    season?: number | null;
+    seasonStartDate?: Date | null;
+    seasonEndDate?: Date | null;
+    espnPayload?: Record<string, unknown>;
+  }): Promise<ActiveCompetitionDocument | null> {
+    const competition = await this.getByCompetitionId(params.competitionId);
 
     if (!competition) {
-      return;
+      return null;
     }
 
     const now = new Date();
 
-    if (data.lastFixtureDate !== undefined) {
-      competition.lastFixtureDate = data.lastFixtureDate;
+    if (params.season !== undefined) {
+      competition.season = params.season ?? undefined;
     }
 
-    if (data.nextFixtureDate !== undefined) {
-      competition.nextFixtureDate = data.nextFixtureDate;
+    if (params.seasonStartDate !== undefined) {
+      competition.seasonStartDate = params.seasonStartDate ?? undefined;
+    }
+
+    if (params.seasonEndDate !== undefined) {
+      competition.seasonEndDate = params.seasonEndDate ?? undefined;
+    }
+
+    if (params.lastFixtureDate !== undefined) {
+      competition.lastFixtureDate = params.lastFixtureDate ?? undefined;
+    }
+
+    if (params.nextFixtureDate !== undefined) {
+      competition.nextFixtureDate = params.nextFixtureDate ?? undefined;
+    }
+
+    if (params.espnPayload !== undefined) {
+      competition.espnPayload = params.espnPayload;
     }
 
     competition.status = this.calculateStatus(
@@ -343,68 +252,101 @@ export class ActiveCompetitionService {
 
     competition.lastUpdatedAt = now;
 
-    await competition.save();
+    return competition.save();
   }
 
-  // ============================================================
-  // MARK INACTIVE
-  // ============================================================
+  async refreshStatuses(): Promise<number> {
+    const competitions = await this.activeCompetitionModel.find({}).exec();
 
-  async markInactive(competitionId: string): Promise<void> {
-    await this.activeCompetitionModel
-      .updateOne(
-        {
-          competitionId: competitionId.trim().toLowerCase(),
-        },
-        {
-          $set: {
-            status: ActiveCompetitionStatus.INACTIVE,
+    const now = new Date();
+    let updated = 0;
 
-            lastUpdatedAt: new Date(),
-          },
-        },
-      )
-      .exec();
+    for (const competition of competitions) {
+      const nextStatus = this.calculateStatus(
+        competition.seasonStartDate,
+        competition.seasonEndDate,
+        competition.lastFixtureDate,
+        competition.nextFixtureDate,
+        now,
+      );
+
+      if (competition.status === nextStatus) {
+        continue;
+      }
+
+      competition.status = nextStatus;
+      competition.lastUpdatedAt = now;
+
+      await competition.save();
+
+      updated += 1;
+    }
+
+    return updated;
   }
-
-  // ============================================================
-  // MARK FINISHED
-  // ============================================================
-
-  async markFinished(competitionId: string): Promise<void> {
-    await this.activeCompetitionModel
-      .updateOne(
-        {
-          competitionId: competitionId.trim().toLowerCase(),
-        },
-        {
-          $set: {
-            status: ActiveCompetitionStatus.FINISHED,
-
-            lastUpdatedAt: new Date(),
-          },
-        },
-      )
-      .exec();
-  }
-
-  // ============================================================
-  // REMOVE MISSING COMPETITIONS
-  // ============================================================
 
   async removeMissingCompetitions(
-    supportedCompetitionIds: string[],
+    existingCompetitionIds: string[],
   ): Promise<number> {
-    const ids = supportedCompetitionIds.map((id) => id.trim().toLowerCase());
+    if (existingCompetitionIds.length === 0) {
+      return 0;
+    }
+
+    const normalizedIds = existingCompetitionIds
+      .map((id) => id.trim().toLowerCase())
+      .filter(Boolean);
+
+    if (normalizedIds.length === 0) {
+      return 0;
+    }
 
     const result = await this.activeCompetitionModel
       .deleteMany({
         competitionId: {
-          $nin: ids,
+          $nin: normalizedIds,
         },
       })
       .exec();
 
     return result.deletedCount ?? 0;
+  }
+
+  calculateStatus(
+    seasonStartDate?: Date,
+    seasonEndDate?: Date,
+    lastFixtureDate?: Date,
+    nextFixtureDate?: Date,
+    now = new Date(),
+  ): ActiveCompetitionStatus {
+    if (seasonStartDate && now < new Date(seasonStartDate)) {
+      return ActiveCompetitionStatus.UPCOMING;
+    }
+
+    if (seasonEndDate && now > new Date(seasonEndDate) && !nextFixtureDate) {
+      return ActiveCompetitionStatus.FINISHED;
+    }
+
+    if (nextFixtureDate && new Date(nextFixtureDate) >= now) {
+      return ActiveCompetitionStatus.ACTIVE;
+    }
+
+    if (
+      seasonStartDate &&
+      seasonEndDate &&
+      now >= new Date(seasonStartDate) &&
+      now <= new Date(seasonEndDate)
+    ) {
+      return ActiveCompetitionStatus.ACTIVE;
+    }
+
+    if (lastFixtureDate) {
+      const elapsed = now.getTime() - new Date(lastFixtureDate).getTime();
+
+      if (elapsed <= 7 * 24 * 60 * 60 * 1000) {
+        return ActiveCompetitionStatus.ACTIVE;
+      }
+    }
+
+    return ActiveCompetitionStatus.INACTIVE;
   }
 }

@@ -14,7 +14,7 @@ import { CommunityModule } from '../community/community.module';
 
 import { UploadsModule } from '../uploads/uploads.module';
 
-import { SupportedCompetitionService } from '../sports/services/supported-competition.service';
+import { PriorityCompetitionService } from '../sports/services/priority-competition.service';
 
 // ============================================================
 // COMMUNITY AI
@@ -86,7 +86,7 @@ import {
   controllers: [AiPredictionController],
 
   providers: [
-    SupportedCompetitionService,
+    PriorityCompetitionService,
 
     AiCommunityPostService,
 

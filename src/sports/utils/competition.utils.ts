@@ -1,11 +1,7 @@
 import { CollectionFrequency } from '../enums/collection-frequency.enum';
-
 import { CompetitionPriority } from '../enums/competition-priority.enum';
-
 import { CompetitionRegion } from '../enums/competition-region.enum';
-
 import { CompetitionType } from '../enums/competition-type.enum';
-
 import { SupportedCompetitionConfig } from '../interfaces/supported-competition-config.interface';
 
 // ============================================================
@@ -86,7 +82,7 @@ export function getCompetitionsByFrequency(
 }
 
 // ============================================================
-// SPECIALIZED COMPETITIONS
+// COLLECTION GROUPS
 // ============================================================
 
 export function getDailyCompetitions(
@@ -95,10 +91,10 @@ export function getDailyCompetitions(
   return getCompetitionsByFrequency(competitions, CollectionFrequency.DAILY);
 }
 
-export function getSeasonalCompetitions(
+export function getMonthlyCompetitions(
   competitions: SupportedCompetitionConfig[],
 ): SupportedCompetitionConfig[] {
-  return getCompetitionsByFrequency(competitions, CollectionFrequency.SEASONAL);
+  return getCompetitionsByFrequency(competitions, CollectionFrequency.MONTHLY);
 }
 
 export function getSupportedLeagues(
@@ -123,13 +119,10 @@ export function getInternationalCompetitions(
 // PROVIDER MAPPINGS
 // ============================================================
 
-export function hasApiFootballMapping(
+export function hasEspnMapping(
   competition: SupportedCompetitionConfig,
 ): boolean {
-  return Boolean(
-    competition.providers.apiFootballName &&
-    competition.providers.apiFootballCountry,
-  );
+  return Boolean(competition.providers.espnLeagueSlug);
 }
 
 export function hasFootballDataMapping(
@@ -167,19 +160,25 @@ export function getPriorityWeight(priority: CompetitionPriority): number {
   }
 }
 
+export function sortByPriority(
+  competitions: SupportedCompetitionConfig[],
+): SupportedCompetitionConfig[] {
+  return [...competitions].sort(
+    (a, b) => getPriorityWeight(a.priority) - getPriorityWeight(b.priority),
+  );
+}
+
 export function getHighValueCompetitions(
   competitions: SupportedCompetitionConfig[],
 ): SupportedCompetitionConfig[] {
-  return competitions
-    .filter(
+  return sortByPriority(
+    competitions.filter(
       (competition) =>
         competition.enabled &&
         (competition.priority === CompetitionPriority.ELITE ||
           competition.priority === CompetitionPriority.HIGH),
-    )
-    .sort(
-      (a, b) => getPriorityWeight(a.priority) - getPriorityWeight(b.priority),
-    );
+    ),
+  );
 }
 
 export function getActiveMensCompetitions(
@@ -187,6 +186,23 @@ export function getActiveMensCompetitions(
 ): SupportedCompetitionConfig[] {
   return competitions.filter(
     (competition) => competition.enabled && competition.gender === 'MEN',
+  );
+}
+
+// ============================================================
+// PRIORITY MATCHING
+// ============================================================
+
+export function matchPriorityCompetitions(
+  activeCompetitions: SupportedCompetitionConfig[],
+  priorityCompetitions: SupportedCompetitionConfig[],
+): SupportedCompetitionConfig[] {
+  const priorityMap = new Map(
+    priorityCompetitions.map((competition) => [competition.id, competition]),
+  );
+
+  return sortByPriority(
+    activeCompetitions.filter((competition) => priorityMap.has(competition.id)),
   );
 }
 
@@ -213,6 +229,10 @@ export function getCompetitionCounts(
 
     odds: getOddsCompetitions(competitions).length,
 
+    monthly: getMonthlyCompetitions(competitions).length,
+
+    daily: getDailyCompetitions(competitions).length,
+
     leagues: getSupportedLeagues(competitions).length,
 
     clubCompetitions: getClubCompetitions(competitions).length,
@@ -220,9 +240,9 @@ export function getCompetitionCounts(
     internationalCompetitions:
       getInternationalCompetitions(competitions).length,
 
-    footballData: competitions.filter(hasFootballDataMapping).length,
+    espn: competitions.filter(hasEspnMapping).length,
 
-    apiFootball: competitions.filter(hasApiFootballMapping).length,
+    footballData: competitions.filter(hasFootballDataMapping).length,
 
     oddsApi: competitions.filter(hasOddsApiMapping).length,
   };

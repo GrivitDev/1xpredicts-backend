@@ -24,8 +24,6 @@ export const PredictionAccessRules = {
       PredictionMarkets.OVER_UNDER,
       PredictionMarkets.BOTH_TEAMS_TO_SCORE,
       PredictionMarkets.DRAW_NO_BET,
-      PredictionMarkets.HALF_TIME_RESULT,
-      PredictionMarkets.HALF_TIME_FULL_TIME,
     ],
   },
 

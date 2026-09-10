@@ -14,13 +14,17 @@ export class FootballDataScheduler {
 
   private dailyRunning = false;
 
-  private liveRunning = false;
-
   constructor(
     private readonly footballDataService: FootballDataService,
+
     private readonly sportsCollectionService: SportsCollectionService,
   ) {}
 
+  /**
+   * Football-Data remains scheduler-driven.
+   *
+   * ESPN does not use this scheduler.
+   */
   @Cron('0 0 1 * * *', {
     name: 'football-data-daily-sync',
     timeZone: 'Africa/Lagos',
@@ -39,7 +43,7 @@ export class FootballDataScheduler {
 
       const coverageByCode = new Map(
         FOOTBALL_DATA_COVERAGE.map((coverage) => [
-          coverage.code.toUpperCase(),
+          coverage.code.trim().toUpperCase(),
           coverage,
         ]),
       );
@@ -71,16 +75,26 @@ export class FootballDataScheduler {
           continue;
         }
 
-        const standings = await this.footballDataService.getStandings(code);
-
-        await this.sportsCollectionService.collectFootballDataStandings(
-          standings,
+        const standingsResponse = await this.footballDataService.getStandings(
+          String(competition.id),
         );
 
-        const teams = await this.footballDataService.getTeams(code);
+        /*
+         * getStandings() returns a response wrapper.
+         *
+         * The collection layer consumes the actual
+         * standing tables, not the wrapper itself.
+         */
+        await this.sportsCollectionService.collectFootballDataStandings(
+          standingsResponse.standings ?? [],
+          competition,
+          competition.id,
+        );
+
+        const teamsResponse = await this.footballDataService.getTeams(code);
 
         await this.sportsCollectionService.collectFootballDataTeams(
-          teams.teams ?? [],
+          teamsResponse.teams ?? [],
           competition.id,
           code,
         );
@@ -114,50 +128,9 @@ export class FootballDataScheduler {
       dateTo: tomorrow,
     });
 
-    const count = await this.sportsCollectionService.collectFootballDataMatches(
+    await this.sportsCollectionService.collectFootballDataMatches(
       response.matches ?? [],
     );
-
-    this.logger.log(
-      `Football-Data current match synchronization completed: ${count} matches`,
-    );
-  }
-
-  @Cron('0 */5 * * * *', {
-    name: 'football-data-live-sync',
-    timeZone: 'Africa/Lagos',
-  })
-  async syncLiveMatches(): Promise<void> {
-    if (this.liveRunning) {
-      return;
-    }
-
-    this.liveRunning = true;
-
-    try {
-      const competitionCodes = FOOTBALL_DATA_COVERAGE.map(
-        (coverage) => coverage.code,
-      );
-
-      const response =
-        await this.footballDataService.getLiveMatches(competitionCodes);
-
-      const count =
-        await this.sportsCollectionService.collectFootballDataMatches(
-          response.matches ?? [],
-        );
-
-      this.logger.log(
-        `Football-Data live synchronization completed: ${count} matches`,
-      );
-    } catch (error) {
-      this.logger.error(
-        'Football-Data live synchronization failed',
-        error instanceof Error ? error.stack : String(error),
-      );
-    } finally {
-      this.liveRunning = false;
-    }
   }
 
   private formatDate(date: Date): string {
