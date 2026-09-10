@@ -56,6 +56,10 @@ export class SportsProviderRateLimitService {
     },
   };
 
+  /**
+   * Slightly longer than the provider interval so that
+   * concurrent callers cannot immediately reuse a slot.
+   */
   private readonly lockSeconds = 65;
 
   constructor(
@@ -131,6 +135,12 @@ export class SportsProviderRateLimitService {
         );
       }
 
+      /**
+       * The request slot is acquired atomically.
+       *
+       * Do not manually set createdAt/updatedAt here.
+       * Mongoose timestamps manage those fields automatically.
+       */
       const updated = await this.rateLimitModel.findOneAndUpdate(
         {
           provider,
@@ -185,15 +195,10 @@ export class SportsProviderRateLimitService {
             dailyRequests: 1,
             monthlyRequests: 1,
           },
-
-          $setOnInsert: {
-            createdAt: now,
-            updatedAt: now,
-          },
         },
 
         {
-          new: true,
+          returnDocument: 'after',
           upsert: true,
         },
       );
@@ -447,8 +452,10 @@ export class SportsProviderRateLimitService {
       return;
     }
 
-    update.updatedAt = now;
-
+    /**
+     * Mongoose timestamps handle updatedAt automatically.
+     * Do not explicitly add updatedAt to this update.
+     */
     await this.rateLimitModel.updateOne(
       {
         provider,

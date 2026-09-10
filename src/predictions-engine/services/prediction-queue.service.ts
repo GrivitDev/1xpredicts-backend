@@ -65,7 +65,7 @@ export class PredictionQueueService {
             },
           },
           {
-            new: true,
+            returnDocument: 'after',
             sort: {
               kickoffAt: 1,
               createdAt: 1,

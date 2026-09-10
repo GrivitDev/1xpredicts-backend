@@ -55,7 +55,7 @@ export class ActiveCompetitionService {
           $set: update,
         },
         {
-          new: true,
+          returnDocument: 'after',
           upsert: true,
           setDefaultsOnInsert: true,
         },
