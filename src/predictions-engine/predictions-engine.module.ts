@@ -62,6 +62,11 @@ import { CalibrationService } from './calibration/calibration.service';
 import { CalibrationTrackerService } from './calibration/calibration-tracker.service';
 
 /*
+ * Utilities
+ */
+import { OddsCalculator } from './calculators/odds.calculator';
+
+/*
  * Services
  */
 import { AiPredictionPromptService } from './services/ai-prediction-prompt.service';
@@ -190,6 +195,7 @@ import { PredictionProcessingCron } from './schedulers/prediction-processing.cro
      * ================================
      */
 
+    OddsCalculator,
     PredictionProbabilityService,
     PredictionConfidenceService,
     PredictionRiskService,
