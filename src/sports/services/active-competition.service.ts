@@ -154,6 +154,13 @@ export class ActiveCompetitionService {
   async getPriorityActive(): Promise<ActiveCompetitionDocument[]> {
     return this.activeCompetitionModel
       .find({
+        priority: {
+          $in: [
+            CompetitionPriority.ELITE,
+            CompetitionPriority.HIGH,
+            CompetitionPriority.REGIONAL,
+          ],
+        },
         status: {
           $in: [
             ActiveCompetitionStatus.ACTIVE,

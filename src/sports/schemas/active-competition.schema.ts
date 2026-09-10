@@ -76,30 +76,45 @@ export class ActiveCompetition {
   })
   oddsApiSportKey?: string;
 
+  /**
+   * Current ESPN season.
+   */
   @Prop({
     type: Number,
     index: true,
   })
   season?: number;
 
+  /**
+   * Current season start date.
+   */
   @Prop({
     type: Date,
     index: true,
   })
   seasonStartDate?: Date;
 
+  /**
+   * Current season end date.
+   */
   @Prop({
     type: Date,
     index: true,
   })
   seasonEndDate?: Date;
 
+  /**
+   * Latest known fixture date.
+   */
   @Prop({
     type: Date,
     index: true,
   })
   lastFixtureDate?: Date;
 
+  /**
+   * Next known fixture date.
+   */
   @Prop({
     type: Date,
     index: true,
@@ -115,6 +130,9 @@ export class ActiveCompetition {
   })
   status!: ActiveCompetitionStatus;
 
+  /**
+   * Full ESPN league-detail payload.
+   */
   @Prop({
     type: Object,
   })

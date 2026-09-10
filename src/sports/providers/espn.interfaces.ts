@@ -1,39 +1,28 @@
 // ============================================================
-// ESPN API RESPONSE TYPES
+// ESPN API RESPONSE
 // ============================================================
 
-export interface EspnApiResponse {
+export interface EspnApiResponse<T = unknown> {
   count?: number;
   pageIndex?: number;
   pageSize?: number;
   pageCount?: number;
 
-  /**
-   * ESPN reference-style collection responses.
-   */
   items?: EspnReferenceItem[];
 
-  /**
-   * Some ESPN responses expose fully expanded leagues.
-   */
   leagues?: EspnLeague[];
 
-  /**
-   * Scoreboard/event responses.
-   */
   events?: EspnEvent[];
 
   season?: EspnSeason;
+
   day?: EspnDay;
 
-  /**
-   * Allows provider-specific fields without losing data.
-   */
   [key: string]: unknown;
 }
 
 // ============================================================
-// REFERENCES
+// ESPN REFERENCE
 // ============================================================
 
 export interface EspnReferenceItem {
@@ -43,23 +32,53 @@ export interface EspnReferenceItem {
 }
 
 // ============================================================
-// LEAGUES
+// ESPN LEAGUE
 // ============================================================
 
 export interface EspnLeague {
   id?: string;
+
   uid?: string;
+
   name?: string;
+
   abbreviation?: string;
-  slug?: string;
+
   shortName?: string;
+
   displayName?: string;
 
+  slug?: string;
+
+  country?: {
+    id?: string;
+    name?: string;
+    abbreviation?: string;
+    slug?: string;
+
+    [key: string]: unknown;
+  };
+
+  type?: {
+    id?: string;
+    name?: string;
+    abbreviation?: string;
+    slug?: string;
+
+    [key: string]: unknown;
+  };
+
+  /**
+   * Current season returned by the ESPN league-detail endpoint.
+   */
+  season?: EspnSeason;
+
+  /**
+   * Some ESPN responses may expose multiple seasons.
+   */
+  seasons?: EspnSeason[];
+
   logos?: EspnLogo[];
-
-  country?: string;
-
-  type?: string;
 
   links?: EspnLink[];
 
@@ -69,77 +88,120 @@ export interface EspnLeague {
 }
 
 // ============================================================
-// SEASON
+// ESPN SEASON
 // ============================================================
 
 export interface EspnSeason {
   year?: number;
+
   displayName?: string;
+
   startDate?: string;
+
   endDate?: string;
+
   slug?: string;
+
   type?: EspnSeasonType;
 
   [key: string]: unknown;
 }
 
 // ============================================================
-// SEASON TYPE
+// ESPN SEASON TYPE
 // ============================================================
 
 export interface EspnSeasonType {
   id?: string;
+
   type?: string;
+
   name?: string;
+
   abbreviation?: string;
+
   startDate?: string;
+
   endDate?: string;
+
   slug?: string;
 
   [key: string]: unknown;
 }
 
 // ============================================================
-// DAY
+// ESPN DAY
 // ============================================================
 
 export interface EspnDay {
   date?: string;
+
   number?: number;
 
   [key: string]: unknown;
 }
 
 // ============================================================
-// LOGO
+// ESPN LOGO
 // ============================================================
 
 export interface EspnLogo {
   href?: string;
+
   width?: number;
+
   height?: number;
+
   alt?: string;
+
   rel?: string[];
+
   lastUpdated?: string;
 
   [key: string]: unknown;
 }
 
 // ============================================================
-// EVENTS
+// ESPN LINK
+// ============================================================
+
+export interface EspnLink {
+  href?: string;
+
+  text?: string;
+
+  shortText?: string;
+
+  rel?: string[];
+
+  isExternal?: boolean;
+
+  isPremium?: boolean;
+
+  isAffiliate?: boolean;
+
+  [key: string]: unknown;
+}
+
+// ============================================================
+// ESPN EVENT
 // ============================================================
 
 export interface EspnEvent {
   id: string;
+
   uid?: string;
 
   date?: string;
+
   name?: string;
+
   shortName?: string;
 
   timeValid?: boolean;
 
   season?: EspnSeason;
+
   seasonType?: EspnSeasonType;
 
   competitions?: EspnCompetition[];
@@ -152,7 +214,7 @@ export interface EspnEvent {
 }
 
 // ============================================================
-// COMPETITIONS
+// ESPN COMPETITION
 // ============================================================
 
 export interface EspnCompetition {
@@ -161,11 +223,13 @@ export interface EspnCompetition {
   uid?: string;
 
   date?: string;
+
   startDate?: string;
 
   attendance?: number;
 
   timeValid?: boolean;
+
   recent?: boolean;
 
   status?: EspnCompetitionStatus;
@@ -192,12 +256,14 @@ export interface EspnCompetition {
 }
 
 // ============================================================
-// COMPETITION STATUS
+// ESPN COMPETITION STATUS
 // ============================================================
 
 export interface EspnCompetitionStatus {
   clock?: number;
+
   displayClock?: string;
+
   period?: number;
 
   type?: EspnStatusType;
@@ -206,17 +272,22 @@ export interface EspnCompetitionStatus {
 }
 
 // ============================================================
-// STATUS TYPE
+// ESPN STATUS TYPE
 // ============================================================
 
 export interface EspnStatusType {
   id?: string;
+
   name?: string;
+
   state?: string;
+
   completed?: boolean;
 
   description?: string;
+
   detail?: string;
+
   shortDetail?: string;
 
   abbreviation?: string;
@@ -225,14 +296,110 @@ export interface EspnStatusType {
 }
 
 // ============================================================
-// COMPETITOR
+// ESPN VENUE
+// ============================================================
+
+export interface EspnVenue {
+  id?: string;
+
+  fullName?: string;
+
+  shortName?: string;
+
+  address?: {
+    city?: string;
+
+    state?: string;
+
+    country?: string;
+
+    countryCode?: string;
+
+    zipCode?: string;
+
+    [key: string]: unknown;
+  };
+
+  capacity?: number;
+
+  indoor?: boolean;
+
+  grass?: boolean;
+
+  images?: EspnImage[];
+
+  [key: string]: unknown;
+}
+
+// ============================================================
+// ESPN FORMAT
+// ============================================================
+
+export interface EspnFormat {
+  regulation?: number;
+
+  overtime?: boolean;
+
+  periods?: number;
+
+  clock?: number;
+
+  [key: string]: unknown;
+}
+
+// ============================================================
+// ESPN BROADCAST
+// ============================================================
+
+export interface EspnBroadcast {
+  id?: string;
+
+  market?: string;
+
+  names?: string[];
+
+  type?: {
+    id?: string;
+
+    shortName?: string;
+
+    [key: string]: unknown;
+  };
+
+  media?: {
+    shortName?: string;
+
+    [key: string]: unknown;
+  };
+
+  [key: string]: unknown;
+}
+
+// ============================================================
+// ESPN NOTE
+// ============================================================
+
+export interface EspnNote {
+  headline?: string;
+
+  type?: string;
+
+  text?: string;
+
+  [key: string]: unknown;
+}
+
+// ============================================================
+// ESPN COMPETITOR
 // ============================================================
 
 export interface EspnCompetitor {
-  id: string;
+  id?: string;
+
   uid?: string;
 
   type?: string;
+
   order?: number;
 
   homeAway?: 'home' | 'away';
@@ -241,7 +408,7 @@ export interface EspnCompetitor {
 
   form?: string;
 
-  score?: string;
+  score?: string | number;
 
   records?: EspnTeamRecord[];
 
@@ -253,11 +420,11 @@ export interface EspnCompetitor {
 }
 
 // ============================================================
-// TEAM
+// ESPN TEAM
 // ============================================================
 
 export interface EspnTeam {
-  id: string;
+  id?: string;
 
   uid?: string;
 
@@ -295,7 +462,7 @@ export interface EspnTeam {
 }
 
 // ============================================================
-// TEAM VENUE
+// ESPN TEAM VENUE
 // ============================================================
 
 export interface EspnTeamVenue {
@@ -305,8 +472,12 @@ export interface EspnTeamVenue {
 
   address?: {
     city?: string;
+
     state?: string;
+
     country?: string;
+
+    [key: string]: unknown;
   };
 
   capacity?: number;
@@ -316,10 +487,12 @@ export interface EspnTeamVenue {
   grass?: boolean;
 
   images?: EspnImage[];
+
+  [key: string]: unknown;
 }
 
 // ============================================================
-// TEAM RECORD
+// ESPN TEAM RECORD
 // ============================================================
 
 export interface EspnTeamRecord {
@@ -339,7 +512,7 @@ export interface EspnTeamRecord {
 }
 
 // ============================================================
-// TEAM MATCH STATISTICS
+// ESPN TEAM MATCH STATISTICS
 // ============================================================
 
 export interface EspnTeamMatchStatistic {
@@ -363,7 +536,7 @@ export interface EspnTeamMatchStatistic {
 }
 
 // ============================================================
-// MATCH DETAIL
+// ESPN MATCH DETAIL
 // ============================================================
 
 export interface EspnMatchDetail {
@@ -393,7 +566,7 @@ export interface EspnMatchDetail {
 }
 
 // ============================================================
-// CLOCK
+// ESPN CLOCK
 // ============================================================
 
 export interface EspnClock {
@@ -405,7 +578,7 @@ export interface EspnClock {
 }
 
 // ============================================================
-// ATHLETE
+// ESPN ATHLETE
 // ============================================================
 
 export interface EspnAthlete {
@@ -423,8 +596,12 @@ export interface EspnAthlete {
 
   position?: {
     id?: string;
+
     name?: string;
+
     abbreviation?: string;
+
+    [key: string]: unknown;
   };
 
   team?: EspnTeam;
@@ -435,89 +612,7 @@ export interface EspnAthlete {
 }
 
 // ============================================================
-// VENUE
-// ============================================================
-
-export interface EspnVenue {
-  id?: string;
-
-  fullName?: string;
-
-  shortName?: string;
-
-  address?: {
-    city?: string;
-    state?: string;
-    country?: string;
-    zipCode?: string;
-  };
-
-  capacity?: number;
-
-  indoor?: boolean;
-
-  grass?: boolean;
-
-  images?: EspnImage[];
-
-  [key: string]: unknown;
-}
-
-// ============================================================
-// FORMAT
-// ============================================================
-
-export interface EspnFormat {
-  regulation?: number;
-
-  overtime?: boolean;
-
-  periods?: number;
-
-  clock?: number;
-
-  [key: string]: unknown;
-}
-
-// ============================================================
-// BROADCAST
-// ============================================================
-
-export interface EspnBroadcast {
-  id?: string;
-
-  market?: string;
-
-  names?: string[];
-
-  type?: {
-    id?: string;
-    shortName?: string;
-  };
-
-  media?: {
-    shortName?: string;
-  };
-
-  [key: string]: unknown;
-}
-
-// ============================================================
-// NOTE
-// ============================================================
-
-export interface EspnNote {
-  headline?: string;
-
-  type?: string;
-
-  text?: string;
-
-  [key: string]: unknown;
-}
-
-// ============================================================
-// EVENT DETAIL
+// ESPN EVENT DETAIL
 // ============================================================
 
 export interface EspnEventDetail {
@@ -547,29 +642,7 @@ export interface EspnEventDetail {
 }
 
 // ============================================================
-// LINKS
-// ============================================================
-
-export interface EspnLink {
-  href?: string;
-
-  text?: string;
-
-  shortText?: string;
-
-  rel?: string[];
-
-  isExternal?: boolean;
-
-  isPremium?: boolean;
-
-  isAffiliate?: boolean;
-
-  [key: string]: unknown;
-}
-
-// ============================================================
-// IMAGES
+// ESPN IMAGE
 // ============================================================
 
 export interface EspnImage {
@@ -589,7 +662,7 @@ export interface EspnImage {
 }
 
 // ============================================================
-// STANDINGS
+// ESPN STANDINGS RESPONSE
 // ============================================================
 
 export interface EspnStandingsResponse {
@@ -609,7 +682,7 @@ export interface EspnStandingsResponse {
 }
 
 // ============================================================
-// STANDINGS GROUP
+// ESPN STANDINGS GROUP
 // ============================================================
 
 export interface EspnStandingsGroup {
@@ -629,7 +702,7 @@ export interface EspnStandingsGroup {
 }
 
 // ============================================================
-// STANDING ENTRY
+// ESPN STANDING ENTRY
 // ============================================================
 
 export interface EspnStandingEntry {
@@ -637,8 +710,12 @@ export interface EspnStandingEntry {
 
   note?: {
     color?: string;
+
     description?: string;
+
     rank?: number;
+
+    [key: string]: unknown;
   };
 
   stats?: EspnStandingStatistic[];
@@ -649,7 +726,7 @@ export interface EspnStandingEntry {
 }
 
 // ============================================================
-// STANDING STATISTIC
+// ESPN STANDING STATISTIC
 // ============================================================
 
 export interface EspnStandingStatistic {
@@ -675,7 +752,7 @@ export interface EspnStandingStatistic {
 }
 
 // ============================================================
-// ODDS
+// ESPN ODDS
 // ============================================================
 
 export interface EspnOdds {
@@ -697,7 +774,7 @@ export interface EspnOdds {
 }
 
 // ============================================================
-// ODDS PROVIDER
+// ESPN ODDS PROVIDER
 // ============================================================
 
 export interface EspnOddsProvider {
@@ -713,7 +790,7 @@ export interface EspnOddsProvider {
 }
 
 // ============================================================
-// MONEYLINE
+// ESPN MONEYLINE
 // ============================================================
 
 export interface EspnMoneyline {
@@ -727,7 +804,7 @@ export interface EspnMoneyline {
 }
 
 // ============================================================
-// TEAM ODDS
+// ESPN TEAM ODDS
 // ============================================================
 
 export interface EspnTeamOdds {
@@ -751,7 +828,7 @@ export interface EspnTeamOdds {
 }
 
 // ============================================================
-// LEADERS
+// ESPN LEADERS
 // ============================================================
 
 export interface EspnLeader {
@@ -769,7 +846,7 @@ export interface EspnLeader {
 }
 
 // ============================================================
-// LEADER ITEM
+// ESPN LEADER ITEM
 // ============================================================
 
 export interface EspnLeaderItem {

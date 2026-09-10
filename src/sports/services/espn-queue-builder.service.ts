@@ -7,168 +7,207 @@ import {
   EspnFixtureDocument,
 } from '../schemas/espn/espn-fixture.schema';
 
-import { EspnQueueService } from './espn-queue.service';
-import { EspnActiveCompetitionService } from './espn-active-competition.service';
-import { PriorityCompetitionService } from './priority-competition.service';
+import {
+  EspnLeague,
+  EspnLeagueDocument,
+} from '../schemas/espn/espn-league.schema';
 
 import { CompetitionPriority } from '../enums/competition-priority.enum';
+
+import { EspnQueueService } from './espn-queue.service';
+import { EspnActiveCompetitionService } from './espn-active-competition.service';
 
 @Injectable()
 export class EspnQueueBuilderService {
   private readonly logger = new Logger(EspnQueueBuilderService.name);
 
   private readonly upcomingWindowDays = 4;
+
   private readonly finishedLookbackHours = 12;
+
   private readonly finishedDelayHours = 3;
 
   constructor(
-    @InjectModel(EspnFixture.name)
-    private readonly fixtureModel: Model<EspnFixtureDocument>,
-
-    private readonly queueService: EspnQueueService,
+    private readonly espnQueueService: EspnQueueService,
 
     private readonly espnActiveCompetitionService: EspnActiveCompetitionService,
 
-    private readonly priorityCompetitionService: PriorityCompetitionService,
+    @InjectModel(EspnFixture.name)
+    private readonly espnFixtureModel: Model<EspnFixtureDocument>,
+
+    @InjectModel(EspnLeague.name)
+    private readonly espnLeagueModel: Model<EspnLeagueDocument>,
   ) {}
 
   // ============================================================
   // INITIAL LEAGUE QUEUE
   // ============================================================
 
-  async buildInitialLeagueQueue(): Promise<number> {
-    const leagues = await this.espnActiveCompetitionService.getOrderedLeagues();
+  /**
+   * Build the initial league-refresh queue after:
+   *
+   * 1. ESPN catalogue discovery
+   * 2. ESPN league detail discovery
+   * 3. Current-season identification
+   * 4. Active-season identification
+   * 5. Priority classification
+   *
+   * Only leagues whose current season is active are queued.
+   *
+   * The stored catalogue is already sorted by:
+   *
+   * ELITE
+   * HIGH
+   * REGIONAL
+   * SELECTIVE
+   */
+  async buildInitialLeagueQueue(): Promise<{
+    queued: number;
+    skipped: number;
+  }> {
+    const leagues = await this.espnActiveCompetitionService.getActiveLeagues();
 
     let queued = 0;
+    let skipped = 0;
 
     for (const league of leagues) {
-      const priority = this.getQueuePriority(
-        league.priority as CompetitionPriority | undefined,
-      );
+      /*
+       * Activity has already been determined by the league-detail
+       * synchronization. This service does not determine it again.
+       */
+      if (!league.isActive) {
+        skipped += 1;
+        continue;
+      }
 
-      await this.queueService.addLeagueRefreshJob({
-        leagueId: league.leagueId,
-        season: this.extractLeagueSeason(league),
-        priority,
-        scheduledFor: new Date(),
-      });
+      if (!this.hasUsableSeason(league)) {
+        skipped += 1;
 
-      queued += 1;
+        this.logger.debug(
+          `Skipping active ESPN league ${league.leagueId} because ` +
+            `no usable season is stored`,
+        );
+
+        continue;
+      }
+
+      const priority = this.getQueuePriority(this.getLeaguePriority(league));
+
+      try {
+        const job = await this.espnQueueService.addLeagueRefreshJob({
+          leagueId: league.leagueId,
+          season: league.season,
+          priority,
+          scheduledFor: new Date(),
+        });
+
+        if (job) {
+          queued += 1;
+        } else {
+          skipped += 1;
+        }
+      } catch (error) {
+        skipped += 1;
+
+        this.logger.warn(
+          `Unable to queue ESPN league ${league.leagueId}: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
     }
 
-    this.logger.log(`Built ${queued} ESPN league refresh jobs`);
+    this.logger.log(
+      `Initial ESPN league queue built: queued=${queued}, skipped=${skipped}`,
+    );
 
-    return queued;
+    return {
+      queued,
+      skipped,
+    };
   }
 
   // ============================================================
   // MATCH QUEUE
   // ============================================================
 
+  /**
+   * Build upcoming and recently finished match jobs from the
+   * locally stored ESPN fixture database.
+   *
+   * This runs after league refreshes have populated fixtures.
+   *
+   * Only fixtures belonging to currently active ESPN leagues
+   * are converted into match jobs.
+   */
   async buildMatchQueue(): Promise<{
     upcoming: number;
     finished: number;
   }> {
     const now = new Date();
 
-    const upcomingEnd = new Date(
+    const upcomingUntil = new Date(
       now.getTime() + this.upcomingWindowDays * 24 * 60 * 60 * 1000,
     );
 
-    const finishedStart = new Date(
+    const finishedSince = new Date(
       now.getTime() - this.finishedLookbackHours * 60 * 60 * 1000,
     );
 
-    const upcomingFixtures = await this.fixtureModel
-      .find({
-        fixtureDate: {
-          $gte: now,
-          $lte: upcomingEnd,
-        },
-        completed: {
-          $ne: true,
-        },
-      })
-      .sort({
-        fixtureDate: 1,
-      })
-      .lean()
-      .exec();
+    const [upcomingFixtures, finishedFixtures] = await Promise.all([
+      this.espnFixtureModel
+        .find({
+          fixtureDate: {
+            $gte: now,
+            $lte: upcomingUntil,
+          },
+        })
+        .sort({
+          fixtureDate: 1,
+        })
+        .lean()
+        .exec(),
 
-    const finishedFixtures = await this.fixtureModel
-      .find({
-        fixtureDate: {
-          $gte: finishedStart,
-          $lte: now,
-        },
-        completed: true,
-      })
-      .sort({
-        fixtureDate: 1,
-      })
-      .lean()
-      .exec();
+      this.espnFixtureModel
+        .find({
+          fixtureDate: {
+            $gte: finishedSince,
+            $lte: now,
+          },
+
+          status: {
+            $in: ['FINAL', 'FINISHED', 'POST', 'FT'],
+          },
+        })
+        .sort({
+          fixtureDate: 1,
+        })
+        .lean()
+        .exec(),
+    ]);
 
     let upcoming = 0;
     let finished = 0;
 
     for (const fixture of upcomingFixtures) {
-      if (!this.isPriorityLeague(fixture.leagueId)) {
+      if (!(await this.isActiveLeague(fixture.leagueId))) {
         continue;
       }
 
-      const competitionId = this.extractCompetitionId(fixture.payload);
-
-      if (!competitionId) {
-        continue;
+      if (await this.addUpcomingFixtureJob(fixture)) {
+        upcoming += 1;
       }
-
-      const priority = this.getQueuePriorityFromCompetition(competitionId);
-
-      await this.queueService.addUpcomingMatchJob({
-        leagueId: fixture.leagueId,
-        eventId: fixture.eventId,
-        season: fixture.season,
-        priority,
-        scheduledFor: this.getFixtureStartTime(fixture),
-      });
-
-      upcoming += 1;
     }
 
     for (const fixture of finishedFixtures) {
-      if (!this.isPriorityLeague(fixture.leagueId)) {
+      if (!(await this.isActiveLeague(fixture.leagueId))) {
         continue;
       }
 
-      const competitionId = this.extractCompetitionId(fixture.payload);
-
-      if (!competitionId) {
-        continue;
+      if (await this.addFinishedFixtureJob(fixture)) {
+        finished += 1;
       }
-
-      const priority = this.getQueuePriorityFromCompetition(competitionId);
-
-      const kickoff = this.getFixtureStartTime(fixture);
-
-      const scheduledFor = new Date(
-        kickoff.getTime() + this.finishedDelayHours * 60 * 60 * 1000,
-      );
-
-      await this.queueService.addFinishedMatchJob({
-        leagueId: fixture.leagueId,
-        eventId: fixture.eventId,
-        season: fixture.season,
-        priority,
-        scheduledFor: scheduledFor > now ? scheduledFor : now,
-      });
-
-      finished += 1;
     }
-
-    this.logger.log(
-      `Built ESPN match queue: ${upcoming} upcoming, ${finished} finished`,
-    );
 
     return {
       upcoming,
@@ -180,6 +219,10 @@ export class EspnQueueBuilderService {
   // LEAGUE MATCH JOBS
   // ============================================================
 
+  /**
+   * Build match jobs after a league's initial league-refresh job
+   * has collected its fixtures.
+   */
   async buildLeagueMatchJobs(
     leagueId: string,
     season?: number,
@@ -187,109 +230,87 @@ export class EspnQueueBuilderService {
     upcoming: number;
     finished: number;
   }> {
-    const normalizedLeagueId = leagueId.trim().toLowerCase();
+    const league =
+      await this.espnActiveCompetitionService.getByLeagueId(leagueId);
 
-    if (!this.isPriorityLeague(normalizedLeagueId)) {
+    if (!league || !league.isActive) {
       return {
         upcoming: 0,
         finished: 0,
       };
     }
 
+    const effectiveSeason = typeof season === 'number' ? season : league.season;
+
     const now = new Date();
 
-    const upcomingEnd = new Date(
+    const upcomingUntil = new Date(
       now.getTime() + this.upcomingWindowDays * 24 * 60 * 60 * 1000,
     );
 
-    const finishedStart = new Date(
+    const finishedSince = new Date(
       now.getTime() - this.finishedLookbackHours * 60 * 60 * 1000,
     );
 
-    const upcomingFilter: Record<string, unknown> = {
-      leagueId: normalizedLeagueId,
-      fixtureDate: {
-        $gte: now,
-        $lte: upcomingEnd,
-      },
-      completed: {
-        $ne: true,
-      },
-    };
+    const seasonFilter: Record<string, unknown> = {};
 
-    const finishedFilter: Record<string, unknown> = {
-      leagueId: normalizedLeagueId,
-      fixtureDate: {
-        $gte: finishedStart,
-        $lte: now,
-      },
-      completed: true,
-    };
-
-    if (season !== undefined) {
-      upcomingFilter.season = season;
-      finishedFilter.season = season;
+    if (typeof effectiveSeason === 'number') {
+      seasonFilter.season = effectiveSeason;
     }
 
-    const upcomingFixtures = await this.fixtureModel
-      .find(upcomingFilter)
-      .sort({
-        fixtureDate: 1,
-      })
-      .lean()
-      .exec();
+    const [upcomingFixtures, finishedFixtures] = await Promise.all([
+      this.espnFixtureModel
+        .find({
+          leagueId: league.leagueId,
 
-    const finishedFixtures = await this.fixtureModel
-      .find(finishedFilter)
-      .sort({
-        fixtureDate: 1,
-      })
-      .lean()
-      .exec();
+          ...seasonFilter,
+
+          fixtureDate: {
+            $gte: now,
+            $lte: upcomingUntil,
+          },
+        })
+        .sort({
+          fixtureDate: 1,
+        })
+        .lean()
+        .exec(),
+
+      this.espnFixtureModel
+        .find({
+          leagueId: league.leagueId,
+
+          ...seasonFilter,
+
+          fixtureDate: {
+            $gte: finishedSince,
+            $lte: now,
+          },
+
+          status: {
+            $in: ['FINAL', 'FINISHED', 'POST', 'FT'],
+          },
+        })
+        .sort({
+          fixtureDate: 1,
+        })
+        .lean()
+        .exec(),
+    ]);
 
     let upcoming = 0;
     let finished = 0;
 
     for (const fixture of upcomingFixtures) {
-      const competitionId = this.extractCompetitionId(fixture.payload);
-
-      if (!competitionId) {
-        continue;
+      if (await this.addUpcomingFixtureJob(fixture)) {
+        upcoming += 1;
       }
-
-      await this.queueService.addUpcomingMatchJob({
-        leagueId: fixture.leagueId,
-        eventId: fixture.eventId,
-        season: fixture.season,
-        priority: this.getQueuePriorityFromCompetition(competitionId),
-        scheduledFor: this.getFixtureStartTime(fixture),
-      });
-
-      upcoming += 1;
     }
 
     for (const fixture of finishedFixtures) {
-      const competitionId = this.extractCompetitionId(fixture.payload);
-
-      if (!competitionId) {
-        continue;
+      if (await this.addFinishedFixtureJob(fixture)) {
+        finished += 1;
       }
-
-      const kickoff = this.getFixtureStartTime(fixture);
-
-      const scheduledFor = new Date(
-        kickoff.getTime() + this.finishedDelayHours * 60 * 60 * 1000,
-      );
-
-      await this.queueService.addFinishedMatchJob({
-        leagueId: fixture.leagueId,
-        eventId: fixture.eventId,
-        season: fixture.season,
-        priority: this.getQueuePriorityFromCompetition(competitionId),
-        scheduledFor: scheduledFor > now ? scheduledFor : now,
-      });
-
-      finished += 1;
     }
 
     return {
@@ -299,23 +320,25 @@ export class EspnQueueBuilderService {
   }
 
   // ============================================================
-  // HELPERS
+  // PRIORITY / ACTIVITY
   // ============================================================
 
-  private isPriorityLeague(leagueId: string): boolean {
-    return this.espnActiveCompetitionService
-      ? Boolean(this.priorityCompetitionService.getById(leagueId)) ||
-          Boolean(this.espnActiveCompetitionService.getByLeagueId(leagueId))
-      : false;
+  private async isActiveLeague(leagueId: string): Promise<boolean> {
+    const league =
+      await this.espnActiveCompetitionService.getByLeagueId(leagueId);
+
+    return Boolean(league?.isActive);
   }
 
-  private getQueuePriorityFromCompetition(competitionId: string): number {
-    const competition = this.priorityCompetitionService.getById(competitionId);
+  private getLeaguePriority(league: EspnLeagueDocument): CompetitionPriority {
+    if (Object.values(CompetitionPriority).includes(league.priority)) {
+      return league.priority;
+    }
 
-    return this.getQueuePriority(competition?.priority);
+    return CompetitionPriority.SELECTIVE;
   }
 
-  private getQueuePriority(priority?: CompetitionPriority): number {
+  private getQueuePriority(priority: CompetitionPriority): number {
     switch (priority) {
       case CompetitionPriority.ELITE:
         return 1;
@@ -327,64 +350,109 @@ export class EspnQueueBuilderService {
         return 3;
 
       case CompetitionPriority.SELECTIVE:
-        return 4;
-
       default:
-        return 99;
+        return 4;
     }
   }
 
-  private getFixtureStartTime(fixture: EspnFixtureDocument): Date {
-    const value = fixture.fixtureDate;
+  // ============================================================
+  // UPCOMING
+  // ============================================================
 
-    if (!(value instanceof Date)) {
-      throw new Error(`Invalid fixture date for ESPN event ${fixture.eventId}`);
+  private async addUpcomingFixtureJob(
+    fixture: EspnFixtureDocument,
+  ): Promise<boolean> {
+    if (!fixture.eventId) {
+      return false;
     }
 
-    if (Number.isNaN(value.getTime())) {
-      throw new Error(`Invalid fixture date for ESPN event ${fixture.eventId}`);
+    if (typeof fixture.season !== 'number') {
+      return false;
     }
 
-    return value;
+    const priority = await this.getFixtureQueuePriority(fixture.leagueId);
+
+    if (priority === null) {
+      return false;
+    }
+
+    const scheduledFor = fixture.fixtureDate
+      ? new Date(fixture.fixtureDate)
+      : new Date();
+
+    const job = await this.espnQueueService.addUpcomingMatchJob({
+      leagueId: fixture.leagueId,
+      eventId: fixture.eventId,
+      season: fixture.season,
+      priority,
+      scheduledFor,
+    });
+
+    return Boolean(job);
   }
 
-  private extractCompetitionId(
-    payload: Record<string, unknown>,
-  ): string | undefined {
-    const direct = payload['competitionId'];
+  // ============================================================
+  // FINISHED
+  // ============================================================
 
-    if (typeof direct === 'string' && direct.trim()) {
-      return direct.trim();
+  private async addFinishedFixtureJob(
+    fixture: EspnFixtureDocument,
+  ): Promise<boolean> {
+    if (!fixture.eventId) {
+      return false;
     }
 
-    const competition = payload['competition'];
-
-    if (competition && typeof competition === 'object') {
-      const id = (competition as Record<string, unknown>)['id'];
-
-      if (typeof id === 'string' && id.trim()) {
-        return id.trim();
-      }
-
-      if (typeof id === 'number' && Number.isFinite(id)) {
-        return String(id);
-      }
+    if (typeof fixture.season !== 'number') {
+      return false;
     }
 
-    return undefined;
+    const priority = await this.getFixtureQueuePriority(fixture.leagueId);
+
+    if (priority === null) {
+      return false;
+    }
+
+    const fixtureDate = fixture.fixtureDate
+      ? new Date(fixture.fixtureDate)
+      : new Date();
+
+    const scheduledFor = new Date(
+      fixtureDate.getTime() + this.finishedDelayHours * 60 * 60 * 1000,
+    );
+
+    if (scheduledFor.getTime() < Date.now()) {
+      scheduledFor.setTime(Date.now());
+    }
+
+    const job = await this.espnQueueService.addFinishedMatchJob({
+      leagueId: fixture.leagueId,
+      eventId: fixture.eventId,
+      season: fixture.season,
+      priority,
+      scheduledFor,
+    });
+
+    return Boolean(job);
   }
 
-  private extractLeagueSeason(league: unknown): number | undefined {
-    if (!league || typeof league !== 'object') {
-      return undefined;
+  private async getFixtureQueuePriority(
+    leagueId: string,
+  ): Promise<number | null> {
+    const league =
+      await this.espnActiveCompetitionService.getByLeagueId(leagueId);
+
+    if (!league || !league.isActive) {
+      return null;
     }
 
-    const season = (league as Record<string, unknown>)['season'];
+    return this.getQueuePriority(this.getLeaguePriority(league));
+  }
 
-    if (typeof season === 'number' && Number.isFinite(season)) {
-      return season;
-    }
+  // ============================================================
+  // HELPERS
+  // ============================================================
 
-    return undefined;
+  private hasUsableSeason(league: EspnLeagueDocument): boolean {
+    return typeof league.season === 'number' && Number.isFinite(league.season);
   }
 }

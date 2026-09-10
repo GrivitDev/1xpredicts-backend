@@ -14,12 +14,17 @@ export enum EspnQueueStatus {
 export interface EspnQueueJob {
   jobKey: string;
 
-  type: EspnQueueJobType;
-
   /**
-   * ESPN league slug.
+   * ESPN league identifier.
+   *
+   * This is the canonical stored ESPN leagueId.
    */
   leagueId: string;
+
+  /**
+   * Queue job type.
+   */
+  type: EspnQueueJobType;
 
   /**
    * ESPN season year.
@@ -35,8 +40,6 @@ export interface EspnQueueJob {
 
   /**
    * ESPN competition ID.
-   *
-   * Required when the event contains a competition.
    */
   competitionId?: string;
 

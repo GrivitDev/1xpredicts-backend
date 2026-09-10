@@ -11,10 +11,12 @@ export type EspnTeamDocument = HydratedDocument<EspnTeam>;
 export class EspnTeam {
   /**
    * ESPN team ID.
+   *
+   * A team can appear in multiple ESPN leagues/competitions,
+   * so this must NOT be globally unique.
    */
   @Prop({
     required: true,
-    unique: true,
     index: true,
     trim: true,
   })
@@ -81,7 +83,7 @@ export class EspnTeam {
   active?: boolean;
 
   /**
-   * Complete latest ESPN team object.
+   * Complete latest ESPN team object for this league.
    */
   @Prop({
     type: Object,
@@ -98,6 +100,15 @@ export class EspnTeam {
 }
 
 export const EspnTeamSchema = SchemaFactory.createForClass(EspnTeam);
+
+/**
+ * A team may exist in multiple leagues, so leagueId is part
+ * of the team's identity within this collection.
+ */
+EspnTeamSchema.index({
+  teamId: 1,
+  leagueId: 1,
+});
 
 EspnTeamSchema.index({
   leagueId: 1,

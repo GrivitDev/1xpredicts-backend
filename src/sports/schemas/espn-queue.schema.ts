@@ -124,6 +124,10 @@ export class EspnQueue {
 
 export const EspnQueueSchema = SchemaFactory.createForClass(EspnQueue);
 
+// ============================================================
+// QUEUE PROCESSING INDEX
+// ============================================================
+
 EspnQueueSchema.index({
   status: 1,
   priority: 1,
@@ -131,11 +135,19 @@ EspnQueueSchema.index({
   createdAt: 1,
 });
 
+// ============================================================
+// JOB TYPE INDEX
+// ============================================================
+
 EspnQueueSchema.index({
   type: 1,
   status: 1,
   scheduledFor: 1,
 });
+
+// ============================================================
+// LEAGUE / SEASON INDEX
+// ============================================================
 
 EspnQueueSchema.index({
   leagueId: 1,

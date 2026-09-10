@@ -24,5 +24,4 @@ export enum CompetitionPriority {
    * but they receive lower priority when resources are allocated.
    */
   SELECTIVE = 'SELECTIVE',
-  indexOf = "indexOf",
 }

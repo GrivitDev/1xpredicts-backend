@@ -442,20 +442,14 @@ export class SportsCollectionService {
 
     return collected;
   }
-
   // ============================================================
   // ESPN — LEADERS
-  // ============================================================
-  //
-  // ESPN leader responses can vary by league. We retain the
-  // complete raw leader dataset inside the ESPN league document
-  // rather than inventing a rigid leader schema.
   // ============================================================
 
   async collectEspnLeaders(
     leagueId: string,
     response: unknown,
-    season?: number,
+    _season?: number,
   ): Promise<boolean> {
     if (response === null || response === undefined) {
       return false;
@@ -471,13 +465,15 @@ export class SportsCollectionService {
       return false;
     }
 
-    const resolvedSeason =
-      season ??
-      this.toNumber((response as any)?.season?.year) ??
-      new Date().getUTCFullYear();
-
     const existingPayload = league.payload ?? {};
 
+    /*
+     * The current season was established by the league-detail
+     * discovery stage.
+     *
+     * Leaders are additional league data and must never replace
+     * that authoritative season value.
+     */
     await this.espnLeagueModel
       .updateOne(
         {
@@ -485,12 +481,9 @@ export class SportsCollectionService {
         },
         {
           $set: {
-            season: resolvedSeason,
             payload: {
               ...existingPayload,
-
               leaders: response,
-
               leadersCollectedAt: new Date(),
             },
 
@@ -1411,5 +1404,23 @@ export class SportsCollectionService {
     const result = Number(cleaned);
 
     return Number.isFinite(result) ? result : undefined;
+  }
+
+  private formatDateForEspn(value?: Date): string | undefined {
+    if (!value) {
+      return undefined;
+    }
+
+    const date = new Date(value);
+
+    if (Number.isNaN(date.getTime())) {
+      return undefined;
+    }
+
+    const year = date.getUTCFullYear();
+    const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(date.getUTCDate()).padStart(2, '0');
+
+    return `${year}-${month}-${day}`;
   }
 }

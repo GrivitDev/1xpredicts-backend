@@ -15,7 +15,6 @@ export class SportsProviderQuotaExceededError extends Error {
     public readonly period: 'daily' | 'monthly',
   ) {
     super(`${provider} ${period} request quota has been exhausted`);
-
     this.name = 'SportsProviderQuotaExceededError';
   }
 }
@@ -31,10 +30,10 @@ export class SportsProviderRateLimitService {
   private readonly logger = new Logger(SportsProviderRateLimitService.name);
 
   /**
-   * One provider-wide request slot.
+   * Provider-wide limits.
    *
-   * The limiter is global by provider rather than
-   * separate per endpoint.
+   * The limit applies to ALL endpoints belonging to a provider.
+   * It is intentionally not endpoint-specific.
    */
   private readonly limits: Record<SportsProvider, ProviderLimitConfig> = {
     espn: {
@@ -57,8 +56,10 @@ export class SportsProviderRateLimitService {
   };
 
   /**
-   * Slightly longer than the provider interval so that
-   * concurrent callers cannot immediately reuse a slot.
+   * Keep the MongoDB lock alive slightly longer than the
+   * provider interval.
+   *
+   * The actual next-request check still uses minIntervalSeconds.
    */
   private readonly lockSeconds = 65;
 
@@ -67,23 +68,40 @@ export class SportsProviderRateLimitService {
     private readonly rateLimitModel: Model<SportsProviderRateLimitDocument>,
   ) {}
 
+  /**
+   * Execute one provider request through the shared provider-wide
+   * rate limiter.
+   */
   async execute<T>(
     provider: SportsProvider,
     operation: () => Promise<T>,
   ): Promise<T> {
     await this.acquireSlot(provider);
 
-    return operation();
+    try {
+      return await operation();
+    } finally {
+      /**
+       * Do not release the lock here.
+       *
+       * lastRequestAt is the actual provider request timestamp and
+       * therefore remains the source of truth for the next request.
+       *
+       * lockedUntil protects concurrent workers from claiming the
+       * same provider slot immediately.
+       */
+    }
   }
 
+  /**
+   * Wait until this provider has a valid outbound request slot.
+   *
+   * MongoDB provides the cross-process atomic lock, so this also
+   * works correctly when multiple NestJS workers/instances are
+   * running.
+   */
   async acquireSlot(provider: SportsProvider): Promise<void> {
-    const config = this.limits[provider];
-
-    if (!config) {
-      throw new Error(
-        `No rate-limit configuration exists for provider: ${provider}`,
-      );
-    }
+    const config = this.getConfig(provider);
 
     while (true) {
       const now = new Date();
@@ -93,9 +111,7 @@ export class SportsProviderRateLimitService {
       await this.assertQuotaAvailable(provider, now);
 
       const state = await this.rateLimitModel
-        .findOne({
-          provider,
-        })
+        .findOne({ provider })
         .lean()
         .exec();
 
@@ -115,115 +131,113 @@ export class SportsProviderRateLimitService {
 
       const lockedUntil = new Date(now.getTime() + this.lockSeconds * 1000);
 
-      const currentDailyPeriod = this.getDailyPeriod(now);
-      const currentMonthlyPeriod = this.getMonthlyPeriod(now);
+      const dailyPeriod = this.getDailyPeriod(now);
+      const monthlyPeriod = this.getMonthlyPeriod(now);
 
-      const filters: Record<string, unknown>[] = [];
+      const quotaFilters: Record<string, unknown>[] = [];
 
       if (config.dailyLimit !== undefined) {
-        filters.push(
-          this.buildDailyQuotaFilter(currentDailyPeriod, config.dailyLimit),
+        quotaFilters.push(
+          this.buildDailyQuotaFilter(dailyPeriod, config.dailyLimit),
         );
       }
 
       if (config.monthlyLimit !== undefined) {
-        filters.push(
-          this.buildMonthlyQuotaFilter(
-            currentMonthlyPeriod,
-            config.monthlyLimit,
-          ),
+        quotaFilters.push(
+          this.buildMonthlyQuotaFilter(monthlyPeriod, config.monthlyLimit),
         );
       }
 
       try {
         /**
-         * Atomically acquire the provider request slot.
-         *
-         * Mongoose timestamps manage createdAt/updatedAt.
+         * Everything required to claim the provider slot is inside
+         * one atomic MongoDB operation.
          */
-        const updated = await this.rateLimitModel.findOneAndUpdate(
-          {
-            provider,
-
-            $and: [
-              {
-                $or: [
-                  {
-                    lockedUntil: {
-                      $exists: false,
-                    },
-                  },
-                  {
-                    lockedUntil: {
-                      $lte: now,
-                    },
-                  },
-                ],
-              },
-
-              {
-                $or: [
-                  {
-                    lastRequestAt: {
-                      $exists: false,
-                    },
-                  },
-                  {
-                    lastRequestAt: {
-                      $lte: new Date(
-                        now.getTime() - config.minIntervalSeconds * 1000,
-                      ),
-                    },
-                  },
-                ],
-              },
-
-              ...filters,
-            ],
-          },
-
-          {
-            $set: {
+        const updated = await this.rateLimitModel
+          .findOneAndUpdate(
+            {
               provider,
-              lastRequestAt: now,
-              lockedUntil,
-              dailyPeriod: currentDailyPeriod,
-              monthlyPeriod: currentMonthlyPeriod,
+
+              $and: [
+                {
+                  $or: [
+                    {
+                      lockedUntil: {
+                        $exists: false,
+                      },
+                    },
+                    {
+                      lockedUntil: {
+                        $lte: now,
+                      },
+                    },
+                  ],
+                },
+
+                {
+                  $or: [
+                    {
+                      lastRequestAt: {
+                        $exists: false,
+                      },
+                    },
+                    {
+                      lastRequestAt: {
+                        $lte: new Date(
+                          now.getTime() - config.minIntervalSeconds * 1000,
+                        ),
+                      },
+                    },
+                  ],
+                },
+
+                ...quotaFilters,
+              ],
             },
 
-            $inc: {
-              dailyRequests: 1,
-              monthlyRequests: 1,
-            },
-          },
+            {
+              $set: {
+                provider,
+                lastRequestAt: now,
+                lockedUntil,
+                dailyPeriod,
+                monthlyPeriod,
+              },
 
-          {
-            returnDocument: 'after',
-            upsert: true,
-          },
-        );
+              $inc: {
+                dailyRequests: 1,
+                monthlyRequests: 1,
+              },
+            },
+
+            {
+              returnDocument: 'after',
+              upsert: true,
+            },
+          )
+          .exec();
 
         if (updated) {
           return;
         }
       } catch (error) {
         /**
-         * Another concurrent caller may have created the provider
-         * state between ensurePeriodState() and this atomic upsert.
+         * Two workers can both discover a missing provider state.
          *
-         * The unique provider index correctly rejects that insert.
-         * Re-read the state and retry instead of treating it as a
-         * provider failure.
+         * The unique provider index allows only one to create it.
+         * The losing worker simply retries.
          */
         if (this.isDuplicateProviderKeyError(error)) {
           await this.sleep(100);
-
           continue;
         }
 
         throw error;
       }
 
+      /**
+       * Another worker currently owns the provider slot.
+       */
       await this.sleep(1000);
     }
   }
@@ -231,7 +245,7 @@ export class SportsProviderRateLimitService {
   async getRemainingDailyRequests(
     provider: SportsProvider,
   ): Promise<number | null> {
-    const config = this.limits[provider];
+    const config = this.getConfig(provider);
 
     if (config.dailyLimit === undefined) {
       return null;
@@ -241,12 +255,7 @@ export class SportsProviderRateLimitService {
 
     await this.ensurePeriodState(provider, now);
 
-    const state = await this.rateLimitModel
-      .findOne({
-        provider,
-      })
-      .lean()
-      .exec();
+    const state = await this.rateLimitModel.findOne({ provider }).lean().exec();
 
     return Math.max(0, config.dailyLimit - (state?.dailyRequests ?? 0));
   }
@@ -254,7 +263,7 @@ export class SportsProviderRateLimitService {
   async getRemainingMonthlyRequests(
     provider: SportsProvider,
   ): Promise<number | null> {
-    const config = this.limits[provider];
+    const config = this.getConfig(provider);
 
     if (config.monthlyLimit === undefined) {
       return null;
@@ -264,12 +273,7 @@ export class SportsProviderRateLimitService {
 
     await this.ensurePeriodState(provider, now);
 
-    const state = await this.rateLimitModel
-      .findOne({
-        provider,
-      })
-      .lean()
-      .exec();
+    const state = await this.rateLimitModel.findOne({ provider }).lean().exec();
 
     return Math.max(0, config.monthlyLimit - (state?.monthlyRequests ?? 0));
   }
@@ -279,12 +283,7 @@ export class SportsProviderRateLimitService {
 
     await this.ensurePeriodState(provider, now);
 
-    const state = await this.rateLimitModel
-      .findOne({
-        provider,
-      })
-      .lean()
-      .exec();
+    const state = await this.rateLimitModel.findOne({ provider }).lean().exec();
 
     return state?.dailyRequests ?? 0;
   }
@@ -294,12 +293,7 @@ export class SportsProviderRateLimitService {
 
     await this.ensurePeriodState(provider, now);
 
-    const state = await this.rateLimitModel
-      .findOne({
-        provider,
-      })
-      .lean()
-      .exec();
+    const state = await this.rateLimitModel.findOne({ provider }).lean().exec();
 
     return state?.monthlyRequests ?? 0;
   }
@@ -323,54 +317,58 @@ export class SportsProviderRateLimitService {
   ): Promise<SportsProviderRateLimitDocument | null> {
     await this.ensurePeriodState(provider, new Date());
 
-    return this.rateLimitModel
-      .findOne({
-        provider,
-      })
-      .exec();
+    return this.rateLimitModel.findOne({ provider }).exec();
   }
 
   async clearExpiredLocks(): Promise<number> {
-    const result = await this.rateLimitModel.updateMany(
-      {
-        lockedUntil: {
-          $lt: new Date(),
+    const result = await this.rateLimitModel
+      .updateMany(
+        {
+          lockedUntil: {
+            $lt: new Date(),
+          },
         },
-      },
-      {
-        $unset: {
-          lockedUntil: 1,
+        {
+          $unset: {
+            lockedUntil: 1,
+          },
         },
-      },
-    );
+      )
+      .exec();
 
     return result.modifiedCount;
+  }
+
+  private getConfig(provider: SportsProvider): ProviderLimitConfig {
+    const config = this.limits[provider];
+
+    if (!config) {
+      throw new Error(
+        `No rate-limit configuration exists for provider: ${provider}`,
+      );
+    }
+
+    return config;
   }
 
   private async assertQuotaAvailable(
     provider: SportsProvider,
     now: Date,
   ): Promise<void> {
-    const config = this.limits[provider];
+    const config = this.getConfig(provider);
 
-    const state = await this.rateLimitModel
-      .findOne({
-        provider,
-      })
-      .lean()
-      .exec();
+    const state = await this.rateLimitModel.findOne({ provider }).lean().exec();
 
     if (!state) {
       return;
     }
 
-    const currentDailyPeriod = this.getDailyPeriod(now);
-
-    const currentMonthlyPeriod = this.getMonthlyPeriod(now);
+    const dailyPeriod = this.getDailyPeriod(now);
+    const monthlyPeriod = this.getMonthlyPeriod(now);
 
     if (
       config.dailyLimit !== undefined &&
-      state.dailyPeriod === currentDailyPeriod &&
+      state.dailyPeriod === dailyPeriod &&
       state.dailyRequests >= config.dailyLimit
     ) {
       throw new SportsProviderQuotaExceededError(provider, 'daily');
@@ -378,7 +376,7 @@ export class SportsProviderRateLimitService {
 
     if (
       config.monthlyLimit !== undefined &&
-      state.monthlyPeriod === currentMonthlyPeriod &&
+      state.monthlyPeriod === monthlyPeriod &&
       state.monthlyRequests >= config.monthlyLimit
     ) {
       throw new SportsProviderQuotaExceededError(provider, 'monthly');
@@ -433,9 +431,7 @@ export class SportsProviderRateLimitService {
     const monthlyPeriod = this.getMonthlyPeriod(now);
 
     const existing = await this.rateLimitModel
-      .findOne({
-        provider,
-      })
+      .findOne({ provider })
       .lean()
       .exec();
 
@@ -443,20 +439,17 @@ export class SportsProviderRateLimitService {
       try {
         await this.rateLimitModel.create({
           provider,
-          lockedUntil: undefined,
-          lastRequestAt: undefined,
           dailyPeriod,
           dailyRequests: 0,
           monthlyPeriod,
           monthlyRequests: 0,
         });
+
+        return;
       } catch (error) {
         /**
-         * Multiple startup workers may initialize the same
-         * provider simultaneously. A unique provider index is
-         * expected and protects against duplicate state.
-         *
-         * If another worker won the race, simply continue.
+         * Another worker may have created the provider state
+         * between findOne() and create().
          */
         if (this.isDuplicateProviderKeyError(error)) {
           return;
@@ -464,8 +457,6 @@ export class SportsProviderRateLimitService {
 
         throw error;
       }
-
-      return;
     }
 
     const update: Record<string, unknown> = {};
@@ -484,17 +475,14 @@ export class SportsProviderRateLimitService {
       return;
     }
 
-    /**
-     * Mongoose timestamps manage updatedAt automatically.
-     */
-    await this.rateLimitModel.updateOne(
-      {
-        provider,
-      },
-      {
-        $set: update,
-      },
-    );
+    await this.rateLimitModel
+      .updateOne(
+        { provider },
+        {
+          $set: update,
+        },
+      )
+      .exec();
   }
 
   private isDuplicateProviderKeyError(error: unknown): boolean {
@@ -524,8 +512,8 @@ export class SportsProviderRateLimitService {
   }
 
   private async sleep(milliseconds: number): Promise<void> {
-    await new Promise<void>((resolve) =>
-      setTimeout(resolve, Math.max(0, milliseconds)),
-    );
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, Math.max(0, milliseconds));
+    });
   }
 }

@@ -1,10 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import {
-  ApplyBasicQueryCasting,
-  HydratedDocument,
-  ObjectId,
-  StrictCondition,
-} from 'mongoose';
+import { HydratedDocument } from 'mongoose';
 
 import { CompetitionPriority } from '../../enums/competition-priority.enum';
 
@@ -23,16 +18,12 @@ export class EspnLeague {
     unique: true,
     index: true,
     trim: true,
+    lowercase: true,
   })
   leagueId!: string;
 
   /**
-   * ESPN league slug used in provider URLs.
-   *
-   * Examples:
-   * eng.1
-   * esp.1
-   * uefa.champions
+   * ESPN league slug used by ESPN provider endpoints.
    */
   @Prop({
     required: true,
@@ -64,22 +55,20 @@ export class EspnLeague {
   /**
    * Application classification.
    *
-   * Null means ESPN discovered the league but it is
-   * not one of our configured priority competitions.
+   * Unconfigured ESPN leagues are retained and classified
+   * as SELECTIVE.
    */
   @Prop({
     type: String,
-    enum: [...Object.values(CompetitionPriority), null],
-    default: null,
+    enum: Object.values(CompetitionPriority),
+    default: CompetitionPriority.SELECTIVE,
     index: true,
   })
-  priority?: CompetitionPriority | null;
+  priority!: CompetitionPriority;
 
   /**
-   * Convenience classification flag.
-   *
-   * This belongs to the ESPN catalogue only.
-   * It is not used by ActiveCompetition.
+   * True only for competitions configured in the application's
+   * priority competition registry.
    */
   @Prop({
     type: Boolean,
@@ -89,7 +78,8 @@ export class EspnLeague {
   isPriority!: boolean;
 
   /**
-   * Whether ESPN currently exposes the league.
+   * Whether the league currently has a usable current season
+   * according to its ESPN league-detail response.
    */
   @Prop({
     type: Boolean,
@@ -99,7 +89,7 @@ export class EspnLeague {
   isActive!: boolean;
 
   /**
-   * Current season year.
+   * Current ESPN season year.
    */
   @Prop({
     type: Number,
@@ -107,24 +97,36 @@ export class EspnLeague {
   })
   season?: number;
 
+  /**
+   * Current ESPN season start date.
+   */
   @Prop({
     type: Date,
     index: true,
   })
   seasonStartDate?: Date;
 
+  /**
+   * Current ESPN season end date.
+   */
   @Prop({
     type: Date,
     index: true,
   })
   seasonEndDate?: Date;
 
+  /**
+   * Latest stored fixture date for this league.
+   */
   @Prop({
     type: Date,
     index: true,
   })
   lastFixtureDate?: Date;
 
+  /**
+   * Next stored fixture date for this league.
+   */
   @Prop({
     type: Date,
     index: true,
@@ -132,7 +134,11 @@ export class EspnLeague {
   nextFixtureDate?: Date;
 
   /**
-   * Full ESPN league payload.
+   * Complete ESPN league payload.
+   *
+   * Catalogue response is stored here first.
+   * League-detail response replaces it during detail
+   * synchronization.
    */
   @Prop({
     type: Object,
@@ -140,15 +146,13 @@ export class EspnLeague {
   payload?: Record<string, unknown>;
 
   /**
-   * Last catalogue synchronization.
+   * Last time the league record was synchronized from ESPN.
    */
   @Prop({
     type: Date,
     index: true,
   })
   lastSyncedAt!: Date;
-  region: any;
-  _id: StrictCondition<ApplyBasicQueryCasting<ObjectId>> | undefined;
 }
 
 export const EspnLeagueSchema = SchemaFactory.createForClass(EspnLeague);

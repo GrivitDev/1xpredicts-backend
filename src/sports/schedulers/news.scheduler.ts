@@ -3,14 +3,19 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 
 import { EspnService } from '../providers/espn.service';
+import { EspnActiveCompetitionService } from '../services/espn-active-competition.service';
 
 @Injectable()
 export class NewsScheduler {
   private readonly logger = new Logger(NewsScheduler.name);
 
   private running = false;
+  private catalogueRefreshRunning = false;
 
-  constructor(private readonly espnService: EspnService) {}
+  constructor(
+    private readonly espnService: EspnService,
+    private readonly espnActiveCompetitionService: EspnActiveCompetitionService,
+  ) {}
 
   // ============================================================
   // MORNING NEWS
@@ -34,6 +39,63 @@ export class NewsScheduler {
   })
   async collectEveningNews(): Promise<void> {
     await this.collectNews('evening');
+  }
+
+  // ============================================================
+  // MONTHLY ESPN CATALOGUE REFRESH
+  // ============================================================
+
+  @Cron('0 2 1 * *', {
+    name: 'espn-monthly-catalogue-refresh',
+    timeZone: 'Africa/Lagos',
+  })
+  async refreshEspnCatalogue(): Promise<void> {
+    if (this.catalogueRefreshRunning) {
+      this.logger.warn(
+        'Skipping monthly ESPN catalogue refresh because another catalogue refresh is already running',
+      );
+
+      return;
+    }
+
+    this.catalogueRefreshRunning = true;
+
+    try {
+      this.logger.log('Starting monthly ESPN league catalogue refresh');
+
+      // ========================================================
+      // STEP 1 — COMPLETE ESPN CATALOGUE
+      // ========================================================
+
+      const leagues =
+        await this.espnActiveCompetitionService.synchronizeLeagueCatalogue();
+
+      this.logger.log(
+        `Monthly ESPN league catalogue synchronized: ${leagues.length} leagues`,
+      );
+
+      // ========================================================
+      // STEP 2 — LEAGUE DETAILS + ACTIVE SEASONS
+      // ========================================================
+
+      const result =
+        await this.espnActiveCompetitionService.synchronizeLeagueDetails();
+
+      this.logger.log(
+        `Monthly ESPN league season refresh completed: ` +
+          `processed=${result.processed}, ` +
+          `synchronized=${result.synchronized}, ` +
+          `skipped=${result.skipped}, ` +
+          `failed=${result.failed}`,
+      );
+    } catch (error) {
+      this.logger.error(
+        'Monthly ESPN league catalogue refresh failed',
+        error instanceof Error ? error.stack : String(error),
+      );
+    } finally {
+      this.catalogueRefreshRunning = false;
+    }
   }
 
   // ============================================================

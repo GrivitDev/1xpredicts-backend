@@ -232,7 +232,7 @@ export class EspnQueueService {
           $set: {
             status: EspnQueueStatus.PENDING,
             nextAttemptAt: new Date(Date.now() + retryDelayMs),
-            error: message,
+            lastError: message,
           },
 
           $unset: {
@@ -252,7 +252,8 @@ export class EspnQueueService {
       {
         $set: {
           status: EspnQueueStatus.FAILED,
-          error: message,
+          lastError: message,
+          failedAt: new Date(),
           completedAt: new Date(),
         },
 
@@ -282,7 +283,7 @@ export class EspnQueueService {
         $set: {
           status: EspnQueueStatus.PENDING,
           nextAttemptAt: new Date(),
-          error: 'Recovered stale processing job',
+          lastError: 'Recovered stale processing job',
         },
 
         $unset: {

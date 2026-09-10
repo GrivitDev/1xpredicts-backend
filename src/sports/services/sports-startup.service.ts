@@ -1,6 +1,7 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 
 import { EspnActiveCompetitionService } from './espn-active-competition.service';
+import { EspnQueueBuilderService } from './espn-queue-builder.service';
 import { EspnQueueService } from './espn-queue.service';
 
 @Injectable()
@@ -9,18 +10,16 @@ export class SportsStartupService implements OnModuleInit {
 
   constructor(
     private readonly espnActiveCompetitionService: EspnActiveCompetitionService,
+    private readonly espnQueueBuilderService: EspnQueueBuilderService,
     private readonly espnQueueService: EspnQueueService,
   ) {}
 
   /**
-   * Start the ESPN initialization process without blocking
-   * NestJS application startup.
+   * Do not block NestJS bootstrap.
    *
-   * This is important because ESPN requests are subject to
-   * the shared provider-wide 60-second rate limiter.
-   *
-   * The application must begin listening before the catalogue
-   * synchronization performs potentially multiple requests.
+   * ESPN catalogue discovery and league-detail discovery are
+   * intentionally slow because every outbound ESPN request
+   * shares the provider-wide rate limiter.
    */
   onModuleInit(): void {
     this.logger.log('Starting ESPN background initialization');
@@ -31,22 +30,23 @@ export class SportsStartupService implements OnModuleInit {
   }
 
   /**
-   * Performs the complete ESPN startup initialization after
-   * NestJS has been allowed to finish bootstrapping.
+   * Startup flow:
+   *
+   * 1. Discover the complete ESPN catalogue.
+   * 2. Store/classify every league.
+   * 3. Process every league detail one-by-one.
+   * 4. Extract the current season and season dates.
+   * 5. Create/update ActiveCompetition records.
+   * 6. Build the initial queue from stored information.
+   *
+   * getLeagues() is only called here at startup and by the
+   * dedicated monthly catalogue refresh scheduler.
    */
   private async initializeEspn(): Promise<void> {
-    /*
-     * ============================================================
-     * ESPN CATALOGUE
-     * ============================================================
-     *
-     * Catalogue synchronization discovers and stores the ESPN
-     * leagues.
-     *
-     * This can require multiple provider requests because the
-     * ESPN catalogue is paginated and every request is subject
-     * to the shared ESPN rate limiter.
-     */
+    // ==========================================================
+    // STEP 1 — COMPLETE ESPN CATALOGUE
+    // ==========================================================
+
     let leagues: unknown[] = [];
 
     try {
@@ -65,84 +65,56 @@ export class SportsStartupService implements OnModuleInit {
       return;
     }
 
-    /*
-     * ============================================================
-     * INITIAL LEAGUE QUEUE
-     * ============================================================
-     *
-     * One LEAGUE_REFRESH job is created for every discovered
-     * league.
-     *
-     * No detailed ESPN requests are made directly here.
-     * The ESPN queue worker performs those requests.
-     */
-    let queued = 0;
-    let skipped = 0;
+    // ==========================================================
+    // STEP 2 — LEAGUE DETAILS + ACTIVE SEASONS
+    // ==========================================================
 
-    for (const value of leagues) {
-      if (!value || typeof value !== 'object') {
-        skipped += 1;
-        continue;
-      }
+    try {
+      const result =
+        await this.espnActiveCompetitionService.synchronizeLeagueDetails();
 
-      const league = value as Record<string, unknown>;
+      this.logger.log(
+        `ESPN league season discovery completed: ` +
+          `processed=${result.processed}, ` +
+          `synchronized=${result.synchronized}, ` +
+          `skipped=${result.skipped}, ` +
+          `failed=${result.failed}`,
+      );
+    } catch (error) {
+      this.logger.error(
+        'ESPN league detail synchronization failed',
+        error instanceof Error ? error.stack : String(error),
+      );
 
-      const leagueId =
-        typeof league.id === 'string'
-          ? league.id.trim()
-          : typeof league.leagueId === 'string'
-            ? league.leagueId.trim()
-            : typeof league.slug === 'string'
-              ? league.slug.trim()
-              : '';
-
-      if (!leagueId) {
-        skipped += 1;
-        continue;
-      }
-
-      const season =
-        typeof league.season === 'number' ? league.season : undefined;
-
-      const priority =
-        typeof league.priority === 'number' ? league.priority : 99;
-
-      try {
-        const job = await this.espnQueueService.addLeagueRefreshJob({
-          leagueId,
-          season,
-          priority,
-          scheduledFor: new Date(),
-        });
-
-        if (job) {
-          queued += 1;
-        } else {
-          skipped += 1;
-        }
-      } catch (error) {
-        skipped += 1;
-
-        this.logger.warn(
-          `Unable to queue ESPN league ${leagueId}: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-        );
-      }
+      return;
     }
 
-    this.logger.log(
-      `ESPN initial league queue created: ` +
-        `${queued} queued, ${skipped} skipped`,
-    );
+    // ==========================================================
+    // STEP 3 — INITIAL PRIORITY QUEUE
+    // ==========================================================
 
-    /*
-     * ============================================================
-     * QUEUE STATE
-     * ============================================================
-     *
-     * MongoDB only. No provider request is made here.
-     */
+    try {
+      const result =
+        await this.espnQueueBuilderService.buildInitialLeagueQueue();
+
+      this.logger.log(
+        `ESPN initial queue built: ` +
+          `queued=${result.queued}, ` +
+          `skipped=${result.skipped}`,
+      );
+    } catch (error) {
+      this.logger.error(
+        'ESPN initial queue construction failed',
+        error instanceof Error ? error.stack : String(error),
+      );
+
+      return;
+    }
+
+    // ==========================================================
+    // STEP 4 — QUEUE STATE
+    // ==========================================================
+
     try {
       const stats = await this.getQueueStats();
 
@@ -170,38 +142,11 @@ export class SportsStartupService implements OnModuleInit {
     completed: number;
     failed: number;
   }> {
-    type QueueStats = {
-      pending: number;
-      processing: number;
-      completed: number;
-      failed: number;
-    };
-
-    type QueueStatsService = {
-      getQueueStats?: () => Promise<QueueStats>;
-      getCounts?: () => Promise<QueueStats>;
-      getQueueCounts?: () => Promise<QueueStats>;
-    };
-
-    const service = this.espnQueueService as unknown as QueueStatsService;
-
-    if (typeof service.getQueueStats === 'function') {
-      return service.getQueueStats();
-    }
-
-    if (typeof service.getCounts === 'function') {
-      return service.getCounts();
-    }
-
-    if (typeof service.getQueueCounts === 'function') {
-      return service.getQueueCounts();
-    }
-
     return {
-      pending: 0,
-      processing: 0,
-      completed: 0,
-      failed: 0,
+      pending: await this.espnQueueService.countPending(),
+      processing: await this.espnQueueService.countProcessing(),
+      completed: await this.espnQueueService.countCompleted(),
+      failed: await this.espnQueueService.countFailed(),
     };
   }
 }
