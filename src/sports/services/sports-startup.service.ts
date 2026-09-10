@@ -12,14 +12,40 @@ export class SportsStartupService implements OnModuleInit {
     private readonly espnQueueService: EspnQueueService,
   ) {}
 
-  async onModuleInit(): Promise<void> {
+  /**
+   * Start the ESPN initialization process without blocking
+   * NestJS application startup.
+   *
+   * This is important because ESPN requests are subject to
+   * the shared provider-wide 60-second rate limiter.
+   *
+   * The application must begin listening before the catalogue
+   * synchronization performs potentially multiple requests.
+   */
+  onModuleInit(): void {
+    this.logger.log('Starting ESPN background initialization');
+
+    setTimeout(() => {
+      void this.initializeEspn();
+    }, 0);
+  }
+
+  /**
+   * Performs the complete ESPN startup initialization after
+   * NestJS has been allowed to finish bootstrapping.
+   */
+  private async initializeEspn(): Promise<void> {
     /*
      * ============================================================
      * ESPN CATALOGUE
      * ============================================================
      *
      * Catalogue synchronization discovers and stores the ESPN
-     * leagues. It does not perform detailed match collection.
+     * leagues.
+     *
+     * This can require multiple provider requests because the
+     * ESPN catalogue is paginated and every request is subject
+     * to the shared ESPN rate limiter.
      */
     let leagues: unknown[] = [];
 
@@ -44,10 +70,11 @@ export class SportsStartupService implements OnModuleInit {
      * INITIAL LEAGUE QUEUE
      * ============================================================
      *
-     * One LEAGUE_REFRESH job is created for every discovered league.
+     * One LEAGUE_REFRESH job is created for every discovered
+     * league.
      *
-     * No detailed ESPN requests are made here.
-     * The queue worker performs those requests one at a time.
+     * No detailed ESPN requests are made directly here.
+     * The ESPN queue worker performs those requests.
      */
     let queued = 0;
     let skipped = 0;
@@ -133,6 +160,8 @@ export class SportsStartupService implements OnModuleInit {
         }`,
       );
     }
+
+    this.logger.log('ESPN background initialization completed');
   }
 
   private async getQueueStats(): Promise<{

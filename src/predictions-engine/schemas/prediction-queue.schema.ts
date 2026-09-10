@@ -130,7 +130,3 @@ PredictionQueueSchema.index({
   status: 1,
   lockedUntil: 1,
 });
-
-PredictionQueueSchema.index({
-  kickoff: 1,
-});
