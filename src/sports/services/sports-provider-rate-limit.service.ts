@@ -37,7 +37,7 @@ export class SportsProviderRateLimitService {
    */
   private readonly limits: Record<SportsProvider, ProviderLimitConfig> = {
     espn: {
-      minIntervalSeconds: 60,
+      minIntervalSeconds: 10,
     },
 
     'football-data': {
@@ -56,12 +56,13 @@ export class SportsProviderRateLimitService {
   };
 
   /**
-   * Keep the MongoDB lock alive slightly longer than the
-   * provider interval.
+   * Keep the MongoDB lock slightly longer than the ESPN
+   * request interval.
    *
-   * The actual next-request check still uses minIntervalSeconds.
+   * ESPN interval = 10 seconds.
+   * Lock = 15 seconds.
    */
-  private readonly lockSeconds = 65;
+  private readonly lockSeconds = 15;
 
   constructor(
     @InjectModel(SportsProviderRateLimit.name)

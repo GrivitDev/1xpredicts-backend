@@ -10,11 +10,11 @@ export const SPORTS_DATA_COLLECTION_CONFIG = {
      * ESPN does not have an application-level daily quota
      * in our collection architecture.
      *
-     * We still enforce one outbound ESPN request per minute
-     * through the provider rate-limit service.
+     * We enforce one outbound ESPN request every 10 seconds
+     * through the provider-wide rate-limit service.
      */
     rateLimit: {
-      minIntervalSeconds: 60,
+      minIntervalSeconds: 10,
     },
 
     /**
@@ -41,10 +41,12 @@ export const SPORTS_DATA_COLLECTION_CONFIG = {
      * Fixture collection.
      *
      * Active competitions are processed according to priority.
+     *
+     * 0.5 minutes = 30 seconds.
      */
     fixtures: {
       enabled: true,
-      slotIntervalMinutes: 1,
+      slotIntervalMinutes: 0.5,
     },
 
     /**
