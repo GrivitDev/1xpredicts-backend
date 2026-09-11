@@ -84,7 +84,10 @@ export class FootballDataService implements OnModuleInit {
   // ============================================================
 
   async getCompetitions(): Promise<FootballDataCompetitionListResponse> {
-    return this.request<FootballDataCompetitionListResponse>('/competitions');
+    return this.request<FootballDataCompetitionListResponse>(
+      '/competitions',
+      'competitions',
+    );
   }
 
   async getCompetition(
@@ -92,7 +95,10 @@ export class FootballDataService implements OnModuleInit {
   ): Promise<FootballDataCompetition> {
     const code = this.normalizeCompetitionCode(competitionCode);
 
-    return this.request<FootballDataCompetition>(`/competitions/${code}`);
+    return this.request<FootballDataCompetition>(
+      `/competitions/${code}`,
+      'competition',
+    );
   }
 
   // ============================================================
@@ -102,22 +108,22 @@ export class FootballDataService implements OnModuleInit {
   /**
    * Global matches endpoint.
    *
-   * This is used for bulk collection across several
-   * Football-Data competitions.
+   * All query variations use the same "matches"
+   * rate-limit slot.
    */
   async getMatches(
     query: FootballDataMatchQuery = {},
   ): Promise<FootballDataMatchListResponse> {
-    return this.request<FootballDataMatchListResponse>('/matches', {
+    return this.request<FootballDataMatchListResponse>('/matches', 'matches', {
       params: this.cleanQuery(query),
     });
   }
 
   /**
-   * Matches for one competition.
+   * Competition-scoped matches endpoint.
    *
-   * Kept as a convenience method for competition-scoped
-   * collection where it is preferable to the global endpoint.
+   * All competition-specific requests use the same
+   * "competition-matches" endpoint slot.
    */
   async getCompetitionMatches(
     competitionCode: string,
@@ -127,6 +133,7 @@ export class FootballDataService implements OnModuleInit {
 
     return this.request<FootballDataMatchListResponse>(
       `/competitions/${code}/matches`,
+      'competition-matches',
       {
         params: this.cleanQuery(query),
       },
@@ -205,6 +212,7 @@ export class FootballDataService implements OnModuleInit {
 
     return this.request<FootballDataStandingsResponse>(
       `/competitions/${code}/standings`,
+      'standings',
       {
         params:
           season === undefined
@@ -228,6 +236,7 @@ export class FootballDataService implements OnModuleInit {
 
     return this.request<FootballDataTeamListResponse>(
       `/competitions/${code}/teams`,
+      'teams',
       {
         params:
           season === undefined
@@ -245,6 +254,7 @@ export class FootballDataService implements OnModuleInit {
 
   private async request<T>(
     path: string,
+    rateLimitEndpoint: string,
     config: {
       params?: Record<string, string | number>;
     } = {},
@@ -255,15 +265,19 @@ export class FootballDataService implements OnModuleInit {
       );
     }
 
-    return this.providerRateLimitService.execute('football-data', async () => {
-      try {
-        const response = await this.client.get<T>(path, config);
+    return this.providerRateLimitService.execute(
+      'football-data',
+      rateLimitEndpoint,
+      async () => {
+        try {
+          const response = await this.client.get<T>(path, config);
 
-        return response.data;
-      } catch (error) {
-        return this.handleRequestError(error, path);
-      }
-    });
+          return response.data;
+        } catch (error) {
+          return this.handleRequestError(error, path);
+        }
+      },
+    );
   }
 
   // ============================================================

@@ -14,7 +14,7 @@ export const SPORTS_DATA_COLLECTION_CONFIG = {
      * through the provider-wide rate-limit service.
      */
     rateLimit: {
-      minIntervalSeconds: 10,
+      minIntervalSeconds: 5,
     },
 
     /**

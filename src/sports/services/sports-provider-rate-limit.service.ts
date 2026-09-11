@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 
@@ -30,14 +31,18 @@ export class SportsProviderRateLimitService {
   private readonly logger = new Logger(SportsProviderRateLimitService.name);
 
   /**
-   * Provider-wide limits.
+   * The interval applies independently to each endpoint.
    *
-   * The limit applies to ALL endpoints belonging to a provider.
-   * It is intentionally not endpoint-specific.
+   * Example:
+   *
+   * ESPN scoreboard -> 10 seconds
+   * ESPN standings  -> 10 seconds
+   *
+   * A scoreboard request does NOT block a standings request.
    */
   private readonly limits: Record<SportsProvider, ProviderLimitConfig> = {
     espn: {
-      minIntervalSeconds: 10,
+      minIntervalSeconds: 5,
     },
 
     'football-data': {
@@ -56,52 +61,82 @@ export class SportsProviderRateLimitService {
   };
 
   /**
-   * Keep the MongoDB lock slightly longer than the ESPN
-   * request interval.
+   * Special endpoint used for provider-wide quota accounting.
    *
-   * ESPN interval = 10 seconds.
-   * Lock = 15 seconds.
+   * This record does NOT participate in endpoint throttling.
    */
-  private readonly lockSeconds = 15;
+  private readonly PROVIDER_QUOTA_ENDPOINT = '__provider_quota__';
+
+  /**
+   * Lock ownership must survive normal HTTP request duration.
+   *
+   * Axios timeout in EspnService is 15 seconds, so 30 seconds
+   * gives sufficient protection against overlapping workers.
+   *
+   * The lock is released immediately after the request finishes,
+   * so the 30-second value is only a crash-recovery ceiling.
+   */
+  private readonly lockSeconds = 30;
 
   constructor(
     @InjectModel(SportsProviderRateLimit.name)
     private readonly rateLimitModel: Model<SportsProviderRateLimitDocument>,
   ) {}
 
+  // ============================================================
+  // PUBLIC REQUEST EXECUTION
+  // ============================================================
+
   /**
-   * Execute one provider request through the shared provider-wide
-   * rate limiter.
+   * Execute one outbound request against a specific endpoint.
+   *
+   * IMPORTANT:
+   *
+   * endpoint is a stable logical endpoint identifier.
+   *
+   * Example:
+   *
+   * execute('espn', 'scoreboard', operation)
+   *
+   * Query parameters such as:
+   *
+   * ?dates=20260901-20260910
+   *
+   * must NOT become part of the endpoint key.
+   *
+   * Therefore all scoreboard pages share the same scoreboard
+   * rate-limit slot.
    */
   async execute<T>(
     provider: SportsProvider,
+    endpoint: string,
     operation: () => Promise<T>,
   ): Promise<T> {
-    await this.acquireSlot(provider);
+    const normalizedEndpoint = this.normalizeEndpoint(endpoint);
+
+    await this.acquireSlot(provider, normalizedEndpoint);
 
     try {
       return await operation();
     } finally {
-      /**
-       * Do not release the lock here.
-       *
-       * lastRequestAt is the actual provider request timestamp and
-       * therefore remains the source of truth for the next request.
-       *
-       * lockedUntil protects concurrent workers from claiming the
-       * same provider slot immediately.
-       */
+      await this.releaseSlot(provider, normalizedEndpoint);
     }
   }
 
+  // ============================================================
+  // ENDPOINT SLOT
+  // ============================================================
+
   /**
-   * Wait until this provider has a valid outbound request slot.
+   * Acquire one endpoint-specific execution slot.
    *
-   * MongoDB provides the cross-process atomic lock, so this also
-   * works correctly when multiple NestJS workers/instances are
-   * running.
+   * This method waits rather than dropping requests.
+   *
+   * MongoDB provides cross-worker atomic ownership.
    */
-  async acquireSlot(provider: SportsProvider): Promise<void> {
+  async acquireSlot(provider: SportsProvider, endpoint: string): Promise<void> {
+    const normalizedEndpoint = this.normalizeEndpoint(endpoint);
+
     const config = this.getConfig(provider);
 
     while (true) {
@@ -109,10 +144,16 @@ export class SportsProviderRateLimitService {
 
       await this.ensurePeriodState(provider, now);
 
-      await this.assertQuotaAvailable(provider, now);
-
+      /**
+       * First wait for the endpoint's own interval.
+       *
+       * This is NOT provider-wide.
+       */
       const state = await this.rateLimitModel
-        .findOne({ provider })
+        .findOne({
+          provider,
+          endpoint: normalizedEndpoint,
+        })
         .lean()
         .exec();
 
@@ -130,34 +171,24 @@ export class SportsProviderRateLimitService {
         continue;
       }
 
+      /**
+       * Atomic endpoint lock.
+       *
+       * We intentionally do NOT update lastRequestAt yet.
+       *
+       * This creates a temporary ownership lock while the
+       * provider-wide quota is reserved.
+       */
       const lockedUntil = new Date(now.getTime() + this.lockSeconds * 1000);
 
-      const dailyPeriod = this.getDailyPeriod(now);
-      const monthlyPeriod = this.getMonthlyPeriod(now);
-
-      const quotaFilters: Record<string, unknown>[] = [];
-
-      if (config.dailyLimit !== undefined) {
-        quotaFilters.push(
-          this.buildDailyQuotaFilter(dailyPeriod, config.dailyLimit),
-        );
-      }
-
-      if (config.monthlyLimit !== undefined) {
-        quotaFilters.push(
-          this.buildMonthlyQuotaFilter(monthlyPeriod, config.monthlyLimit),
-        );
-      }
+      let updated: SportsProviderRateLimitDocument | null = null;
 
       try {
-        /**
-         * Everything required to claim the provider slot is inside
-         * one atomic MongoDB operation.
-         */
-        const updated = await this.rateLimitModel
+        updated = await this.rateLimitModel
           .findOneAndUpdate(
             {
               provider,
+              endpoint: normalizedEndpoint,
 
               $and: [
                 {
@@ -191,23 +222,14 @@ export class SportsProviderRateLimitService {
                     },
                   ],
                 },
-
-                ...quotaFilters,
               ],
             },
 
             {
               $set: {
                 provider,
-                lastRequestAt: now,
+                endpoint: normalizedEndpoint,
                 lockedUntil,
-                dailyPeriod,
-                monthlyPeriod,
-              },
-
-              $inc: {
-                dailyRequests: 1,
-                monthlyRequests: 1,
               },
             },
 
@@ -217,18 +239,12 @@ export class SportsProviderRateLimitService {
             },
           )
           .exec();
-
-        if (updated) {
-          return;
-        }
       } catch (error) {
         /**
-         * Two workers can both discover a missing provider state.
-         *
-         * The unique provider index allows only one to create it.
-         * The losing worker simply retries.
+         * Another worker may have created the endpoint record
+         * concurrently.
          */
-        if (this.isDuplicateProviderKeyError(error)) {
+        if (this.isDuplicateEndpointKeyError(error)) {
           await this.sleep(100);
           continue;
         }
@@ -236,11 +252,218 @@ export class SportsProviderRateLimitService {
         throw error;
       }
 
+      if (!updated) {
+        /**
+         * Another worker owns the endpoint.
+         */
+        await this.sleep(250);
+        continue;
+      }
+
       /**
-       * Another worker currently owns the provider slot.
+       * Reserve provider-wide quota only after we own
+       * the endpoint slot.
+       *
+       * Because this update is atomic, simultaneous requests
+       * from different endpoints cannot exceed the quota.
        */
-      await this.sleep(1000);
+      const quotaReserved = await this.reserveProviderQuota(provider, now);
+
+      if (!quotaReserved) {
+        /**
+         * We acquired the endpoint temporarily but the
+         * provider-wide quota is exhausted.
+         *
+         * Release the endpoint immediately.
+         */
+        await this.rateLimitModel
+          .updateOne(
+            {
+              provider,
+              endpoint: normalizedEndpoint,
+              lockedUntil,
+            },
+            {
+              $unset: {
+                lockedUntil: 1,
+              },
+            },
+          )
+          .exec();
+
+        throw await this.createQuotaExceededError(provider);
+      }
+
+      /**
+       * The quota has now been reserved and the request is
+       * officially allowed to leave the application.
+       *
+       * lastRequestAt is therefore the actual request-start
+       * timestamp.
+       */
+      await this.rateLimitModel
+        .updateOne(
+          {
+            provider,
+            endpoint: normalizedEndpoint,
+            lockedUntil,
+          },
+          {
+            $set: {
+              lastRequestAt: now,
+            },
+          },
+        )
+        .exec();
+
+      return;
     }
+  }
+
+  /**
+   * Release an endpoint lock after the operation finishes.
+   *
+   * lastRequestAt remains untouched, so the endpoint still
+   * respects its configured interval.
+   */
+  async releaseSlot(provider: SportsProvider, endpoint: string): Promise<void> {
+    const normalizedEndpoint = this.normalizeEndpoint(endpoint);
+
+    try {
+      await this.rateLimitModel
+        .updateOne(
+          {
+            provider,
+            endpoint: normalizedEndpoint,
+          },
+          {
+            $unset: {
+              lockedUntil: 1,
+            },
+          },
+        )
+        .exec();
+    } catch (error) {
+      /**
+       * A failed unlock is not allowed to fail the provider
+       * operation. The TTL-style lock remains recoverable by
+       * the next acquireSlot() call.
+       */
+      this.logger.warn(
+        `Failed to release rate-limit lock for ${provider}/${normalizedEndpoint}`,
+        error,
+      );
+    }
+  }
+
+  // ============================================================
+  // QUOTA
+  // ============================================================
+
+  /**
+   * Atomically reserve provider-wide quota.
+   *
+   * This is shared by ALL endpoints for that provider.
+   */
+  private async reserveProviderQuota(
+    provider: SportsProvider,
+    now: Date,
+  ): Promise<boolean> {
+    const config = this.getConfig(provider);
+
+    /**
+     * Providers without quota limits do not need quota
+     * accounting to block execution.
+     */
+    if (config.dailyLimit === undefined && config.monthlyLimit === undefined) {
+      return true;
+    }
+
+    const dailyPeriod = this.getDailyPeriod(now);
+    const monthlyPeriod = this.getMonthlyPeriod(now);
+
+    const filters: Record<string, unknown>[] = [
+      {
+        provider,
+        endpoint: this.PROVIDER_QUOTA_ENDPOINT,
+      },
+    ];
+
+    const periodFilters: Record<string, unknown>[] = [];
+
+    if (config.dailyLimit !== undefined) {
+      periodFilters.push({
+        $or: [
+          {
+            dailyPeriod: {
+              $ne: dailyPeriod,
+            },
+          },
+          {
+            dailyRequests: {
+              $lt: config.dailyLimit,
+            },
+          },
+        ],
+      });
+    }
+
+    if (config.monthlyLimit !== undefined) {
+      periodFilters.push({
+        $or: [
+          {
+            monthlyPeriod: {
+              $ne: monthlyPeriod,
+            },
+          },
+          {
+            monthlyRequests: {
+              $lt: config.monthlyLimit,
+            },
+          },
+        ],
+      });
+    }
+
+    const filter: Record<string, unknown> = {
+      $and: [...filters, ...periodFilters],
+    };
+
+    const increment: Record<string, number> = {};
+
+    if (config.dailyLimit !== undefined) {
+      increment.dailyRequests = 1;
+    }
+
+    if (config.monthlyLimit !== undefined) {
+      increment.monthlyRequests = 1;
+    }
+
+    const updated = await this.rateLimitModel
+      .findOneAndUpdate(
+        filter,
+        {
+          $set: {
+            provider,
+            endpoint: this.PROVIDER_QUOTA_ENDPOINT,
+            dailyPeriod,
+            monthlyPeriod,
+          },
+
+          $inc: increment,
+        },
+        {
+          returnDocument: 'after',
+          upsert: true,
+        },
+      )
+      .exec();
+
+    if (updated) {
+      return true;
+    }
+
+    return false;
   }
 
   async getRemainingDailyRequests(
@@ -256,7 +479,13 @@ export class SportsProviderRateLimitService {
 
     await this.ensurePeriodState(provider, now);
 
-    const state = await this.rateLimitModel.findOne({ provider }).lean().exec();
+    const state = await this.rateLimitModel
+      .findOne({
+        provider,
+        endpoint: this.PROVIDER_QUOTA_ENDPOINT,
+      })
+      .lean()
+      .exec();
 
     return Math.max(0, config.dailyLimit - (state?.dailyRequests ?? 0));
   }
@@ -274,7 +503,13 @@ export class SportsProviderRateLimitService {
 
     await this.ensurePeriodState(provider, now);
 
-    const state = await this.rateLimitModel.findOne({ provider }).lean().exec();
+    const state = await this.rateLimitModel
+      .findOne({
+        provider,
+        endpoint: this.PROVIDER_QUOTA_ENDPOINT,
+      })
+      .lean()
+      .exec();
 
     return Math.max(0, config.monthlyLimit - (state?.monthlyRequests ?? 0));
   }
@@ -284,7 +519,13 @@ export class SportsProviderRateLimitService {
 
     await this.ensurePeriodState(provider, now);
 
-    const state = await this.rateLimitModel.findOne({ provider }).lean().exec();
+    const state = await this.rateLimitModel
+      .findOne({
+        provider,
+        endpoint: this.PROVIDER_QUOTA_ENDPOINT,
+      })
+      .lean()
+      .exec();
 
     return state?.dailyRequests ?? 0;
   }
@@ -294,7 +535,13 @@ export class SportsProviderRateLimitService {
 
     await this.ensurePeriodState(provider, now);
 
-    const state = await this.rateLimitModel.findOne({ provider }).lean().exec();
+    const state = await this.rateLimitModel
+      .findOne({
+        provider,
+        endpoint: this.PROVIDER_QUOTA_ENDPOINT,
+      })
+      .lean()
+      .exec();
 
     return state?.monthlyRequests ?? 0;
   }
@@ -318,38 +565,12 @@ export class SportsProviderRateLimitService {
   ): Promise<SportsProviderRateLimitDocument | null> {
     await this.ensurePeriodState(provider, new Date());
 
-    return this.rateLimitModel.findOne({ provider }).exec();
-  }
-
-  async clearExpiredLocks(): Promise<number> {
-    const result = await this.rateLimitModel
-      .updateMany(
-        {
-          lockedUntil: {
-            $lt: new Date(),
-          },
-        },
-        {
-          $unset: {
-            lockedUntil: 1,
-          },
-        },
-      )
+    return this.rateLimitModel
+      .findOne({
+        provider,
+        endpoint: this.PROVIDER_QUOTA_ENDPOINT,
+      })
       .exec();
-
-    return result.modifiedCount;
-  }
-
-  private getConfig(provider: SportsProvider): ProviderLimitConfig {
-    const config = this.limits[provider];
-
-    if (!config) {
-      throw new Error(
-        `No rate-limit configuration exists for provider: ${provider}`,
-      );
-    }
-
-    return config;
   }
 
   private async assertQuotaAvailable(
@@ -358,7 +579,17 @@ export class SportsProviderRateLimitService {
   ): Promise<void> {
     const config = this.getConfig(provider);
 
-    const state = await this.rateLimitModel.findOne({ provider }).lean().exec();
+    if (config.dailyLimit === undefined && config.monthlyLimit === undefined) {
+      return;
+    }
+
+    const state = await this.rateLimitModel
+      .findOne({
+        provider,
+        endpoint: this.PROVIDER_QUOTA_ENDPOINT,
+      })
+      .lean()
+      .exec();
 
     if (!state) {
       return;
@@ -384,75 +615,75 @@ export class SportsProviderRateLimitService {
     }
   }
 
-  private buildDailyQuotaFilter(
-    period: string,
-    limit: number,
-  ): Record<string, unknown> {
-    return {
-      $or: [
-        {
-          dailyPeriod: {
-            $ne: period,
-          },
-        },
-        {
-          dailyRequests: {
-            $lt: limit,
-          },
-        },
-      ],
-    };
+  private async createQuotaExceededError(
+    provider: SportsProvider,
+  ): Promise<SportsProviderQuotaExceededError> {
+    const config = this.getConfig(provider);
+
+    const now = new Date();
+
+    const state = await this.rateLimitModel
+      .findOne({
+        provider,
+        endpoint: this.PROVIDER_QUOTA_ENDPOINT,
+      })
+      .lean()
+      .exec();
+
+    const dailyPeriod = this.getDailyPeriod(now);
+
+    if (
+      config.dailyLimit !== undefined &&
+      state?.dailyPeriod === dailyPeriod &&
+      (state.dailyRequests ?? 0) >= config.dailyLimit
+    ) {
+      return new SportsProviderQuotaExceededError(provider, 'daily');
+    }
+
+    return new SportsProviderQuotaExceededError(provider, 'monthly');
   }
 
-  private buildMonthlyQuotaFilter(
-    period: string,
-    limit: number,
-  ): Record<string, unknown> {
-    return {
-      $or: [
-        {
-          monthlyPeriod: {
-            $ne: period,
-          },
-        },
-        {
-          monthlyRequests: {
-            $lt: limit,
-          },
-        },
-      ],
-    };
-  }
+  // ============================================================
+  // PERIOD STATE
+  // ============================================================
 
   private async ensurePeriodState(
     provider: SportsProvider,
     now: Date,
   ): Promise<void> {
+    const config = this.getConfig(provider);
+
+    if (config.dailyLimit === undefined && config.monthlyLimit === undefined) {
+      return;
+    }
+
     const dailyPeriod = this.getDailyPeriod(now);
     const monthlyPeriod = this.getMonthlyPeriod(now);
 
     const existing = await this.rateLimitModel
-      .findOne({ provider })
+      .findOne({
+        provider,
+        endpoint: this.PROVIDER_QUOTA_ENDPOINT,
+      })
       .lean()
       .exec();
 
     if (!existing) {
       try {
-        await this.rateLimitModel.create({
+        await new this.rateLimitModel({
           provider,
+          endpoint: this.PROVIDER_QUOTA_ENDPOINT,
+
           dailyPeriod,
           dailyRequests: 0,
+
           monthlyPeriod,
           monthlyRequests: 0,
-        });
+        }).save();
 
         return;
       } catch (error) {
-        /**
-         * Another worker may have created the provider state
-         * between findOne() and create().
-         */
-        if (this.isDuplicateProviderKeyError(error)) {
+        if (this.isDuplicateEndpointKeyError(error)) {
           return;
         }
 
@@ -462,12 +693,18 @@ export class SportsProviderRateLimitService {
 
     const update: Record<string, unknown> = {};
 
-    if (existing.dailyPeriod !== dailyPeriod) {
+    if (
+      config.dailyLimit !== undefined &&
+      existing.dailyPeriod !== dailyPeriod
+    ) {
       update.dailyPeriod = dailyPeriod;
       update.dailyRequests = 0;
     }
 
-    if (existing.monthlyPeriod !== monthlyPeriod) {
+    if (
+      config.monthlyLimit !== undefined &&
+      existing.monthlyPeriod !== monthlyPeriod
+    ) {
       update.monthlyPeriod = monthlyPeriod;
       update.monthlyRequests = 0;
     }
@@ -478,7 +715,10 @@ export class SportsProviderRateLimitService {
 
     await this.rateLimitModel
       .updateOne(
-        { provider },
+        {
+          provider,
+          endpoint: this.PROVIDER_QUOTA_ENDPOINT,
+        },
         {
           $set: update,
         },
@@ -486,7 +726,70 @@ export class SportsProviderRateLimitService {
       .exec();
   }
 
-  private isDuplicateProviderKeyError(error: unknown): boolean {
+  // ============================================================
+  // LOCK CLEANUP
+  // ============================================================
+
+  async clearExpiredLocks(): Promise<number> {
+    const result = await this.rateLimitModel
+      .updateMany(
+        {
+          endpoint: {
+            $ne: this.PROVIDER_QUOTA_ENDPOINT,
+          },
+
+          lockedUntil: {
+            $lt: new Date(),
+          },
+        },
+        {
+          $unset: {
+            lockedUntil: 1,
+          },
+        },
+      )
+      .exec();
+
+    return result.modifiedCount;
+  }
+
+  // ============================================================
+  // CONFIGURATION
+  // ============================================================
+
+  private getConfig(provider: SportsProvider): ProviderLimitConfig {
+    const config = this.limits[provider];
+
+    if (!config) {
+      throw new Error(
+        `No rate-limit configuration exists for provider: ${provider}`,
+      );
+    }
+
+    return config;
+  }
+
+  private normalizeEndpoint(endpoint: string): string {
+    const normalized = endpoint.trim().toLowerCase();
+
+    if (!normalized) {
+      throw new Error('Rate-limit endpoint cannot be empty');
+    }
+
+    if (normalized === this.PROVIDER_QUOTA_ENDPOINT) {
+      throw new Error(
+        `The endpoint name "${this.PROVIDER_QUOTA_ENDPOINT}" is reserved`,
+      );
+    }
+
+    return normalized;
+  }
+
+  // ============================================================
+  // ERRORS
+  // ============================================================
+
+  private isDuplicateEndpointKeyError(error: unknown): boolean {
     if (!error || typeof error !== 'object') {
       return false;
     }
@@ -500,9 +803,15 @@ export class SportsProviderRateLimitService {
     return (
       candidate.code === 11000 &&
       Boolean(candidate.keyPattern?.provider) &&
-      Boolean(candidate.keyValue?.provider)
+      Boolean(candidate.keyPattern?.endpoint) &&
+      Boolean(candidate.keyValue?.provider) &&
+      Boolean(candidate.keyValue?.endpoint)
     );
   }
+
+  // ============================================================
+  // HELPERS
+  // ============================================================
 
   private getDailyPeriod(date: Date): string {
     return date.toISOString().slice(0, 10);

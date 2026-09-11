@@ -4,13 +4,6 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 
 import { EspnService } from '../providers/espn.service';
-import { FootballDataService } from '../providers/football-data.service';
-import { TheOddsApiService } from '../providers/the-odds-api.service';
-
-import {
-  EspnLeague,
-  EspnLeagueDocument,
-} from '../schemas/espn/espn-league.schema';
 
 import {
   EspnFixture,
@@ -23,18 +16,6 @@ import {
 } from '../schemas/espn/espn-standing.schema';
 
 import { EspnTeam, EspnTeamDocument } from '../schemas/espn/espn-team.schema';
-
-import {
-  EspnMatchEvent,
-  EspnMatchEventDocument,
-} from '../schemas/espn/espn-match-event.schema';
-
-import {
-  EspnMatchStatistics,
-  EspnMatchStatisticsDocument,
-} from '../schemas/espn/espn-match-statistics.schema';
-
-import { EspnOdds, EspnOddsDocument } from '../schemas/espn/espn-odds.schema';
 
 import {
   FootballDataCompetition,
@@ -91,16 +72,9 @@ export class SportsCollectionService {
   constructor(
     private readonly espnService: EspnService,
 
-    private readonly footballDataService: FootballDataService,
-
-    private readonly oddsApiService: TheOddsApiService,
-
     // ----------------------------------------------------------
     // ESPN
     // ----------------------------------------------------------
-
-    @InjectModel(EspnLeague.name)
-    private readonly espnLeagueModel: Model<EspnLeagueDocument>,
 
     @InjectModel(EspnFixture.name)
     private readonly espnFixtureModel: Model<EspnFixtureDocument>,
@@ -110,15 +84,6 @@ export class SportsCollectionService {
 
     @InjectModel(EspnTeam.name)
     private readonly espnTeamModel: Model<EspnTeamDocument>,
-
-    @InjectModel(EspnMatchEvent.name)
-    private readonly espnMatchEventModel: Model<EspnMatchEventDocument>,
-
-    @InjectModel(EspnMatchStatistics.name)
-    private readonly espnMatchStatisticsModel: Model<EspnMatchStatisticsDocument>,
-
-    @InjectModel(EspnOdds.name)
-    private readonly espnOddsModel: Model<EspnOddsDocument>,
 
     // ----------------------------------------------------------
     // Football-Data
@@ -227,7 +192,6 @@ export class SportsCollectionService {
     fixtureIds: string[];
     collected: number;
     standings: number;
-    leadersCollected: boolean;
     dateFrom: string;
     dateTo: string;
   }> {
@@ -242,6 +206,7 @@ export class SportsCollectionService {
     );
 
     const dateFrom = this.toUtcDateOnly(dateFromDate);
+
     const dateTo = this.toUtcDateOnly(dateToDate);
 
     const scoreboard = await this.espnService.getFixtures(
@@ -265,19 +230,10 @@ export class SportsCollectionService {
       params.season ?? this.getSeasonFromFixtures(scoreboard),
     );
 
-    const leadersResponse = await this.espnService.getLeaders(params.leagueId);
-
-    const leadersCollected = await this.collectEspnLeaders(
-      params.leagueId,
-      leadersResponse,
-      params.season ?? this.getSeasonFromFixtures(scoreboard),
-    );
-
     return {
       fixtureIds: fixtureResult.fixtureIds,
       collected: fixtureResult.collected,
       standings,
-      leadersCollected,
       dateFrom,
       dateTo,
     };
@@ -303,30 +259,53 @@ export class SportsCollectionService {
         continue;
       }
 
-      const eventId = this.toStringValue(event.id);
+      const eventId = this.toStringValue((event as { id?: unknown }).id);
 
-      const fixtureDate = this.parseDate(event.date);
+      const fixtureDate = this.parseDate((event as { date?: unknown }).date);
 
       if (!eventId || !fixtureDate) {
         continue;
       }
 
-      const competition = event?.competitions?.[0];
+      type EspnCompetitor = {
+        homeAway?: unknown;
+        isHome?: unknown;
+        isAway?: unknown;
+        score?: unknown;
+        [key: string]: unknown;
+      };
+
+      const competition = (
+        event as {
+          competitions?: Array<{
+            competitors?: EspnCompetitor[];
+            season?: { year?: unknown };
+            status?: { period?: unknown };
+            venue?: {
+              id?: unknown;
+              fullName?: unknown;
+              name?: unknown;
+            };
+          }>;
+        }
+      ).competitions?.[0];
 
       const competitors = competition?.competitors ?? [];
 
       const home =
         competitors.find(
-          (item: any) => item?.homeAway === 'home' || item?.isHome === true,
+          (item) => item.homeAway === 'home' || item.isHome === true,
         ) ?? competitors[0];
 
       const away =
         competitors.find(
-          (item: any) => item?.homeAway === 'away' || item?.isAway === true,
+          (item) => item.homeAway === 'away' || item.isAway === true,
         ) ?? competitors[1];
 
       const season =
-        this.toNumber(event?.season?.year) ??
+        this.toNumber(
+          (event as { season?: { year?: unknown } }).season?.year,
+        ) ??
         this.toNumber(competition?.season?.year) ??
         fixtureDate.getUTCFullYear();
 
@@ -412,9 +391,10 @@ export class SportsCollectionService {
     let collected = 0;
 
     for (const competitor of competitors) {
-      const team = (competitor as any)?.team;
+      const competitorRecord = this.asRecord(competitor);
+      const team = this.asRecord(competitorRecord?.team);
 
-      const teamId = this.toStringValue(team?.id ?? (competitor as any)?.id);
+      const teamId = this.toStringValue(team?.id ?? competitorRecord?.id);
 
       if (!teamId) {
         continue;
@@ -482,7 +462,9 @@ export class SportsCollectionService {
 
     const resolvedSeason =
       season ??
-      this.toNumber((response as any)?.season?.year) ??
+      this.toNumber(
+        (response as { season?: { year?: unknown } } | null)?.season?.year,
+      ) ??
       new Date().getUTCFullYear();
 
     const activeTeamIds = new Set<string>();
@@ -490,7 +472,9 @@ export class SportsCollectionService {
     let collected = 0;
 
     for (const entry of entries) {
-      const teamId = this.toStringValue(entry?.team?.id ?? entry?.teamId);
+      const entryRecord = this.asRecord(entry);
+      const teamRecord = this.asRecord(entryRecord?.team);
+      const teamId = this.toStringValue(teamRecord?.id ?? entryRecord?.teamId);
 
       if (!teamId) {
         continue;
@@ -498,7 +482,9 @@ export class SportsCollectionService {
 
       activeTeamIds.add(teamId);
 
-      const statistics = Array.isArray(entry?.stats) ? entry.stats : [];
+      const statistics = Array.isArray(entryRecord?.stats)
+        ? (entryRecord.stats as unknown[])
+        : [];
 
       const value = (name: string): number | undefined =>
         this.getStatisticNumber(statistics, name);
@@ -518,7 +504,8 @@ export class SportsCollectionService {
               season: resolvedSeason,
               teamId,
 
-              rank: this.toNumber(entry?.rank ?? entry?.position) ?? 0,
+              rank:
+                this.toNumber(entryRecord?.rank ?? entryRecord?.position) ?? 0,
 
               points: value('points'),
 
@@ -570,66 +557,18 @@ export class SportsCollectionService {
   }
 
   // ============================================================
-  // ESPN — LEADERS
-  // ============================================================
-
-  async collectEspnLeaders(
-    leagueId: string,
-    response: unknown,
-    _season?: number,
-  ): Promise<boolean> {
-    if (response === null || response === undefined) {
-      return false;
-    }
-
-    const league = await this.espnLeagueModel
-      .findOne({
-        leagueId,
-      })
-      .exec();
-
-    if (!league) {
-      return false;
-    }
-
-    const existingPayload = league.payload ?? {};
-
-    await this.espnLeagueModel
-      .updateOne(
-        {
-          leagueId,
-        },
-        {
-          $set: {
-            payload: {
-              ...existingPayload,
-
-              leaders: response,
-
-              leadersCollectedAt: new Date(),
-            },
-
-            collectedAt: new Date(),
-          },
-        },
-      )
-      .exec();
-
-    return true;
-  }
-
-  // ============================================================
   // ESPN — MATCH DETAILS
   // ============================================================
 
   async collectEspnMatchDetails(params: {
     leagueId: string;
-    event: any;
-    competition?: any | null;
+    event: unknown;
   }): Promise<void> {
-    const event = params.event;
+    const event = this.asRecord(params.event) ?? {};
 
-    const competition = params.competition ?? event?.competitions?.[0];
+    const competition = this.asRecord(
+      (Array.isArray(event.competitions) ? event.competitions : [])[0],
+    );
 
     const eventId = this.toStringValue(event?.id);
 
@@ -641,22 +580,28 @@ export class SportsCollectionService {
       throw new Error('Invalid ESPN match payload');
     }
 
-    const competitors =
-      competition?.competitors ?? event?.competitions?.[0]?.competitors ?? [];
+    const competitors: unknown[] = Array.isArray(competition?.competitors)
+      ? (competition.competitors as unknown[])
+      : [];
 
     const home =
-      competitors.find(
-        (item: any) => item?.homeAway === 'home' || item?.isHome === true,
-      ) ?? competitors[0];
+      competitors.find((item) => {
+        const competitor = this.asRecord(item);
+        return competitor?.homeAway === 'home' || competitor?.isHome === true;
+      }) ?? competitors[0];
 
     const away =
-      competitors.find(
-        (item: any) => item?.homeAway === 'away' || item?.isAway === true,
-      ) ?? competitors[1];
+      competitors.find((item) => {
+        const competitor = this.asRecord(item);
+        return competitor?.homeAway === 'away' || competitor?.isAway === true;
+      }) ?? competitors[1];
+
+    const homeCompetitor = this.asRecord(home);
+    const awayCompetitor = this.asRecord(away);
 
     const season =
-      this.toNumber(event?.season?.year) ??
-      this.toNumber(competition?.season?.year) ??
+      this.toNumber(this.getNestedString(event, ['season', 'year'])) ??
+      this.toNumber(this.getNestedString(competition, ['season', 'year'])) ??
       fixtureDate.getUTCFullYear();
 
     const status = this.extractStatus(event);
@@ -672,7 +617,7 @@ export class SportsCollectionService {
           $set: {
             eventId,
 
-            leagueId: params.leagueId,
+            leagueId: params.leagueId.trim().toLowerCase(),
 
             season,
 
@@ -692,7 +637,9 @@ export class SportsCollectionService {
               'shortDetail',
             ]),
 
-            period: this.toNumber(competition?.status?.period),
+            period: this.toNumber(
+              this.getNestedString(competition, ['status', 'period']),
+            ),
 
             completed,
 
@@ -700,18 +647,17 @@ export class SportsCollectionService {
 
             awayTeamId: this.getTeamId(away),
 
-            homeScore: this.toNumber(home?.score),
+            homeScore: this.toNumber(homeCompetitor?.score),
 
-            awayScore: this.toNumber(away?.score),
+            awayScore: this.toNumber(awayCompetitor?.score),
 
-            venueId: this.toStringValue(competition?.venue?.id),
+            venueId: this.getNestedString(competition, ['venue', 'id']),
 
-            venueName: competition?.venue?.fullName ?? competition?.venue?.name,
+            venueName:
+              this.getNestedString(competition, ['venue', 'fullName']) ??
+              this.getNestedString(competition, ['venue', 'name']),
 
-            payload: {
-              event,
-              competition,
-            },
+            payload: event,
 
             collectedAt: new Date(),
           },
@@ -765,233 +711,6 @@ export class SportsCollectionService {
         },
       )
       .exec();
-  }
-
-  // ============================================================
-  // ESPN — MATCH EVENTS
-  // ============================================================
-
-  async collectEspnMatchEvents(params: {
-    leagueId: string;
-    eventId: string;
-    competitionId?: string;
-    events: unknown;
-  }): Promise<number> {
-    const plays = this.extractArray(params.events, [
-      'plays',
-      'events',
-      'items',
-    ]);
-
-    let collected = 0;
-
-    for (let index = 0; index < plays.length; index += 1) {
-      const play = plays[index];
-
-      const playId = this.toStringValue(
-        play?.id ?? play?.sequenceNumber ?? index,
-      );
-
-      if (!playId) {
-        continue;
-      }
-
-      const teamId = this.toStringValue(play?.team?.id ?? play?.teamId);
-
-      await this.espnMatchEventModel
-        .updateOne(
-          {
-            eventId: params.eventId,
-            playId,
-          },
-          {
-            $set: {
-              eventId: params.eventId,
-
-              leagueId: params.leagueId,
-
-              competitionId: params.competitionId,
-
-              playId,
-
-              clock: this.getClockValue(play),
-
-              clockDisplay:
-                this.getNestedString(play, ['clock', 'displayValue']) ??
-                this.toStringValue(play?.clockDisplay),
-
-              type:
-                this.getNestedString(play, ['type', 'text']) ??
-                this.getNestedString(play, ['type', 'name']),
-
-              text: play?.text,
-
-              teamId,
-
-              homeScore: this.toNumber(play?.homeScore),
-
-              awayScore: this.toNumber(play?.awayScore),
-
-              scoringPlay: Boolean(play?.scoringPlay),
-
-              redCard: Boolean(play?.redCard),
-
-              yellowCard: Boolean(play?.yellowCard),
-
-              penaltyKick: Boolean(play?.penaltyKick ?? play?.penalty),
-
-              ownGoal: Boolean(play?.ownGoal),
-
-              shootout: Boolean(play?.shootout),
-
-              payload: play as Record<string, unknown>,
-
-              collectedAt: new Date(),
-            },
-          },
-          {
-            upsert: true,
-          },
-        )
-        .exec();
-
-      collected += 1;
-    }
-
-    return collected;
-  }
-
-  // ============================================================
-  // ESPN — MATCH STATISTICS
-  // ============================================================
-
-  async collectEspnMatchStatistics(params: {
-    leagueId: string;
-    eventId: string;
-    competitionId?: string;
-    teamId: string;
-    statistics: unknown;
-  }): Promise<void> {
-    const rows = this.extractStatisticsRows(params.statistics);
-
-    const statistics =
-      rows.find(
-        (row: any) =>
-          this.toStringValue(row?.team?.id ?? row?.teamId) === params.teamId,
-      ) ?? rows[0];
-
-    const statsList = Array.isArray(statistics?.statistics)
-      ? statistics.statistics
-      : Array.isArray(statistics?.stats)
-        ? statistics.stats
-        : [];
-
-    const value = (names: string[]): number | undefined =>
-      this.getStatisticNumber(statsList, ...names);
-
-    await this.espnMatchStatisticsModel
-      .updateOne(
-        {
-          eventId: params.eventId,
-          teamId: params.teamId,
-        },
-        {
-          $set: {
-            eventId: params.eventId,
-
-            leagueId: params.leagueId,
-
-            competitionId: params.competitionId,
-
-            teamId: params.teamId,
-
-            possession: value(['possession', 'possessionPct']),
-
-            shots: value(['shots', 'totalShots']),
-
-            shotsOnTarget: value(['shotsOnTarget']),
-
-            corners: value(['corners', 'cornerKicks']),
-
-            fouls: value(['fouls', 'foulsCommitted']),
-
-            offsides: value(['offsides']),
-
-            yellow: value(['yellowCards', 'yellow']),
-
-            red: value(['redCards', 'red']),
-
-            saves: value(['saves']),
-
-            payload: statistics ?? params.statistics,
-
-            collectedAt: new Date(),
-          },
-        },
-        {
-          upsert: true,
-        },
-      )
-      .exec();
-  }
-
-  // ============================================================
-  // ESPN — ODDS
-  // ============================================================
-
-  async collectEspnMatchOdds(params: {
-    leagueId: string;
-    eventId: string;
-    competitionId?: string;
-    odds: unknown;
-  }): Promise<number> {
-    const odds = this.extractArray(params.odds, ['odds', 'items']);
-
-    if (!odds.length) {
-      return 0;
-    }
-
-    let collected = 0;
-
-    for (let index = 0; index < odds.length; index += 1) {
-      const item = odds[index];
-
-      const providerId =
-        this.toStringValue(item?.provider?.id ?? item?.providerId) ??
-        `unknown-${index}`;
-
-      await this.espnOddsModel
-        .updateOne(
-          {
-            eventId: params.eventId,
-
-            providerId,
-          },
-          {
-            $set: {
-              eventId: params.eventId,
-
-              leagueId: params.leagueId,
-
-              competitionId: params.competitionId,
-
-              providerId,
-
-              payload: item as Record<string, unknown>,
-
-              collectedAt: new Date(),
-            },
-          },
-          {
-            upsert: true,
-          },
-        )
-        .exec();
-
-      collected += 1;
-    }
-
-    return collected;
   }
 
   // ============================================================
@@ -1352,71 +1071,71 @@ export class SportsCollectionService {
     return [];
   }
 
-  private extractStandingEntries(response: unknown): any[] {
+  private extractStandingEntries(response: unknown): unknown[] {
     if (!response || typeof response !== 'object') {
       return [];
     }
 
-    const root = response as any;
+    const root = response as Record<string, unknown>;
 
-    if (Array.isArray(root.entries)) {
-      return root.entries;
+    const entries = root.entries;
+    if (Array.isArray(entries)) {
+      return entries;
     }
 
-    if (Array.isArray(root.standings)) {
-      return root.standings.flatMap((group: any) =>
-        Array.isArray(group?.entries) ? group.entries : [],
-      );
+    const standings = root.standings;
+    if (Array.isArray(standings)) {
+      return standings.flatMap((group: unknown) => {
+        if (!group || typeof group !== 'object') {
+          return [];
+        }
+
+        const groupEntries = (group as Record<string, unknown>).entries;
+        return Array.isArray(groupEntries) ? (groupEntries as unknown[]) : [];
+      });
     }
 
-    const groups = root.groups ?? root.standings?.groups;
+    const standingsGroups =
+      standings && typeof standings === 'object'
+        ? (standings as Record<string, unknown>).groups
+        : undefined;
+    const groups = root.groups ?? standingsGroups;
 
     if (Array.isArray(groups)) {
-      return groups.flatMap((group: any) =>
-        Array.isArray(group?.entries) ? group.entries : [],
-      );
-    }
+      return groups.flatMap((group: unknown) => {
+        if (!group || typeof group !== 'object') {
+          return [];
+        }
 
-    return [];
-  }
-
-  private extractStatisticsRows(response: unknown): any[] {
-    if (Array.isArray(response)) {
-      return response;
-    }
-
-    if (!response || typeof response !== 'object') {
-      return [];
-    }
-
-    const object = response as any;
-
-    if (Array.isArray(object.results)) {
-      return object.results;
-    }
-
-    if (Array.isArray(object.items)) {
-      return object.items;
-    }
-
-    if (Array.isArray(object.statistics)) {
-      return object.statistics;
+        const groupEntries = (group as Record<string, unknown>).entries;
+        return Array.isArray(groupEntries) ? (groupEntries as unknown[]) : [];
+      });
     }
 
     return [];
   }
 
   private getStatisticNumber(
-    stats: any[],
+    stats: unknown[],
     ...names: string[]
   ): number | undefined {
     for (const item of stats) {
-      const name = String(
-        item?.name ?? item?.type ?? item?.key ?? '',
-      ).toLowerCase();
+      const statistic =
+        item !== null && typeof item === 'object'
+          ? (item as Record<string, unknown>)
+          : undefined;
+      const nameValue =
+        statistic?.name ?? statistic?.type ?? statistic?.key ?? '';
+      const name =
+        typeof nameValue === 'string' || typeof nameValue === 'number'
+          ? String(nameValue).toLowerCase()
+          : '';
 
       if (names.some((candidate) => name === candidate.toLowerCase())) {
-        return this.toNumber(item?.value) ?? this.toNumber(item?.displayValue);
+        return (
+          this.toNumber(statistic?.value) ??
+          this.toNumber(statistic?.displayValue)
+        );
       }
     }
 
@@ -1424,62 +1143,92 @@ export class SportsCollectionService {
   }
 
   private getStatisticDisplayValue(
-    stats: any[],
+    stats: unknown[],
     names: string[],
   ): string | undefined {
     for (const item of stats) {
-      const name = String(
-        item?.name ?? item?.type ?? item?.key ?? '',
-      ).toLowerCase();
+      const statistic =
+        item !== null && typeof item === 'object'
+          ? (item as Record<string, unknown>)
+          : undefined;
+      const nameValue =
+        statistic?.name ?? statistic?.type ?? statistic?.key ?? '';
+      const name =
+        typeof nameValue === 'string' || typeof nameValue === 'number'
+          ? String(nameValue).toLowerCase()
+          : '';
 
       if (names.some((candidate) => name === candidate.toLowerCase())) {
-        return this.toStringValue(item?.displayValue ?? item?.value);
+        return this.toStringValue(statistic?.displayValue ?? statistic?.value);
       }
     }
 
     return undefined;
   }
 
-  private getClockValue(play: any): number | undefined {
-    return (
-      this.toNumber(play?.clock?.value) ??
-      this.toNumber(play?.clock?.minutes) ??
-      this.toNumber(play?.clock)
-    );
-  }
-
-  private getNestedString(value: any, path: string[]): string | undefined {
-    let current = value;
+  private getNestedString(value: unknown, path: string[]): string | undefined {
+    let current: unknown = value;
 
     for (const key of path) {
-      if (current === null || current === undefined) {
+      if (typeof current !== 'object' || current === null) {
         return undefined;
       }
 
-      current = current[key];
+      current = (current as Record<string, unknown>)[key];
     }
 
     return this.toStringValue(current);
   }
 
-  private getTeamId(competitor: any): string {
-    return this.toStringValue(competitor?.team?.id ?? competitor?.id) ?? '';
+  private getTeamId(competitor: unknown): string {
+    return (
+      this.getNestedString(competitor, ['team', 'id']) ??
+      this.getNestedString(competitor, ['id']) ??
+      ''
+    );
   }
 
-  private getTeamLogo(team: any): string | undefined {
-    if (typeof team?.logo === 'string') {
-      return team.logo;
+  private getTeamLogo(team: unknown): string | undefined {
+    if (typeof team !== 'object' || team === null) {
+      return undefined;
     }
 
-    if (Array.isArray(team?.logos) && typeof team.logos[0]?.href === 'string') {
-      return team.logos[0].href;
+    const teamRecord = team as Record<string, unknown>;
+    const logo = teamRecord.logo;
+
+    if (typeof logo === 'string') {
+      return logo;
+    }
+
+    const logos = teamRecord.logos;
+
+    if (Array.isArray(logos)) {
+      const firstLogo: unknown = logos[0];
+
+      if (typeof firstLogo === 'object' && firstLogo !== null) {
+        const href = (firstLogo as Record<string, unknown>).href;
+
+        if (typeof href === 'string') {
+          return href;
+        }
+      }
     }
 
     return undefined;
   }
 
-  private extractStatus(event: any): string {
-    const competition = event?.competitions?.[0];
+  private getFirstCompetition(event: unknown): unknown {
+    if (event === null || typeof event !== 'object') {
+      return undefined;
+    }
+
+    const competitions = (event as Record<string, unknown>).competitions;
+
+    return Array.isArray(competitions) ? competitions[0] : undefined;
+  }
+
+  private extractStatus(event: unknown): string {
+    const competition = this.getFirstCompetition(event);
 
     return (
       this.getNestedString(competition, ['status', 'type', 'name']) ??
@@ -1489,18 +1238,36 @@ export class SportsCollectionService {
     );
   }
 
-  private isCompleted(event: any): boolean {
-    const competition = event?.competitions?.[0];
+  private isCompleted(event: unknown): boolean {
+    const competition = this.getFirstCompetition(event);
+    const competitionRecord =
+      competition !== null && typeof competition === 'object'
+        ? (competition as Record<string, unknown>)
+        : undefined;
+    const eventRecord =
+      event !== null && typeof event === 'object'
+        ? (event as Record<string, unknown>)
+        : undefined;
 
-    const status = competition?.status ?? event?.status;
+    const status = competitionRecord?.status ?? eventRecord?.status;
+    const statusRecord =
+      status !== null && typeof status === 'object'
+        ? (status as Record<string, unknown>)
+        : undefined;
+    const statusType =
+      statusRecord?.type !== null && typeof statusRecord?.type === 'object'
+        ? (statusRecord.type as Record<string, unknown>)
+        : undefined;
 
-    if (status?.type?.completed === true || status?.completed === true) {
+    if (statusType?.completed === true || statusRecord?.completed === true) {
       return true;
     }
 
-    const state = String(
-      status?.type?.state ?? status?.state ?? '',
-    ).toLowerCase();
+    const rawState = statusType?.state ?? statusRecord?.state;
+    const state =
+      typeof rawState === 'string' || typeof rawState === 'number'
+        ? String(rawState).toLowerCase()
+        : '';
 
     return ['post', 'final', 'completed', 'complete', 'finished'].includes(
       state,
@@ -1511,7 +1278,9 @@ export class SportsCollectionService {
     const events = this.extractArray(response, ['events', 'items']);
 
     for (const event of events) {
-      const season = this.toNumber(event?.season?.year);
+      const season = this.toNumber(
+        this.getNestedString(event, ['season', 'year']),
+      );
 
       if (season !== undefined) {
         return season;
@@ -1539,6 +1308,14 @@ export class SportsCollectionService {
     const result = String(value).trim();
 
     return result ? result : undefined;
+  }
+
+  private asRecord(value: unknown): Record<string, unknown> | undefined {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+      return undefined;
+    }
+
+    return value as Record<string, unknown>;
   }
 
   private toNumber(value: unknown): number | undefined {

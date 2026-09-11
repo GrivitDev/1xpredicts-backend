@@ -19,16 +19,24 @@ export class EspnQueueWorkerService implements OnModuleInit {
   private readonly POLL_INTERVAL_MS = 5000;
 
   private polling = false;
+
   private timer?: NodeJS.Timeout;
 
   constructor(
     private readonly espnService: EspnService,
+
     private readonly theOddsApiService: TheOddsApiService,
+
     private readonly sportsProviderRateLimitService: SportsProviderRateLimitService,
+
     private readonly sportsCollectionService: SportsCollectionService,
+
     private readonly espnQueueService: EspnQueueService,
+
     private readonly espnQueueBuilderService: EspnQueueBuilderService,
+
     private readonly priorityCompetitionService: PriorityCompetitionService,
+
     private readonly youtubeHighlightService: YoutubeHighlightService,
   ) {}
 
@@ -80,8 +88,9 @@ export class EspnQueueWorkerService implements OnModuleInit {
     const queueJob = job as unknown as Record<string, unknown>;
 
     this.logger.debug(
-      `Processing ESPN queue job ${String(queueJob.jobKey ?? queueJob._id)} ` +
-        `(${String(queueJob.type)})`,
+      `Processing ESPN queue job ${String(
+        queueJob.jobKey ?? queueJob._id,
+      )} (${String(queueJob.type)})`,
     );
 
     try {
@@ -129,21 +138,38 @@ export class EspnQueueWorkerService implements OnModuleInit {
       throw new Error('League refresh job has no leagueId');
     }
 
+    const leagueId = this.stringifyJobId(job.leagueId);
+
+    const season = typeof job.season === 'number' ? job.season : undefined;
+
     await this.sportsCollectionService.processEspnLeagueRefresh({
-      leagueId: this.stringifyJobId(job.leagueId),
-      season: typeof job['season'] === 'number' ? job['season'] : undefined,
+      leagueId,
+      season,
     });
 
-    await this.espnQueueBuilderService.buildLeagueMatchJobs(
-      this.stringifyJobId(job.leagueId),
-      typeof job['season'] === 'number' ? job['season'] : undefined,
-    );
+    await this.espnQueueBuilderService.buildLeagueMatchJobs(leagueId, season);
   }
 
   // ============================================================
   // UPCOMING MATCH
   // ============================================================
 
+  /**
+   * Normal upcoming-match pipeline:
+   *
+   * 1. Refresh event from ESPN.
+   * 2. Save the complete event payload.
+   * 3. Collect the richer ESPN summary.
+   * 4. Collect independent Odds API data.
+   * 5. Schedule the finished-match job.
+   *
+   * No separate:
+   * - competition call
+   * - leaders call
+   * - plays call
+   * - statistics call
+   * - ESPN odds call
+   */
   private async processUpcomingMatch(
     job: Record<string, unknown>,
   ): Promise<void> {
@@ -152,28 +178,24 @@ export class EspnQueueWorkerService implements OnModuleInit {
     }
 
     const leagueId = this.stringifyJobId(job.leagueId);
+
     const eventId = this.stringifyJobId(job.eventId);
 
     const event = await this.espnService.getMatch(leagueId, eventId);
 
-    const competitionId = this.extractCompetitionId(event);
-
-    let competition: Record<string, unknown> | null = null;
-
-    if (competitionId) {
-      competition = await this.espnService.getCompetition(
-        leagueId,
-        eventId,
-        competitionId,
-      );
-    }
-
+    /*
+     * The event already contains its competition,
+     * competitors, statistics and details when ESPN provides them.
+     */
     await this.sportsCollectionService.collectEspnMatchDetails({
       leagueId,
       event,
-      competition,
     });
 
+    /*
+     * Summary is the only additional ESPN match-level
+     * enrichment call.
+     */
     const summary = await this.espnService.getMatchSummary(leagueId, eventId);
 
     await this.sportsCollectionService.collectEspnMatchSummary({
@@ -182,29 +204,15 @@ export class EspnQueueWorkerService implements OnModuleInit {
       summary,
     });
 
-    if (competitionId) {
-      const odds = await this.espnService.getMatchOdds(
-        leagueId,
-        eventId,
-        competitionId,
-      );
-
-      if (odds.length > 0) {
-        await this.sportsCollectionService.collectEspnMatchOdds({
-          leagueId,
-          eventId,
-          competitionId,
-          odds,
-        });
-      }
-    }
-
+    /*
+     * The Odds API remains the independent odds source.
+     */
     await this.processOddsApi(leagueId);
 
     await this.enqueueFinishedMatch(
       leagueId,
       eventId,
-      typeof job['season'] === 'number' ? job['season'] : undefined,
+      typeof job.season === 'number' ? job.season : undefined,
       event,
       typeof job.priority === 'number' ? job.priority : 99,
     );
@@ -214,6 +222,22 @@ export class EspnQueueWorkerService implements OnModuleInit {
   // FINISHED MATCH
   // ============================================================
 
+  /**
+   * Normal finished-match pipeline:
+   *
+   * 1. Refresh final event from ESPN.
+   * 2. Save complete final event payload.
+   * 3. Collect summary.
+   * 4. Collect independent Odds API data.
+   * 5. Queue YouTube processing.
+   *
+   * We do not make separate:
+   * - competition
+   * - plays
+   * - statistics
+   * - ESPN odds
+   * requests.
+   */
   private async processFinishedMatch(
     job: Record<string, unknown>,
   ): Promise<void> {
@@ -222,26 +246,14 @@ export class EspnQueueWorkerService implements OnModuleInit {
     }
 
     const leagueId = this.stringifyJobId(job.leagueId);
+
     const eventId = this.stringifyJobId(job.eventId);
 
     const event = await this.espnService.getMatch(leagueId, eventId);
 
-    const competitionId = this.extractCompetitionId(event);
-
-    let competition: Record<string, unknown> | null = null;
-
-    if (competitionId) {
-      competition = await this.espnService.getCompetition(
-        leagueId,
-        eventId,
-        competitionId,
-      );
-    }
-
     await this.sportsCollectionService.collectEspnMatchDetails({
       leagueId,
       event,
-      competition,
     });
 
     const summary = await this.espnService.getMatchSummary(leagueId, eventId);
@@ -252,58 +264,12 @@ export class EspnQueueWorkerService implements OnModuleInit {
       summary,
     });
 
-    if (competitionId) {
-      const events = await this.espnService.getMatchEvents(
-        leagueId,
-        eventId,
-        competitionId,
-      );
-
-      await this.sportsCollectionService.collectEspnMatchEvents({
-        leagueId,
-        eventId,
-        competitionId,
-        events,
-      });
-
-      const competitorIds = this.extractCompetitorIds(competition);
-
-      for (const competitorId of competitorIds) {
-        const statistics = await this.espnService.getMatchStatistics(
-          leagueId,
-          eventId,
-          competitionId,
-          competitorId,
-        );
-
-        await this.sportsCollectionService.collectEspnMatchStatistics({
-          leagueId,
-          eventId,
-          competitionId,
-          teamId: competitorId,
-          statistics,
-        });
-      }
-
-      const odds = await this.espnService.getMatchOdds(
-        leagueId,
-        eventId,
-        competitionId,
-      );
-
-      if (odds.length > 0) {
-        await this.sportsCollectionService.collectEspnMatchOdds({
-          leagueId,
-          eventId,
-          competitionId,
-          odds,
-        });
-      }
-    }
-
+    /*
+     * Odds remain sourced independently from The Odds API.
+     */
     await this.processOddsApi(leagueId);
 
-    await this.processYoutube(eventId, competitionId);
+    await this.processYoutube(eventId);
   }
 
   // ============================================================
@@ -319,12 +285,14 @@ export class EspnQueueWorkerService implements OnModuleInit {
 
     const competitionData = competition as unknown as {
       oddsEnabled?: unknown;
+
       providers?: {
         oddsApiSportKey?: unknown;
       };
     };
 
     const oddsEnabled = Boolean(competitionData.oddsEnabled);
+
     const sportKey = competitionData.providers?.oddsApiSportKey;
 
     if (!oddsEnabled || typeof sportKey !== 'string' || !sportKey) {
@@ -354,6 +322,77 @@ export class EspnQueueWorkerService implements OnModuleInit {
       await this.sportsCollectionService.collectOdds(odds);
     }
   }
+
+  // ============================================================
+  // YOUTUBE
+  // ============================================================
+
+  private async processYoutube(eventId: string): Promise<void> {
+    const remaining =
+      (await this.sportsProviderRateLimitService.getRemainingDailyRequests(
+        'youtube',
+      )) ?? 0;
+
+    if (remaining <= 0) {
+      this.logger.warn('YouTube daily quota is exhausted. Skipping request.');
+
+      return;
+    }
+
+    await this.youtubeHighlightService.queueFixture(eventId);
+  }
+
+  // ============================================================
+  // FINISHED MATCH JOB
+  // ============================================================
+
+  private async enqueueFinishedMatch(
+    leagueId: string,
+    eventId: string,
+    season: number | undefined,
+    event: Record<string, unknown>,
+    priority: number,
+  ): Promise<void> {
+    const startTime = this.extractEventStartTime(event);
+
+    const scheduledFor = startTime
+      ? new Date(startTime.getTime() + 3 * 60 * 60 * 1000)
+      : new Date(Date.now() + 3 * 60 * 60 * 1000);
+
+    await this.espnQueueService.addFinishedMatchJob({
+      leagueId,
+      eventId,
+      season: season ?? 0,
+      priority,
+      scheduledFor,
+    });
+  }
+
+  // ============================================================
+  // EVENT START TIME
+  // ============================================================
+
+  private extractEventStartTime(
+    event?: Record<string, unknown>,
+  ): Date | undefined {
+    if (!event) {
+      return undefined;
+    }
+
+    const value = event.date;
+
+    if (typeof value !== 'string') {
+      return undefined;
+    }
+
+    const date = new Date(value);
+
+    return Number.isNaN(date.getTime()) ? undefined : date;
+  }
+
+  // ============================================================
+  // JOB ID
+  // ============================================================
 
   private stringifyJobId(value: unknown): string {
     if (typeof value === 'string' || typeof value === 'number') {
@@ -386,163 +425,5 @@ export class EspnQueueWorkerService implements OnModuleInit {
     }
 
     throw new Error('Job ID must be a string, number, or identifiable object');
-  }
-
-  // ============================================================
-  // YOUTUBE
-  // ============================================================
-
-  private async processYoutube(
-    eventId: string,
-    competitionId?: string,
-  ): Promise<void> {
-    const remaining =
-      (await this.sportsProviderRateLimitService.getRemainingDailyRequests(
-        'youtube',
-      )) ?? 0;
-
-    if (remaining <= 0) {
-      this.logger.warn('YouTube daily quota is exhausted. Skipping request.');
-
-      return;
-    }
-
-    await this.youtubeHighlightService.queueFixture(eventId, competitionId);
-  }
-
-  // ============================================================
-  // FINISHED MATCH JOB
-  // ============================================================
-
-  private async enqueueFinishedMatch(
-    leagueId: string,
-    eventId: string,
-    season: number | undefined,
-    event: Record<string, unknown>,
-    priority: number,
-  ): Promise<void> {
-    const startTime = this.extractEventStartTime(event);
-
-    const scheduledFor = startTime
-      ? new Date(startTime.getTime() + 3 * 60 * 60 * 1000)
-      : new Date(Date.now() + 3 * 60 * 60 * 1000);
-
-    await this.espnQueueService.addFinishedMatchJob({
-      leagueId,
-      eventId,
-      season: season ?? 0,
-      priority,
-      scheduledFor,
-    });
-  }
-
-  // ============================================================
-  // COMPETITION ID
-  // ============================================================
-
-  private extractCompetitionId(
-    event: Record<string, unknown>,
-  ): string | undefined {
-    const direct = event['competitionId'];
-
-    if (typeof direct === 'string') {
-      return direct.trim() || undefined;
-    }
-
-    if (typeof direct === 'number') {
-      return String(direct);
-    }
-
-    const competitions = event['competitions'];
-
-    if (Array.isArray(competitions)) {
-      const first: unknown = competitions[0];
-
-      if (first && typeof first === 'object') {
-        const value = (first as Record<string, unknown>)['id'];
-
-        if (typeof value === 'string') {
-          return value;
-        }
-
-        if (typeof value === 'number') {
-          return String(value);
-        }
-      }
-    }
-
-    const competition = event['competition'];
-
-    if (competition && typeof competition === 'object') {
-      const value = (competition as Record<string, unknown>)['id'];
-
-      if (typeof value === 'string') {
-        return value;
-      }
-
-      if (typeof value === 'number') {
-        return String(value);
-      }
-    }
-
-    return undefined;
-  }
-
-  // ============================================================
-  // COMPETITORS
-  // ============================================================
-
-  private extractCompetitorIds(
-    competition: Record<string, unknown> | null,
-  ): string[] {
-    if (!competition) {
-      return [];
-    }
-
-    const competitors = competition['competitors'];
-
-    if (!Array.isArray(competitors)) {
-      return [];
-    }
-
-    const ids: string[] = [];
-
-    for (const competitor of competitors) {
-      if (!competitor || typeof competitor !== 'object') {
-        continue;
-      }
-
-      const value = (competitor as Record<string, unknown>)['id'];
-
-      if (typeof value === 'string') {
-        ids.push(value);
-      } else if (typeof value === 'number') {
-        ids.push(String(value));
-      }
-    }
-
-    return ids;
-  }
-
-  // ============================================================
-  // EVENT START TIME
-  // ============================================================
-
-  private extractEventStartTime(
-    event?: Record<string, unknown>,
-  ): Date | undefined {
-    if (!event) {
-      return undefined;
-    }
-
-    const value = event['date'];
-
-    if (typeof value !== 'string') {
-      return undefined;
-    }
-
-    const date = new Date(value);
-
-    return Number.isNaN(date.getTime()) ? undefined : date;
   }
 }

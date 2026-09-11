@@ -32,19 +32,7 @@ import {
   EspnLiveMatchDocument,
 } from '../schemas/espn/espn-livematch.schema';
 
-import {
-  EspnMatchEvent,
-  EspnMatchEventDocument,
-} from '../schemas/espn/espn-match-event.schema';
-
-import {
-  EspnMatchStatistics,
-  EspnMatchStatisticsDocument,
-} from '../schemas/espn/espn-match-statistics.schema';
-
 import { EspnNews, EspnNewsDocument } from '../schemas/espn/espn-news.schema';
-
-import { EspnOdds, EspnOddsDocument } from '../schemas/espn/espn-odds.schema';
 
 import {
   EspnStanding,
@@ -194,17 +182,8 @@ export class SportsDataReadService {
     @InjectModel(EspnLiveMatch.name)
     private readonly espnLiveMatchModel: Model<EspnLiveMatchDocument>,
 
-    @InjectModel(EspnMatchEvent.name)
-    private readonly espnMatchEventModel: Model<EspnMatchEventDocument>,
-
-    @InjectModel(EspnMatchStatistics.name)
-    private readonly espnMatchStatisticsModel: Model<EspnMatchStatisticsDocument>,
-
     @InjectModel(EspnNews.name)
     private readonly espnNewsModel: Model<EspnNewsDocument>,
-
-    @InjectModel(EspnOdds.name)
-    private readonly espnOddsModel: Model<EspnOddsDocument>,
 
     @InjectModel(EspnStanding.name)
     private readonly espnStandingModel: Model<EspnStandingDocument>,
@@ -349,9 +328,6 @@ export class SportsDataReadService {
     }
 
     if (options.predictionEnabled) {
-      // ActiveCompetition does not own predictionEnabled.
-      // The application-level competition registry remains the
-      // source of that configuration.
       return competitions;
     }
 
@@ -451,7 +427,7 @@ export class SportsDataReadService {
     const liveMatchesFilter: Record<string, unknown> = {};
 
     if (competitionId) {
-      liveMatchesFilter.leagueId = competitionId.trim();
+      liveMatchesFilter.leagueId = competitionId.trim().toLowerCase();
     }
 
     return this.espnLiveMatchModel
@@ -475,7 +451,7 @@ export class SportsDataReadService {
     };
 
     if (competitionId) {
-      filter.leagueId = competitionId.trim();
+      filter.leagueId = competitionId.trim().toLowerCase();
     }
 
     if (from || to) {
@@ -508,7 +484,7 @@ export class SportsDataReadService {
     season?: number,
   ): Promise<unknown[]> {
     const filter: Record<string, unknown> = {
-      leagueId: competitionId.trim(),
+      leagueId: competitionId.trim().toLowerCase(),
     };
 
     if (typeof season === 'number' && Number.isFinite(season)) {
@@ -603,7 +579,7 @@ export class SportsDataReadService {
   async getOddsForEvent(eventId: string): Promise<unknown[]> {
     const normalizedEventId = eventId.trim();
 
-    const espnOdds = await this.espnOddsModel
+    return this.sportsOddsSnapshotModel
       .find({
         eventId: normalizedEventId,
       })
@@ -612,18 +588,6 @@ export class SportsDataReadService {
       })
       .lean()
       .exec();
-
-    const snapshots = await this.sportsOddsSnapshotModel
-      .find({
-        eventId: normalizedEventId,
-      })
-      .sort({
-        collectedAt: -1,
-      })
-      .lean()
-      .exec();
-
-    return [...espnOdds, ...snapshots];
   }
 
   // ============================================================
@@ -649,17 +613,16 @@ export class SportsDataReadService {
   // ============================================================
 
   private async paginateModel<T = any>(
-    // Mongoose's hydrated-document types are invariant across schema/model
-    // versions. Pagination only uses the model query API, so avoid imposing
-    // an incompatible document generic here.
     model: Model<any>,
     query: SportsAdminQuery,
     filter: Record<string, unknown> = {},
   ): Promise<PaginatedResult<T>> {
     const page = this.normalizePage(query.page);
+
     const limit = this.normalizeLimit(query.limit);
 
     const sortBy = this.normalizeSortField(query.sortBy);
+
     const sortOrder = query.sortOrder === 'asc' ? 1 : -1;
 
     const skip = (page - 1) * limit;
@@ -847,12 +810,14 @@ export class SportsDataReadService {
 
     return {
       total,
+
       status: {
         pending,
         processing,
         completed,
         failed,
       },
+
       type: {
         leagueRefresh,
         upcomingMatch,
@@ -959,64 +924,6 @@ export class SportsDataReadService {
   }
 
   // ============================================================
-  // ADMIN: ESPN MATCH EVENTS
-  // ============================================================
-
-  async getAdminEspnMatchEvents(query: SportsAdminQuery = {}) {
-    const filter: Record<string, unknown> = {};
-
-    if (query.eventId) {
-      filter.eventId = query.eventId.trim();
-    }
-
-    if (query.leagueId) {
-      filter.leagueId = query.leagueId.trim();
-    }
-
-    if (query.teamId) {
-      filter.teamId = query.teamId.trim();
-    }
-
-    return this.paginateModel(
-      this.espnMatchEventModel,
-      {
-        ...query,
-        sortBy: query.sortBy ?? 'collectedAt',
-      },
-      filter,
-    );
-  }
-
-  // ============================================================
-  // ADMIN: ESPN MATCH STATISTICS
-  // ============================================================
-
-  async getAdminEspnMatchStatistics(query: SportsAdminQuery = {}) {
-    const filter: Record<string, unknown> = {};
-
-    if (query.eventId) {
-      filter.eventId = query.eventId.trim();
-    }
-
-    if (query.leagueId) {
-      filter.leagueId = query.leagueId.trim();
-    }
-
-    if (query.teamId) {
-      filter.teamId = query.teamId.trim();
-    }
-
-    return this.paginateModel(
-      this.espnMatchStatisticsModel,
-      {
-        ...query,
-        sortBy: query.sortBy ?? 'collectedAt',
-      },
-      filter,
-    );
-  }
-
-  // ============================================================
   // ADMIN: ESPN NEWS
   // ============================================================
 
@@ -1027,35 +934,6 @@ export class SportsDataReadService {
 
     return this.paginateModel(
       this.espnNewsModel,
-      {
-        ...query,
-        sortBy: query.sortBy ?? 'collectedAt',
-      },
-      filter,
-    );
-  }
-
-  // ============================================================
-  // ADMIN: ESPN ODDS
-  // ============================================================
-
-  async getAdminEspnOdds(query: SportsAdminQuery = {}) {
-    const filter: Record<string, unknown> = {};
-
-    if (query.eventId) {
-      filter.eventId = query.eventId.trim();
-    }
-
-    if (query.leagueId) {
-      filter.leagueId = query.leagueId.trim();
-    }
-
-    if (query.provider) {
-      filter.providerId = query.provider.trim();
-    }
-
-    return this.paginateModel(
-      this.espnOddsModel,
       {
         ...query,
         sortBy: query.sortBy ?? 'collectedAt',

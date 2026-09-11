@@ -55,7 +55,7 @@ export class TheOddsApiService implements OnModuleInit {
   // ============================================================
 
   async getSports(): Promise<OddsApiSport[]> {
-    return this.request<OddsApiSport[]>('/sports');
+    return this.request<OddsApiSport[]>('/sports', 'sports');
   }
 
   // ============================================================
@@ -89,6 +89,7 @@ export class TheOddsApiService implements OnModuleInit {
 
     return this.request<OddsApiEventOdds[]>(
       `/sports/${encodeURIComponent(normalizedSport)}/odds`,
+      'odds',
       {
         regions: normalizedRegions,
 
@@ -105,26 +106,31 @@ export class TheOddsApiService implements OnModuleInit {
 
   private async request<T>(
     endpoint: string,
+    rateLimitEndpoint: string,
     params?: Record<string, string | number | boolean>,
   ): Promise<T> {
-    return this.providerRateLimitService.execute('odds-api', async () => {
-      try {
-        const response = await this.http.get<T>(endpoint, {
-          params: {
-            ...params,
-            apiKey: this.apiKey,
-          },
-        });
+    return this.providerRateLimitService.execute(
+      'odds-api',
+      rateLimitEndpoint,
+      async () => {
+        try {
+          const response = await this.http.get<T>(endpoint, {
+            params: {
+              ...params,
+              apiKey: this.apiKey,
+            },
+          });
 
-        return response.data;
-      } catch (error) {
-        this.logApiError(error, endpoint);
+          return response.data;
+        } catch (error) {
+          this.logApiError(error, endpoint);
 
-        throw new InternalServerErrorException(
-          `The Odds API request failed: ${endpoint}`,
-        );
-      }
-    });
+          throw new InternalServerErrorException(
+            `The Odds API request failed: ${endpoint}`,
+          );
+        }
+      },
+    );
   }
 
   // ============================================================

@@ -28,6 +28,7 @@ import { SportsStartupService } from './services/sports-startup.service';
 import { TeamCompetitionStatsService } from './services/team-competition-stats.service';
 import { TeamPerformanceProfileService } from './services/team-performance-profile.service';
 import { HeadToHeadService } from './services/head-to-head.service';
+import { MatchDerivedDataService } from './services/match-derived-data.service';
 
 import { YoutubeHighlightService } from './services/youtube-highlight.service';
 
@@ -54,19 +55,7 @@ import {
   EspnLiveMatchSchema,
 } from './schemas/espn/espn-livematch.schema';
 
-import {
-  EspnMatchEvent,
-  EspnMatchEventSchema,
-} from './schemas/espn/espn-match-event.schema';
-
-import {
-  EspnMatchStatistics,
-  EspnMatchStatisticsSchema,
-} from './schemas/espn/espn-match-statistics.schema';
-
 import { EspnNews, EspnNewsSchema } from './schemas/espn/espn-news.schema';
-
-import { EspnOdds, EspnOddsSchema } from './schemas/espn/espn-odds.schema';
 
 import {
   EspnStanding,
@@ -125,6 +114,11 @@ import {
 import { HeadToHead, HeadToHeadSchema } from './schemas/head-to-head.schema';
 
 import {
+  MatchDerivedData,
+  MatchDerivedDataSchema,
+} from './schemas/match-derived-data.schema';
+
+import {
   YouTubeHighlight,
   YouTubeHighlightSchema,
 } from './schemas/youtube-highlight.schema';
@@ -153,23 +147,8 @@ import {
       },
 
       {
-        name: EspnMatchEvent.name,
-        schema: EspnMatchEventSchema,
-      },
-
-      {
-        name: EspnMatchStatistics.name,
-        schema: EspnMatchStatisticsSchema,
-      },
-
-      {
         name: EspnNews.name,
         schema: EspnNewsSchema,
-      },
-
-      {
-        name: EspnOdds.name,
-        schema: EspnOddsSchema,
       },
 
       {
@@ -238,6 +217,11 @@ import {
       },
 
       {
+        name: MatchDerivedData.name,
+        schema: MatchDerivedDataSchema,
+      },
+
+      {
         name: YouTubeHighlight.name,
         schema: YouTubeHighlightSchema,
       },
@@ -278,6 +262,7 @@ import {
     TeamCompetitionStatsService,
     TeamPerformanceProfileService,
     HeadToHeadService,
+    MatchDerivedDataService,
 
     // YouTube lifecycle
     YoutubeHighlightService,
@@ -298,6 +283,7 @@ import {
     TeamCompetitionStatsService,
     TeamPerformanceProfileService,
     HeadToHeadService,
+    MatchDerivedDataService,
   ],
 })
 export class SportsModule {}

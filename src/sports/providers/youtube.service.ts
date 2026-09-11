@@ -32,6 +32,7 @@ export class YoutubeService implements OnModuleInit {
 
   constructor(
     private readonly configService: ConfigService,
+
     private readonly providerRateLimitService: SportsProviderRateLimitService,
   ) {}
 
@@ -48,12 +49,18 @@ export class YoutubeService implements OnModuleInit {
 
     this.http = axios.create({
       baseURL: this.baseUrl,
+
       timeout: 15_000,
+
       headers: {
         Accept: 'application/json',
       },
     });
   }
+
+  // ============================================================
+  // SEARCH
+  // ============================================================
 
   async searchVideos(
     options: YouTubeSearchOptions,
@@ -72,9 +79,13 @@ export class YoutubeService implements OnModuleInit {
 
     const params: Record<string, string | number | boolean> = {
       key: this.apiKey,
+
       part: 'snippet',
+
       q: options.query.trim(),
+
       type: YOUTUBE_CONFIG.searchType,
+
       maxResults,
     };
 
@@ -96,15 +107,20 @@ export class YoutubeService implements OnModuleInit {
 
     if (YOUTUBE_CONFIG.requireEmbeddable) {
       params.videoEmbeddable = 'true';
+
       params.videoSyndicated = 'true';
     }
 
-    return this.request<YouTubeSearchResponse>('/search', params);
+    return this.request<YouTubeSearchResponse>('/search', 'search', params);
   }
 
+  // ============================================================
+  // HIGHLIGHTS
+  // ============================================================
+
   /**
-   * Performs one search request and selects the best
-   * candidate from the returned search results.
+   * Performs one YouTube search and selects the
+   * best candidate.
    *
    * No videos.list request is made.
    */
@@ -114,6 +130,7 @@ export class YoutubeService implements OnModuleInit {
     publishedAfter?: Date,
   ): Promise<YouTubeVideoResult | null> {
     const normalizedHome = homeTeam?.trim();
+
     const normalizedAway = awayTeam?.trim();
 
     if (!normalizedHome || !normalizedAway) {
@@ -124,9 +141,13 @@ export class YoutubeService implements OnModuleInit {
 
     const searchResponse = await this.searchVideos({
       query,
+
       maxResults: 5,
+
       order: 'relevance',
+
       publishedAfter: publishedAfter?.toISOString(),
+
       publishedBefore: new Date().toISOString(),
     });
 
@@ -139,16 +160,24 @@ export class YoutubeService implements OnModuleInit {
 
         return {
           videoId,
+
           channelId: item.snippet?.channelId,
+
           channelTitle: item.snippet?.channelTitle,
+
           title: item.snippet?.title ?? '',
+
           description: item.snippet?.description,
+
           publishedAt: item.snippet?.publishedAt,
+
           thumbnailUrl:
             item.snippet?.thumbnails?.high?.url ??
             item.snippet?.thumbnails?.medium?.url ??
             item.snippet?.thumbnails?.default?.url,
+
           embeddable: true,
+
           videoUrl: `https://www.youtube.com/watch?v=${videoId}`,
         };
       });
@@ -160,6 +189,10 @@ export class YoutubeService implements OnModuleInit {
     return this.selectBestHighlight(candidates, normalizedHome, normalizedAway);
   }
 
+  // ============================================================
+  // HIGHLIGHT SELECTION
+  // ============================================================
+
   private selectBestHighlight(
     videos: YouTubeVideoResult[],
     homeTeam: string,
@@ -170,6 +203,7 @@ export class YoutubeService implements OnModuleInit {
     }
 
     const home = this.normalize(homeTeam);
+
     const away = this.normalize(awayTeam);
 
     const scored = videos.map((video) => {
@@ -202,26 +236,39 @@ export class YoutubeService implements OnModuleInit {
     return scored[0]?.video ?? null;
   }
 
+  // ============================================================
+  // REQUEST
+  // ============================================================
+
   private async request<T>(
     endpoint: string,
+    rateLimitEndpoint: string,
     params: Record<string, string | number | boolean>,
   ): Promise<T> {
-    return this.providerRateLimitService.execute('youtube', async () => {
-      try {
-        const response = await this.http.get<T>(endpoint, {
-          params,
-        });
+    return this.providerRateLimitService.execute(
+      'youtube',
+      rateLimitEndpoint,
+      async () => {
+        try {
+          const response = await this.http.get<T>(endpoint, {
+            params,
+          });
 
-        return response.data;
-      } catch (error) {
-        this.logApiError(error, endpoint);
+          return response.data;
+        } catch (error) {
+          this.logApiError(error, endpoint);
 
-        throw new InternalServerErrorException(
-          `YouTube API request failed: ${endpoint}`,
-        );
-      }
-    });
+          throw new InternalServerErrorException(
+            `YouTube API request failed: ${endpoint}`,
+          );
+        }
+      },
+    );
   }
+
+  // ============================================================
+  // NORMALIZATION
+  // ============================================================
 
   private normalize(value: string): string {
     return value
@@ -231,12 +278,17 @@ export class YoutubeService implements OnModuleInit {
       .trim();
   }
 
+  // ============================================================
+  // ERROR LOGGING
+  // ============================================================
+
   private logApiError(error: unknown, endpoint: string): void {
     if (axios.isAxiosError(error)) {
       const axiosError = error as AxiosError;
 
       this.logger.error(`YouTube API request failed: ${endpoint}`, {
         status: axiosError.response?.status,
+
         data: axiosError.response?.data,
       });
 
