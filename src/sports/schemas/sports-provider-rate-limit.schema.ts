@@ -9,17 +9,61 @@ export type SportsProviderRateLimitDocument =
   collection: 'sports_provider_rate_limits',
 })
 export class SportsProviderRateLimit {
+  /**
+   * Provider name.
+   *
+   * Multiple records can exist for the same provider,
+   * one for each endpoint.
+   */
   @Prop({
     required: true,
-    unique: true,
     index: true,
     trim: true,
   })
   provider!: string;
 
   /**
-   * Prevents a second request from starting
-   * before the provider interval expires.
+   * Logical endpoint identifier used by the rate limiter.
+   *
+   * Examples:
+   *
+   * ESPN:
+   *   leagues
+   *   league
+   *   scoreboard
+   *   standings
+   *   match
+   *   summary
+   *   live-scoreboard
+   *   news
+   *
+   * Football-Data:
+   *   competitions
+   *   competition
+   *   matches
+   *   competition-matches
+   *   standings
+   *   teams
+   *
+   * Odds API:
+   *   sports
+   *   odds
+   *
+   * YouTube:
+   *   search
+   *
+   * Query parameters are deliberately excluded.
+   */
+  @Prop({
+    required: true,
+    trim: true,
+    index: true,
+  })
+  endpoint!: string;
+
+  /**
+   * Prevents another worker from claiming the
+   * same provider + endpoint slot simultaneously.
    */
   @Prop({
     type: Date,
@@ -28,7 +72,8 @@ export class SportsProviderRateLimit {
   lockedUntil?: Date;
 
   /**
-   * Last provider request slot acquisition.
+   * Last outbound request timestamp for this
+   * provider + endpoint.
    */
   @Prop({
     type: Date,
@@ -38,6 +83,8 @@ export class SportsProviderRateLimit {
 
   /**
    * Current UTC day: YYYY-MM-DD
+   *
+   * Used by provider-wide quota accounting.
    */
   @Prop({
     required: true,
@@ -48,6 +95,9 @@ export class SportsProviderRateLimit {
 
   /**
    * Requests used during dailyPeriod.
+   *
+   * Quota counters belong to the provider quota
+   * record rather than an individual endpoint.
    */
   @Prop({
     required: true,
@@ -58,6 +108,8 @@ export class SportsProviderRateLimit {
 
   /**
    * Current UTC month: YYYY-MM
+   *
+   * Used by provider-wide quota accounting.
    */
   @Prop({
     required: true,
@@ -81,17 +133,30 @@ export const SportsProviderRateLimitSchema = SchemaFactory.createForClass(
   SportsProviderRateLimit,
 );
 
+/**
+ * One rate-limit record per provider + endpoint.
+ */
+SportsProviderRateLimitSchema.index(
+  {
+    provider: 1,
+    endpoint: 1,
+  },
+  {
+    unique: true,
+  },
+);
+
+/**
+ * Useful for expired-lock cleanup.
+ */
 SportsProviderRateLimitSchema.index({
-  provider: 1,
   lockedUntil: 1,
 });
 
+/**
+ * Useful for provider-wide quota lookups.
+ */
 SportsProviderRateLimitSchema.index({
   provider: 1,
-  dailyPeriod: 1,
-});
-
-SportsProviderRateLimitSchema.index({
-  provider: 1,
-  monthlyPeriod: 1,
+  endpoint: 1,
 });
