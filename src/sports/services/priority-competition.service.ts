@@ -3,7 +3,7 @@ import { Injectable } from '@nestjs/common';
 import {
   PRIORITY_COMPETITIONS,
   getPriorityCompetition,
-} from '../config/supported-competitions.config';
+} from '../config/priority-competitions.config';
 
 import { CollectionFrequency } from '../enums/collection-frequency.enum';
 import { CompetitionPriority } from '../enums/competition-priority.enum';

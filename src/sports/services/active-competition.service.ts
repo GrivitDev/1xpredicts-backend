@@ -3,8 +3,6 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 
 import { CompetitionPriority } from '../enums/competition-priority.enum';
-import { CompetitionRegion } from '../enums/competition-region.enum';
-import { CompetitionType } from '../enums/competition-type.enum';
 
 import {
   ActiveCompetitionStatus,
@@ -25,10 +23,22 @@ export class ActiveCompetitionService {
     private readonly activeCompetitionModel: Model<ActiveCompetitionDocument>,
   ) {}
 
+  // ============================================================
+  // UPSERT
+  // ============================================================
+
   async upsert(
     competition: Omit<ActiveCompetition, 'status' | 'lastUpdatedAt'>,
   ): Promise<ActiveCompetitionDocument> {
     const now = new Date();
+
+    const normalizedCompetitionId = competition.competitionId
+      .trim()
+      .toLowerCase();
+
+    const normalizedEspnLeagueSlug = competition.espnLeagueSlug
+      .trim()
+      .toLowerCase();
 
     const status = this.calculateStatus(
       competition.seasonStartDate,
@@ -40,8 +50,8 @@ export class ActiveCompetitionService {
 
     const update: Partial<ActiveCompetition> = {
       ...competition,
-      competitionId: competition.competitionId.trim().toLowerCase(),
-      espnLeagueSlug: competition.espnLeagueSlug.trim().toLowerCase(),
+      competitionId: normalizedCompetitionId,
+      espnLeagueSlug: normalizedEspnLeagueSlug,
       status,
       lastUpdatedAt: now,
     };
@@ -49,7 +59,7 @@ export class ActiveCompetitionService {
     return this.activeCompetitionModel
       .findOneAndUpdate(
         {
-          competitionId: update.competitionId,
+          competitionId: normalizedCompetitionId,
         },
         {
           $set: update,
@@ -63,12 +73,16 @@ export class ActiveCompetitionService {
       .exec();
   }
 
+  // ============================================================
+  // SYNC
+  // ============================================================
+
   async syncLeague(params: {
     competitionId: string;
     espnLeagueSlug: string;
     name: string;
-    type: CompetitionType;
-    region: CompetitionRegion;
+    type: ActiveCompetition['type'];
+    region: ActiveCompetition['region'];
     priority: CompetitionPriority;
     footballDataCode?: string;
     oddsApiSportKey?: string;
@@ -96,6 +110,61 @@ export class ActiveCompetitionService {
       espnPayload: params.espnPayload,
     });
   }
+
+  // ============================================================
+  // DELETE / REMOVE
+  // ============================================================
+
+  /**
+   * Remove a competition from the active competition collection.
+   *
+   * The ESPN league catalogue remains untouched.
+   */
+  async removeByCompetitionId(competitionId: string): Promise<boolean> {
+    const normalized = this.normalizeId(competitionId);
+
+    if (!normalized) {
+      return false;
+    }
+
+    const result = await this.activeCompetitionModel
+      .deleteOne({
+        competitionId: normalized,
+      })
+      .exec();
+
+    return (result.deletedCount ?? 0) > 0;
+  }
+
+  /**
+   * Remove active competitions whose IDs are not present
+   * in the supplied current active competition list.
+   */
+  async removeMissingCompetitions(
+    existingCompetitionIds: string[],
+  ): Promise<number> {
+    const normalizedIds = existingCompetitionIds
+      .map((id) => this.normalizeId(id))
+      .filter(Boolean);
+
+    if (normalizedIds.length === 0) {
+      return 0;
+    }
+
+    const result = await this.activeCompetitionModel
+      .deleteMany({
+        competitionId: {
+          $nin: normalizedIds,
+        },
+      })
+      .exec();
+
+    return result.deletedCount ?? 0;
+  }
+
+  // ============================================================
+  // READS
+  // ============================================================
 
   async getAll(): Promise<ActiveCompetitionDocument[]> {
     return this.activeCompetitionModel
@@ -191,9 +260,15 @@ export class ActiveCompetitionService {
   async getByCompetitionId(
     competitionId: string,
   ): Promise<ActiveCompetitionDocument | null> {
+    const normalized = this.normalizeId(competitionId);
+
+    if (!normalized) {
+      return null;
+    }
+
     return this.activeCompetitionModel
       .findOne({
-        competitionId: competitionId.trim().toLowerCase(),
+        competitionId: normalized,
       })
       .exec();
   }
@@ -201,12 +276,22 @@ export class ActiveCompetitionService {
   async getByEspnLeagueSlug(
     espnLeagueSlug: string,
   ): Promise<ActiveCompetitionDocument | null> {
+    const normalized = this.normalizeId(espnLeagueSlug);
+
+    if (!normalized) {
+      return null;
+    }
+
     return this.activeCompetitionModel
       .findOne({
-        espnLeagueSlug: espnLeagueSlug.trim().toLowerCase(),
+        espnLeagueSlug: normalized,
       })
       .exec();
   }
+
+  // ============================================================
+  // FIXTURE ACTIVITY
+  // ============================================================
 
   async updateFixtureActivity(params: {
     competitionId: string;
@@ -257,10 +342,27 @@ export class ActiveCompetitionService {
       now,
     );
 
+    /*
+     * ActiveCompetition should contain only competitions
+     * belonging to a currently active season.
+     *
+     * Therefore, once the competition becomes inactive,
+     * remove it rather than leaving an obsolete document.
+     */
+    if (competition.status !== ActiveCompetitionStatus.ACTIVE) {
+      await this.removeByCompetitionId(competition.competitionId);
+
+      return null;
+    }
+
     competition.lastUpdatedAt = now;
 
     return competition.save();
   }
+
+  // ============================================================
+  // STATUS REFRESH
+  // ============================================================
 
   async refreshStatuses(): Promise<number> {
     const competitions = await this.activeCompetitionModel.find({}).exec();
@@ -277,6 +379,16 @@ export class ActiveCompetitionService {
         now,
       );
 
+      /*
+       * ActiveCompetition is now strictly the active-season
+       * collection. Anything that is not ACTIVE is removed.
+       */
+      if (nextStatus !== ActiveCompetitionStatus.ACTIVE) {
+        await this.removeByCompetitionId(competition.competitionId);
+        updated += 1;
+        continue;
+      }
+
       if (competition.status === nextStatus) {
         continue;
       }
@@ -292,31 +404,9 @@ export class ActiveCompetitionService {
     return updated;
   }
 
-  async removeMissingCompetitions(
-    existingCompetitionIds: string[],
-  ): Promise<number> {
-    if (existingCompetitionIds.length === 0) {
-      return 0;
-    }
-
-    const normalizedIds = existingCompetitionIds
-      .map((id) => id.trim().toLowerCase())
-      .filter(Boolean);
-
-    if (normalizedIds.length === 0) {
-      return 0;
-    }
-
-    const result = await this.activeCompetitionModel
-      .deleteMany({
-        competitionId: {
-          $nin: normalizedIds,
-        },
-      })
-      .exec();
-
-    return result.deletedCount ?? 0;
-  }
+  // ============================================================
+  // STATUS CALCULATION
+  // ============================================================
 
   calculateStatus(
     seasonStartDate?: Date,
@@ -325,18 +415,34 @@ export class ActiveCompetitionService {
     nextFixtureDate?: Date,
     now = new Date(),
   ): ActiveCompetitionStatus {
+    /*
+     * A competition whose season has not started yet
+     * is not an active competition.
+     */
     if (seasonStartDate && now < new Date(seasonStartDate)) {
       return ActiveCompetitionStatus.UPCOMING;
     }
 
+    /*
+     * A season with an authoritative end date that has passed
+     * is finished, unless ESPN still gives a future fixture.
+     */
     if (seasonEndDate && now > new Date(seasonEndDate) && !nextFixtureDate) {
       return ActiveCompetitionStatus.FINISHED;
     }
 
+    /*
+     * A future fixture inside the current season keeps the
+     * competition active.
+     */
     if (nextFixtureDate && new Date(nextFixtureDate) >= now) {
       return ActiveCompetitionStatus.ACTIVE;
     }
 
+    /*
+     * A current season whose date range contains now
+     * is active even when there is currently no next fixture.
+     */
     if (
       seasonStartDate &&
       seasonEndDate &&
@@ -346,7 +452,17 @@ export class ActiveCompetitionService {
       return ActiveCompetitionStatus.ACTIVE;
     }
 
-    if (lastFixtureDate) {
+    /*
+     * If ESPN does not provide an end date but the season has
+     * already started and the competition has recent fixtures,
+     * keep it active.
+     */
+    if (
+      seasonStartDate &&
+      now >= new Date(seasonStartDate) &&
+      !seasonEndDate &&
+      lastFixtureDate
+    ) {
       const elapsed = now.getTime() - new Date(lastFixtureDate).getTime();
 
       if (elapsed <= 7 * 24 * 60 * 60 * 1000) {
@@ -355,5 +471,13 @@ export class ActiveCompetitionService {
     }
 
     return ActiveCompetitionStatus.INACTIVE;
+  }
+
+  // ============================================================
+  // HELPERS
+  // ============================================================
+
+  private normalizeId(value?: string): string {
+    return typeof value === 'string' ? value.trim().toLowerCase() : '';
   }
 }

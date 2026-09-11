@@ -3,6 +3,7 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { EspnActiveCompetitionService } from './espn-active-competition.service';
 import { EspnQueueBuilderService } from './espn-queue-builder.service';
 import { EspnQueueService } from './espn-queue.service';
+import { SportsCollectionService } from './sports-collection.service';
 
 @Injectable()
 export class SportsStartupService implements OnModuleInit {
@@ -10,16 +11,16 @@ export class SportsStartupService implements OnModuleInit {
 
   constructor(
     private readonly espnActiveCompetitionService: EspnActiveCompetitionService,
+
+    private readonly sportsCollectionService: SportsCollectionService,
+
     private readonly espnQueueBuilderService: EspnQueueBuilderService,
+
     private readonly espnQueueService: EspnQueueService,
   ) {}
 
   /**
    * Do not block NestJS bootstrap.
-   *
-   * ESPN catalogue discovery and league-detail discovery are
-   * intentionally slow because every outbound ESPN request
-   * shares the provider-wide rate limiter.
    */
   onModuleInit(): void {
     this.logger.log('Starting ESPN background initialization');
@@ -32,15 +33,17 @@ export class SportsStartupService implements OnModuleInit {
   /**
    * Startup flow:
    *
-   * 1. Discover the complete ESPN catalogue.
-   * 2. Store/classify every league.
-   * 3. Process every league detail one-by-one.
-   * 4. Extract the current season and season dates.
-   * 5. Create/update ActiveCompetition records.
-   * 6. Build the initial queue from stored information.
+   * 1. Discover complete ESPN catalogue.
+   * 2. Synchronize league details.
+   * 3. Determine current active seasons.
+   * 4. Bootstrap fixtures:
    *
-   * getLeagues() is only called here at startup and by the
-   * dedicated monthly catalogue refresh scheduler.
+   *       seasonStartDate
+   *              ->
+   *       today + 4 days
+   *
+   * 5. Build league refresh queue.
+   * 6. Read queue state.
    */
   private async initializeEspn(): Promise<void> {
     // ==========================================================
@@ -54,7 +57,7 @@ export class SportsStartupService implements OnModuleInit {
         await this.espnActiveCompetitionService.synchronizeLeagueCatalogue();
 
       this.logger.log(
-        `ESPN league catalogue synchronized: ${leagues.length} leagues`,
+        `ESPN league catalogue synchronized: ` + `${leagues.length} leagues`,
       );
     } catch (error) {
       this.logger.error(
@@ -69,16 +72,27 @@ export class SportsStartupService implements OnModuleInit {
     // STEP 2 — LEAGUE DETAILS + ACTIVE SEASONS
     // ==========================================================
 
+    let detailResult: {
+      processed: number;
+      synchronized: number;
+      active: number;
+      inactive: number;
+      skipped: number;
+      failed: number;
+    };
+
     try {
-      const result =
+      detailResult =
         await this.espnActiveCompetitionService.synchronizeLeagueDetails();
 
       this.logger.log(
         `ESPN league season discovery completed: ` +
-          `processed=${result.processed}, ` +
-          `synchronized=${result.synchronized}, ` +
-          `skipped=${result.skipped}, ` +
-          `failed=${result.failed}`,
+          `processed=${detailResult.processed}, ` +
+          `synchronized=${detailResult.synchronized}, ` +
+          `active=${detailResult.active}, ` +
+          `inactive=${detailResult.inactive}, ` +
+          `skipped=${detailResult.skipped}, ` +
+          `failed=${detailResult.failed}`,
       );
     } catch (error) {
       this.logger.error(
@@ -90,7 +104,85 @@ export class SportsStartupService implements OnModuleInit {
     }
 
     // ==========================================================
-    // STEP 3 — INITIAL PRIORITY QUEUE
+    // STEP 3 — INITIAL FULL-SEASON FIXTURE COLLECTION
+    // ==========================================================
+
+    try {
+      const activeLeagues =
+        await this.espnActiveCompetitionService.getActiveLeagues();
+
+      let processed = 0;
+      let collected = 0;
+      let failed = 0;
+
+      this.logger.log(
+        `Starting ESPN fixture bootstrap for ` +
+          `${activeLeagues.length} active leagues`,
+      );
+
+      for (const league of activeLeagues) {
+        if (!league.isActive) {
+          continue;
+        }
+
+        if (typeof league.season !== 'number' || !league.seasonStartDate) {
+          this.logger.warn(
+            `Skipping startup fixture bootstrap for ` +
+              `${league.leagueId}: missing season or seasonStartDate`,
+          );
+
+          continue;
+        }
+
+        processed += 1;
+
+        try {
+          const result =
+            await this.sportsCollectionService.collectEspnSeasonFixtures({
+              leagueId: league.slug || league.leagueId,
+
+              season: league.season,
+
+              seasonStartDate: league.seasonStartDate,
+            });
+
+          collected += result.collected;
+
+          this.logger.log(
+            `ESPN startup fixture bootstrap complete for ` +
+              `${league.leagueId}: ` +
+              `collected=${result.collected}, ` +
+              `range=${result.dateFrom}->${result.dateTo}`,
+          );
+        } catch (error) {
+          failed += 1;
+
+          this.logger.error(
+            `ESPN startup fixture bootstrap failed for ` +
+              `${league.leagueId}: ` +
+              `${error instanceof Error ? error.message : String(error)}`,
+            error instanceof Error ? error.stack : undefined,
+          );
+        }
+      }
+
+      this.logger.log(
+        `ESPN startup fixture bootstrap completed: ` +
+          `processed=${processed}, ` +
+          `collected=${collected}, ` +
+          `failed=${failed}`,
+      );
+    } catch (error) {
+      this.logger.error(
+        'ESPN startup fixture bootstrap failed',
+        error instanceof Error ? error.stack : String(error),
+      );
+
+      return;
+    }
+
+    // ==========================================================
+    // STEP 4 — INITIAL LEAGUE QUEUE
     // ==========================================================
 
     try {
@@ -112,7 +204,7 @@ export class SportsStartupService implements OnModuleInit {
     }
 
     // ==========================================================
-    // STEP 4 — QUEUE STATE
+    // STEP 5 — QUEUE STATE
     // ==========================================================
 
     try {
@@ -144,8 +236,11 @@ export class SportsStartupService implements OnModuleInit {
   }> {
     return {
       pending: await this.espnQueueService.countPending(),
+
       processing: await this.espnQueueService.countProcessing(),
+
       completed: await this.espnQueueService.countCompleted(),
+
       failed: await this.espnQueueService.countFailed(),
     };
   }

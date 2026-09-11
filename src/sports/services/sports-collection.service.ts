@@ -4,9 +4,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 
 import { EspnService } from '../providers/espn.service';
-
 import { FootballDataService } from '../providers/football-data.service';
-
 import { TheOddsApiService } from '../providers/the-odds-api.service';
 
 import {
@@ -84,6 +82,12 @@ import {
 export class SportsCollectionService {
   private readonly logger = new Logger(SportsCollectionService.name);
 
+  private readonly STARTUP_FIXTURE_FORWARD_DAYS = 4;
+
+  private readonly LEAGUE_REFRESH_PAST_DAYS = 1;
+
+  private readonly LEAGUE_REFRESH_FORWARD_DAYS = 6;
+
   constructor(
     private readonly espnService: EspnService,
 
@@ -144,9 +148,78 @@ export class SportsCollectionService {
   ) {}
 
   // ============================================================
+  // ESPN — STARTUP SEASON FIXTURE COLLECTION
+  // ============================================================
+
+  /**
+   * Collect fixtures for the complete currently active season
+   * of one ESPN league.
+   *
+   * Range:
+   *
+   * season start date
+   *        ->
+   * today + 4 days
+   *
+   * This is intended for startup / full season bootstrap.
+   */
+  async collectEspnSeasonFixtures(params: {
+    leagueId: string;
+    season?: number;
+    seasonStartDate?: Date;
+  }): Promise<{
+    fixtureIds: string[];
+    collected: number;
+    dateFrom?: string;
+    dateTo: string;
+  }> {
+    const now = new Date();
+
+    const dateFrom = this.toUtcDateOnly(params.seasonStartDate ?? now);
+
+    const dateToDate = new Date(
+      now.getTime() + this.STARTUP_FIXTURE_FORWARD_DAYS * 24 * 60 * 60 * 1000,
+    );
+
+    const dateTo = this.toUtcDateOnly(dateToDate);
+
+    const response = await this.espnService.getFixtures(
+      params.leagueId,
+      dateFrom,
+      dateTo,
+    );
+
+    const result = await this.collectEspnFixtures(params.leagueId, response);
+
+    this.logger.log(
+      `ESPN startup fixtures collected for ${params.leagueId}: ` +
+        `${result.collected} fixtures (${dateFrom} -> ${dateTo})`,
+    );
+
+    return {
+      fixtureIds: result.fixtureIds,
+      collected: result.collected,
+      dateFrom,
+      dateTo,
+    };
+  }
+
+  // ============================================================
   // ESPN — LEAGUE REFRESH
   // ============================================================
 
+  /**
+   * Refresh a league's recent and upcoming fixture window.
+   *
+   * Range:
+   *
+   * yesterday
+   *     ->
+   * today + 6 days
+   *
+   * This keeps the local fixture database continuously aligned
+   * with ESPN without repeatedly downloading the entire season.
+   */
   async processEspnLeagueRefresh(params: {
     leagueId: string;
     season?: number;
@@ -155,8 +228,27 @@ export class SportsCollectionService {
     collected: number;
     standings: number;
     leadersCollected: boolean;
+    dateFrom: string;
+    dateTo: string;
   }> {
-    const scoreboard = await this.espnService.getFixtures(params.leagueId);
+    const now = new Date();
+
+    const dateFromDate = new Date(
+      now.getTime() - this.LEAGUE_REFRESH_PAST_DAYS * 24 * 60 * 60 * 1000,
+    );
+
+    const dateToDate = new Date(
+      now.getTime() + this.LEAGUE_REFRESH_FORWARD_DAYS * 24 * 60 * 60 * 1000,
+    );
+
+    const dateFrom = this.toUtcDateOnly(dateFromDate);
+    const dateTo = this.toUtcDateOnly(dateToDate);
+
+    const scoreboard = await this.espnService.getFixtures(
+      params.leagueId,
+      dateFrom,
+      dateTo,
+    );
 
     const fixtureResult = await this.collectEspnFixtures(
       params.leagueId,
@@ -183,12 +275,11 @@ export class SportsCollectionService {
 
     return {
       fixtureIds: fixtureResult.fixtureIds,
-
       collected: fixtureResult.collected,
-
       standings,
-
       leadersCollected,
+      dateFrom,
+      dateTo,
     };
   }
 
@@ -257,27 +348,39 @@ export class SportsCollectionService {
               season,
               fixtureDate,
               status,
+
               statusDetail: this.getNestedString(competition, [
                 'status',
                 'type',
                 'description',
               ]),
+
               statusShortDetail: this.getNestedString(competition, [
                 'status',
                 'type',
                 'shortDetail',
               ]),
+
               period: this.toNumber(competition?.status?.period),
+
               completed,
+
               homeTeamId: this.getTeamId(home),
+
               awayTeamId: this.getTeamId(away),
+
               homeScore: this.toNumber(home?.score),
+
               awayScore: this.toNumber(away?.score),
+
               venueId: this.toStringValue(competition?.venue?.id),
+
               venueName:
                 this.getNestedString(competition, ['venue', 'fullName']) ??
                 this.getNestedString(competition, ['venue', 'name']),
+
               payload,
+
               collectedAt: new Date(),
             },
           },
@@ -327,16 +430,26 @@ export class SportsCollectionService {
             $set: {
               teamId,
               leagueId,
+
               name: team?.name ?? team?.displayName ?? `Team ${teamId}`,
+
               displayName: team?.displayName ?? team?.name ?? `Team ${teamId}`,
+
               shortDisplayName:
                 team?.shortDisplayName ?? team?.name ?? `Team ${teamId}`,
+
               abbreviation: team?.abbreviation,
+
               location: team?.location,
+
               logo: this.getTeamLogo(team),
-              colors: team?.color || team?.colors,
+
+              colors: team?.color ?? team?.colors,
+
               active: team?.isActive ?? true,
+
               payload: team ?? competitor,
+
               collectedAt: new Date(),
             },
           },
@@ -404,20 +517,33 @@ export class SportsCollectionService {
               leagueId,
               season: resolvedSeason,
               teamId,
+
               rank: this.toNumber(entry?.rank ?? entry?.position) ?? 0,
+
               points: value('points'),
+
               played: value('gamesPlayed') ?? value('played'),
+
               wins: value('wins'),
+
               draws: value('ties') ?? value('draws'),
+
               losses: value('losses'),
+
               goalsFor: value('pointsFor') ?? value('goalsFor'),
+
               goalsAgainst: value('pointsAgainst') ?? value('goalsAgainst'),
+
               goalDifference: value('goalDifference'),
+
               form,
+
               description: this.getStatisticDisplayValue(statistics, [
                 'description',
               ]),
+
               payload: entry as Record<string, unknown>,
+
               collectedAt: new Date(),
             },
           },
@@ -442,6 +568,7 @@ export class SportsCollectionService {
 
     return collected;
   }
+
   // ============================================================
   // ESPN — LEADERS
   // ============================================================
@@ -467,13 +594,6 @@ export class SportsCollectionService {
 
     const existingPayload = league.payload ?? {};
 
-    /*
-     * The current season was established by the league-detail
-     * discovery stage.
-     *
-     * Leaders are additional league data and must never replace
-     * that authoritative season value.
-     */
     await this.espnLeagueModel
       .updateOne(
         {
@@ -483,7 +603,9 @@ export class SportsCollectionService {
           $set: {
             payload: {
               ...existingPayload,
+
               leaders: response,
+
               leadersCollectedAt: new Date(),
             },
 
@@ -549,32 +671,48 @@ export class SportsCollectionService {
         {
           $set: {
             eventId,
+
             leagueId: params.leagueId,
+
             season,
+
             fixtureDate,
+
             status,
+
             statusDetail: this.getNestedString(competition, [
               'status',
               'type',
               'description',
             ]),
+
             statusShortDetail: this.getNestedString(competition, [
               'status',
               'type',
               'shortDetail',
             ]),
+
             period: this.toNumber(competition?.status?.period),
+
             completed,
+
             homeTeamId: this.getTeamId(home),
+
             awayTeamId: this.getTeamId(away),
+
             homeScore: this.toNumber(home?.score),
+
             awayScore: this.toNumber(away?.score),
+
             venueId: this.toStringValue(competition?.venue?.id),
+
             venueName: competition?.venue?.fullName ?? competition?.venue?.name,
+
             payload: {
               event,
               competition,
             },
+
             collectedAt: new Date(),
           },
         },
@@ -588,7 +726,7 @@ export class SportsCollectionService {
   }
 
   // ============================================================
-  // ESPN — SUMMARY
+  // ESPN — MATCH SUMMARY
   // ============================================================
 
   async collectEspnMatchSummary(params: {
@@ -664,7 +802,6 @@ export class SportsCollectionService {
         .updateOne(
           {
             eventId: params.eventId,
-
             playId,
           },
           {
@@ -993,23 +1130,37 @@ export class SportsCollectionService {
           .updateOne(
             {
               competitionId: competition.id,
+
               competitionCode,
+
               seasonId,
+
               stage: standing.stage ?? 'REGULAR_SEASON',
+
               type: standing.type ?? 'TOTAL',
+
               group: standing.group ?? null,
+
               teamId: row.team.id,
             },
             {
               $set: {
                 competitionId: competition.id,
+
                 competitionCode,
+
                 seasonId,
+
                 stage: standing.stage ?? 'REGULAR_SEASON',
+
                 type: standing.type ?? 'TOTAL',
+
                 group: standing.group ?? null,
+
                 teamId: row.team.id,
+
                 payload: row as unknown as Record<string, unknown>,
+
                 collectedAt: new Date(),
               },
             },
@@ -1406,19 +1557,21 @@ export class SportsCollectionService {
     return Number.isFinite(result) ? result : undefined;
   }
 
-  private formatDateForEspn(value?: Date): string | undefined {
-    if (!value) {
-      return undefined;
-    }
-
+  /**
+   * Converts a Date into the UTC calendar date
+   * expected by ESPN's dates parameter.
+   *
+   * Result:
+   *
+   * YYYY-MM-DD
+   */
+  private toUtcDateOnly(value: Date): string {
     const date = new Date(value);
 
-    if (Number.isNaN(date.getTime())) {
-      return undefined;
-    }
-
     const year = date.getUTCFullYear();
+
     const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+
     const day = String(date.getUTCDate()).padStart(2, '0');
 
     return `${year}-${month}-${day}`;

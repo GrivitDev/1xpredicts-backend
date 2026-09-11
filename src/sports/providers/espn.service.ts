@@ -35,11 +35,23 @@ export class EspnService {
 
   private readonly http: AxiosInstance;
 
+  /**
+   * Large page size reduces the number of ESPN requests
+   * for large historical date ranges.
+   */
+  private readonly scoreboardPageSize = 1000;
+
+  /**
+   * Safety ceiling in case ESPN returns unexpected pagination.
+   */
+  private readonly scoreboardMaxPages = 100;
+
   constructor(
     private readonly providerRateLimitService: SportsProviderRateLimitService,
   ) {
     this.http = axios.create({
       timeout: 15_000,
+
       headers: {
         Accept: 'application/json',
       },
@@ -52,8 +64,6 @@ export class EspnService {
 
   /**
    * Gets one page from ESPN's complete soccer league catalogue.
-   *
-   * The catalogue is paginated.
    */
   async getLeaguePage(page = 1, limit = 25): Promise<EspnApiResponse> {
     if (!Number.isInteger(page) || page < 1) {
@@ -74,10 +84,6 @@ export class EspnService {
 
   /**
    * Gets the complete ESPN soccer league catalogue.
-   *
-   * We do not resolve each $ref individually here.
-   * The catalogue itself is sufficient to discover the
-   * ESPN league slugs.
    */
   async getLeagues(): Promise<EspnLeague[]> {
     const leagues: EspnLeague[] = [];
@@ -86,8 +92,9 @@ export class EspnService {
 
     leagues.push(...this.extractCatalogueLeagues(firstPage));
 
-    const pageCount = firstPage.pageCount ?? 1;
-    const pageSize = firstPage.pageSize ?? 25;
+    const pageCount = this.getPageCount(firstPage);
+
+    const pageSize = this.getPageSize(firstPage, 25);
 
     for (let page = 2; page <= pageCount; page += 1) {
       const response = await this.getLeaguePage(page, pageSize);
@@ -102,12 +109,6 @@ export class EspnService {
   // 2. LEAGUE DETAIL
   // ============================================================
 
-  /**
-   * Gets detailed information for one ESPN league.
-   *
-   * Used during monthly discovery and when a new league
-   * is discovered.
-   */
   async getLeague(league: string): Promise<EspnLeague> {
     this.validateLeague(league);
 
@@ -123,11 +124,17 @@ export class EspnService {
   // ============================================================
 
   /**
-   * Returns fixtures, live matches and completed events
-   * for a league.
+   * Gets all scoreboard events for the requested date range.
    *
-   * Results are determined from the returned event/competition
-   * status rather than by calling another results endpoint.
+   * If no dates are supplied, ESPN returns the current day.
+   *
+   * This method automatically:
+   *
+   * 1. Requests page 1.
+   * 2. Reads ESPN pagination metadata when available.
+   * 3. Requests every remaining page sequentially.
+   * 4. Stops when no additional events are returned.
+   * 5. Deduplicates events by event ID.
    */
   async getFixtures(
     league: string,
@@ -135,9 +142,126 @@ export class EspnService {
     dateTo?: string,
   ): Promise<EspnApiResponse> {
     this.validateLeague(league);
+
     this.validateDateRange(dateFrom, dateTo);
 
-    const params: Record<string, string> = {};
+    const firstPage = await this.getFixturesPage(league, dateFrom, dateTo, 1);
+
+    const allEvents: EspnEvent[] = [];
+
+    const firstEvents = this.extractEvents(firstPage);
+
+    allEvents.push(...firstEvents);
+
+    const pageSize = this.getPageSize(firstPage, this.scoreboardPageSize);
+
+    const explicitPageCount = this.getPageCount(firstPage);
+
+    let pageCount = explicitPageCount;
+
+    /*
+     * If ESPN does not provide pageCount but the first page
+     * is completely full, continue until a partial page appears.
+     */
+    if (pageCount <= 1 && firstEvents.length >= pageSize) {
+      pageCount = this.scoreboardMaxPages;
+    }
+
+    const seenEventIds = new Set<string>();
+
+    for (const event of firstEvents) {
+      const eventId = this.toStringValue(event?.id);
+
+      if (eventId) {
+        seenEventIds.add(eventId);
+      }
+    }
+
+    for (let page = 2; page <= pageCount; page += 1) {
+      const response = await this.getFixturesPage(
+        league,
+        dateFrom,
+        dateTo,
+        page,
+      );
+
+      const events = this.extractEvents(response);
+
+      if (!events.length) {
+        break;
+      }
+
+      let newEvents = 0;
+
+      for (const event of events) {
+        const eventId = this.toStringValue(event?.id);
+
+        if (eventId && seenEventIds.has(eventId)) {
+          continue;
+        }
+
+        if (eventId) {
+          seenEventIds.add(eventId);
+        }
+
+        allEvents.push(event);
+
+        newEvents += 1;
+      }
+
+      /*
+       * If ESPN ignored the page parameter or returned only
+       * duplicates, stop instead of looping unnecessarily.
+       */
+      if (newEvents === 0) {
+        break;
+      }
+
+      /*
+       * When we are operating without explicit page metadata,
+       * a partial page means the final page has been reached.
+       */
+      if (explicitPageCount <= 1 && events.length < pageSize) {
+        break;
+      }
+
+      if (page >= this.scoreboardMaxPages) {
+        this.logger.warn(
+          `ESPN scoreboard pagination reached safety limit ` + `for ${league}`,
+        );
+
+        break;
+      }
+    }
+
+    return {
+      ...firstPage,
+
+      events: allEvents,
+
+      count: allEvents.length,
+
+      pageIndex: 1,
+
+      pageSize: allEvents.length > 0 ? allEvents.length : pageSize,
+
+      pageCount: 1,
+    };
+  }
+
+  /**
+   * Requests exactly one scoreboard page.
+   */
+  private async getFixturesPage(
+    league: string,
+    dateFrom?: string,
+    dateTo?: string,
+    page = 1,
+  ): Promise<EspnApiResponse> {
+    const params: Record<string, string> = {
+      page: String(page),
+      limit: String(this.scoreboardPageSize),
+    };
 
     this.applyDateRange(params, dateFrom, dateTo);
 
@@ -149,12 +273,10 @@ export class EspnService {
     );
   }
 
-  /**
-   * Kept as a compatibility alias.
-   *
-   * ESPN uses the scoreboard for both scheduled and
-   * completed matches.
-   */
+  // ============================================================
+  // 4. LEAGUE RESULTS
+  // ============================================================
+
   async getResults(
     league: string,
     dateFrom?: string,
@@ -164,14 +286,9 @@ export class EspnService {
   }
 
   // ============================================================
-  // 4. LEAGUE STANDINGS
+  // 5. LEAGUE STANDINGS
   // ============================================================
 
-  /**
-   * Gets current league standings.
-   *
-   * ESPN soccer standings use the /apis/v2/ endpoint.
-   */
   async getStandings(league: string): Promise<EspnStandingsResponse> {
     this.validateLeague(league);
 
@@ -183,12 +300,9 @@ export class EspnService {
   }
 
   // ============================================================
-  // 5. LEAGUE LEADERS
+  // 6. LEAGUE LEADERS
   // ============================================================
 
-  /**
-   * Gets league statistical leaders.
-   */
   async getLeaders(league: string): Promise<Record<string, unknown>> {
     this.validateLeague(league);
 
@@ -200,14 +314,12 @@ export class EspnService {
   }
 
   // ============================================================
-  // 6. MATCH EVENT
+  // 7. MATCH EVENT
   // ============================================================
 
-  /**
-   * Gets one ESPN event.
-   */
   async getMatch(league: string, eventId: string): Promise<EspnEvent> {
     this.validateLeague(league);
+
     this.validateId(eventId, 'eventId');
 
     return this.request<EspnEvent>(
@@ -218,19 +330,18 @@ export class EspnService {
   }
 
   // ============================================================
-  // 7. MATCH COMPETITION
+  // 8. MATCH COMPETITION
   // ============================================================
 
-  /**
-   * Gets the competition details attached to an event.
-   */
   async getCompetition(
     league: string,
     eventId: string,
     competitionId: string,
   ): Promise<EspnCompetition> {
     this.validateLeague(league);
+
     this.validateId(eventId, 'eventId');
+
     this.validateId(competitionId, 'competitionId');
 
     return this.request<EspnCompetition>(
@@ -243,19 +354,15 @@ export class EspnService {
   }
 
   // ============================================================
-  // 8. MATCH SUMMARY
+  // 9. MATCH SUMMARY
   // ============================================================
 
-  /**
-   * Gets ESPN's complete available match summary.
-   *
-   * The summary endpoint is event-based.
-   */
   async getMatchSummary(
     league: string,
     eventId: string,
   ): Promise<Record<string, unknown>> {
     this.validateLeague(league);
+
     this.validateId(eventId, 'eventId');
 
     return this.request<Record<string, unknown>>(
@@ -269,19 +376,18 @@ export class EspnService {
   }
 
   // ============================================================
-  // 9. MATCH PLAYS / EVENTS
+  // 10. MATCH PLAYS / EVENTS
   // ============================================================
 
-  /**
-   * Gets match play-by-play events.
-   */
   async getMatchEvents(
     league: string,
     eventId: string,
     competitionId: string,
   ): Promise<Record<string, unknown>> {
     this.validateLeague(league);
+
     this.validateId(eventId, 'eventId');
+
     this.validateId(competitionId, 'competitionId');
 
     return this.request<Record<string, unknown>>(
@@ -297,12 +403,9 @@ export class EspnService {
   }
 
   // ============================================================
-  // 10. MATCH STATISTICS
+  // 11. MATCH STATISTICS
   // ============================================================
 
-  /**
-   * Gets detailed statistics for one match competitor.
-   */
   async getMatchStatistics(
     league: string,
     eventId: string,
@@ -329,14 +432,9 @@ export class EspnService {
   }
 
   // ============================================================
-  // 11. MATCH ODDS
+  // 12. MATCH ODDS
   // ============================================================
 
-  /**
-   * Gets ESPN's own match odds when available.
-   *
-   * This is separate from The Odds API.
-   */
   async getMatchOdds(
     league: string,
     eventId: string,
@@ -348,7 +446,12 @@ export class EspnService {
 
     this.validateId(competitionId, 'competitionId');
 
-    const response = await this.request<EspnOdds[] | { items?: EspnOdds[] }>(
+    const response = await this.request<
+      | EspnOdds[]
+      | {
+          items?: EspnOdds[];
+        }
+    >(
       `${this.coreBaseUrl}/leagues/${encodeURIComponent(
         league.trim().toLowerCase(),
       )}/events/${encodeURIComponent(
@@ -364,30 +467,17 @@ export class EspnService {
   }
 
   // ============================================================
-  // 12. GLOBAL LIVE SCOREBOARD
+  // 13. GLOBAL LIVE SCOREBOARD
   // ============================================================
 
-  /**
-   * Gets the current global ESPN soccer scoreboard.
-   *
-   * Used for live-event discovery rather than querying every
-   * league individually just to find currently live matches.
-   */
   async getLiveMatches(): Promise<EspnApiResponse> {
     return this.request<EspnApiResponse>(`${this.siteBaseUrl}/all/scoreboard`);
   }
 
   // ============================================================
-  // 13. GLOBAL SOCCER NEWS
+  // 14. GLOBAL SOCCER NEWS
   // ============================================================
 
-  /**
-   * Gets global soccer news.
-   *
-   * No league is supplied here intentionally.
-   *
-   * News runs through the separate 12-hour news scheduler.
-   */
   async getNews(limit = 50): Promise<Record<string, unknown>> {
     if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
       throw new BadRequestException(
@@ -405,10 +495,6 @@ export class EspnService {
   // REQUEST
   // ============================================================
 
-  /**
-   * Every ESPN HTTP request passes through the shared
-   * persistent provider rate limiter.
-   */
   private async request<T>(
     endpoint: string,
     params?: Record<string, string>,
@@ -438,13 +524,6 @@ export class EspnService {
   // LEAGUE CATALOGUE EXTRACTION
   // ============================================================
 
-  /**
-   * Extracts league records from one catalogue page.
-   *
-   * ESPN catalogue pages can expose $ref entries instead
-   * of full league objects. We extract the slug from the
-   * reference and do not make another request here.
-   */
   private extractCatalogueLeagues(response: EspnApiResponse): EspnLeague[] {
     const leagues: EspnLeague[] = [];
 
@@ -479,9 +558,6 @@ export class EspnService {
     return leagues;
   }
 
-  /**
-   * Extracts the ESPN league slug from a $ref URL.
-   */
   private extractLeagueSlug(reference: string): string | null {
     try {
       const url = new URL(reference);
@@ -506,9 +582,6 @@ export class EspnService {
     }
   }
 
-  /**
-   * Removes duplicate leagues by ESPN slug.
-   */
   private deduplicateLeagues(leagues: EspnLeague[]): EspnLeague[] {
     const map = new Map<string, EspnLeague>();
 
@@ -541,6 +614,80 @@ export class EspnService {
     }
 
     return [...map.values()];
+  }
+
+  // ============================================================
+  // SCOREBOARD EXTRACTION
+  // ============================================================
+
+  private extractEvents(response: EspnApiResponse): EspnEvent[] {
+    if (Array.isArray(response.events)) {
+      return response.events;
+    }
+
+    if (Array.isArray(response.items)) {
+      return response.items as EspnEvent[];
+    }
+
+    return [];
+  }
+
+  private getPageCount(response: EspnApiResponse): number {
+    const direct = this.toPositiveInteger(response.pageCount);
+
+    if (direct) {
+      return direct;
+    }
+
+    const pagination = (
+      response as EspnApiResponse & {
+        pagination?: Record<string, unknown>;
+      }
+    ).pagination;
+
+    const nested = this.toPositiveInteger(pagination?.pageCount);
+
+    return nested ?? 1;
+  }
+
+  private getPageSize(response: EspnApiResponse, fallback: number): number {
+    const direct = this.toPositiveInteger(response.pageSize);
+
+    if (direct) {
+      return direct;
+    }
+
+    const pagination = (
+      response as EspnApiResponse & {
+        pagination?: Record<string, unknown>;
+      }
+    ).pagination;
+
+    return this.toPositiveInteger(pagination?.pageSize) ?? fallback;
+  }
+
+  private toPositiveInteger(value: unknown): number | undefined {
+    const result = typeof value === 'number' ? value : Number(value);
+
+    if (!Number.isInteger(result) || result < 1) {
+      return undefined;
+    }
+
+    return result;
+  }
+
+  private toStringValue(value: unknown): string | undefined {
+    if (typeof value === 'string') {
+      const result = value.trim();
+
+      return result || undefined;
+    }
+
+    if (typeof value === 'number' || typeof value === 'bigint') {
+      return String(value);
+    }
+
+    return undefined;
   }
 
   // ============================================================
@@ -587,6 +734,10 @@ export class EspnService {
     return date.toISOString().slice(0, 10) === value;
   }
 
+  /**
+   * ESPN expects scoreboard date ranges
+   * in YYYYMMDD-YYYYMMDD format.
+   */
   private applyDateRange(
     params: Record<string, string>,
     dateFrom?: string,
@@ -630,6 +781,7 @@ export class EspnService {
 
       this.logger.error(`ESPN request failed: ${endpoint}`, {
         status: axiosError.response?.status,
+
         data: axiosError.response?.data,
       });
 
