@@ -50,11 +50,6 @@ import {
   EspnFixtureSchema,
 } from './schemas/espn/espn-fixture.schema';
 
-import {
-  EspnLiveMatch,
-  EspnLiveMatchSchema,
-} from './schemas/espn/espn-livematch.schema';
-
 import { EspnNews, EspnNewsSchema } from './schemas/espn/espn-news.schema';
 
 import {
@@ -140,11 +135,6 @@ import { SportsDerivedDataBootstrapService } from './services/sports-derived-dat
       {
         name: EspnFixture.name,
         schema: EspnFixtureSchema,
-      },
-
-      {
-        name: EspnLiveMatch.name,
-        schema: EspnLiveMatchSchema,
       },
 
       {

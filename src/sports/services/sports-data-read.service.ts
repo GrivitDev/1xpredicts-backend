@@ -27,11 +27,6 @@ import {
   EspnLeagueDocument,
 } from '../schemas/espn/espn-league.schema';
 
-import {
-  EspnLiveMatch,
-  EspnLiveMatchDocument,
-} from '../schemas/espn/espn-livematch.schema';
-
 import { EspnNews, EspnNewsDocument } from '../schemas/espn/espn-news.schema';
 
 import {
@@ -178,9 +173,6 @@ export class SportsDataReadService {
 
     @InjectModel(EspnLeague.name)
     private readonly espnLeagueModel: Model<EspnLeagueDocument>,
-
-    @InjectModel(EspnLiveMatch.name)
-    private readonly espnLiveMatchModel: Model<EspnLiveMatchDocument>,
 
     @InjectModel(EspnNews.name)
     private readonly espnNewsModel: Model<EspnNewsDocument>,
@@ -403,51 +395,28 @@ export class SportsDataReadService {
 
   async getLiveFixtures(competitionId?: string): Promise<unknown[]> {
     const filter: Record<string, unknown> = {
-      status: {
-        $in: ['IN_PROGRESS', 'INPROGRESS', 'LIVE', 'PAUSED'],
-      },
+      live: true,
     };
 
     if (competitionId) {
-      filter.leagueId = String(competitionId).trim().toLowerCase();
+      filter.leagueId = competitionId.trim().toLowerCase();
     }
 
-    const fixtures = await this.espnFixtureModel
+    return this.espnFixtureModel
       .find(filter)
       .sort({
         fixtureDate: 1,
       })
       .lean()
       .exec();
-
-    if (fixtures.length > 0) {
-      return fixtures;
-    }
-
-    const liveMatchesFilter: Record<string, unknown> = {};
-
-    if (competitionId) {
-      liveMatchesFilter.leagueId = competitionId.trim().toLowerCase();
-    }
-
-    return this.espnLiveMatchModel
-      .find(liveMatchesFilter)
-      .sort({
-        updatedAt: -1,
-      })
-      .lean()
-      .exec();
   }
-
   async getFinishedFixtures(
     from?: Date,
     to?: Date,
     competitionId?: string,
   ): Promise<unknown[]> {
     const filter: Record<string, unknown> = {
-      status: {
-        $in: ['FINAL', 'FINISHED', 'POST', 'FT'],
-      },
+      completed: true,
     };
 
     if (competitionId) {
@@ -526,12 +495,12 @@ export class SportsDataReadService {
   async getTeamStats(
     competitionId: string,
     season: number,
-    teamId: number,
+    teamId: string,
   ): Promise<TeamCompetitionStatsDocument | null> {
     const filter: Record<string, unknown> = {
       competitionId: String(competitionId).trim().toLowerCase(),
       season,
-      teamId,
+      teamId: teamId.trim(),
     };
 
     return this.teamCompetitionStatsModel.findOne(filter).lean().exec();
@@ -540,33 +509,26 @@ export class SportsDataReadService {
   // ============================================================
   // HEAD TO HEAD
   // ============================================================
-
   async getHeadToHead(
-    teamOneId: number,
-    teamTwoId: number,
+    teamOneId: string,
+    teamTwoId: string,
   ): Promise<HeadToHeadDocument | null> {
-    const direct = await this.headToHeadModel
-      .findOne({
-        teamOneId,
-        teamTwoId,
-      })
-      .sort({
-        createdAt: -1,
-      })
-      .lean()
-      .exec();
+    const first = teamOneId.trim();
+    const second = teamTwoId.trim();
 
-    if (direct) {
-      return direct;
+    if (!first || !second || first === second) {
+      return null;
     }
+
+    const [teamAId, teamBId] = [first, second].sort((a, b) =>
+      a.localeCompare(b, undefined, {
+        numeric: true,
+      }),
+    );
 
     return this.headToHeadModel
       .findOne({
-        teamOneId: teamTwoId,
-        teamTwoId: teamOneId,
-      })
-      .sort({
-        createdAt: -1,
+        pairKey: `${teamAId}:${teamBId}`,
       })
       .lean()
       .exec();
@@ -903,10 +865,12 @@ export class SportsDataReadService {
   // ============================================================
 
   async getAdminEspnLiveMatches(query: SportsAdminQuery = {}) {
-    const filter: Record<string, unknown> = {};
+    const filter: Record<string, unknown> = {
+      live: true,
+    };
 
     if (query.leagueId) {
-      filter.leagueId = query.leagueId.trim();
+      filter.leagueId = query.leagueId.trim().toLowerCase();
     }
 
     if (query.eventId) {
@@ -914,15 +878,14 @@ export class SportsDataReadService {
     }
 
     return this.paginateModel(
-      this.espnLiveMatchModel,
+      this.espnFixtureModel,
       {
         ...query,
-        sortBy: query.sortBy ?? 'updatedAt',
+        sortBy: query.sortBy ?? 'fixtureDate',
       },
       filter,
     );
   }
-
   // ============================================================
   // ADMIN: ESPN NEWS
   // ============================================================
@@ -1096,7 +1059,7 @@ export class SportsDataReadService {
     const filter: Record<string, unknown> = {};
 
     if (query.provider) {
-      filter.key = query.provider.trim();
+      filter.sportKey = query.provider.trim();
     }
 
     return this.paginateModel(
@@ -1175,7 +1138,7 @@ export class SportsDataReadService {
     }
 
     if (query.teamId) {
-      filter.teamId = Number(query.teamId);
+      filter.teamId = query.teamId.trim();
     }
 
     return this.paginateModel(
@@ -1222,25 +1185,23 @@ export class SportsDataReadService {
     const filter: Record<string, unknown> = {};
 
     if (query.teamId) {
-      const numericTeamId = Number(query.teamId);
+      const teamId = query.teamId.trim();
 
-      if (Number.isFinite(numericTeamId)) {
-        filter.$or = [
-          {
-            teamOneId: numericTeamId,
-          },
-          {
-            teamTwoId: numericTeamId,
-          },
-        ];
-      }
+      filter.$or = [
+        {
+          teamAId: teamId,
+        },
+        {
+          teamBId: teamId,
+        },
+      ];
     }
 
     return this.paginateModel(
       this.headToHeadModel,
       {
         ...query,
-        sortBy: query.sortBy ?? 'createdAt',
+        sortBy: query.sortBy ?? 'calculatedAt',
       },
       filter,
     );

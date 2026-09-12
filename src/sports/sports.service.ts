@@ -7,19 +7,27 @@ export class SportsService {
   constructor(private readonly sportsDataReadService: SportsDataReadService) {}
 
   async getLive() {
-    return this.sportsDataReadService.getLive();
+    return this.sportsDataReadService.getLiveFixtures();
   }
 
   async getFixtures(competitionId?: string) {
-    return this.sportsDataReadService.getFixtures(competitionId);
+    return this.sportsDataReadService.getUpcomingFixtures(
+      undefined,
+      undefined,
+      competitionId,
+    );
   }
 
   async getResults(competitionId?: string) {
-    return this.sportsDataReadService.getResults(competitionId);
+    return this.sportsDataReadService.getFinishedFixtures(
+      undefined,
+      undefined,
+      competitionId,
+    );
   }
 
-  async getStandings(competitionId: string) {
-    return this.sportsDataReadService.getStandings(competitionId);
+  async getStandings(competitionId: string, season?: number) {
+    return this.sportsDataReadService.getLeagueTable(competitionId, season);
   }
 
   async getCompetitions(options?: {

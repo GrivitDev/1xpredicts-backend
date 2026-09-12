@@ -50,10 +50,7 @@ export class SportsController {
   }
 
   @Get('fixtures/live')
-  async getLiveFixtures(
-    @Query('competitionId')
-    competitionId?: string,
-  ) {
+  async getLiveFixtures(@Query('competitionId') competitionId?: string) {
     return this.sportsDataReadService.getLiveFixtures(competitionId);
   }
 
@@ -112,7 +109,7 @@ export class SportsController {
     return this.sportsDataReadService.getTeamStats(
       competitionId,
       Number(season),
-      Number(teamId),
+      teamId,
     );
   }
 
@@ -122,10 +119,7 @@ export class SportsController {
     @Param('teamOneId') teamOneId: string,
     @Param('teamTwoId') teamTwoId: string,
   ) {
-    return this.sportsDataReadService.getHeadToHead(
-      Number(teamOneId),
-      Number(teamTwoId),
-    );
+    return this.sportsDataReadService.getHeadToHead(teamOneId, teamTwoId);
   }
 
   @Get('odds/event/:eventId')
@@ -150,12 +144,10 @@ export class SportsController {
     @Query('page') page?: string,
     @Query('limit') limit?: string,
     @Query('status') status?: string,
-    @Query('competitionId')
-    competitionId?: string,
+    @Query('competitionId') competitionId?: string,
     @Query('season') season?: string,
     @Query('sortBy') sortBy?: string,
-    @Query('sortOrder')
-    sortOrder?: 'asc' | 'desc',
+    @Query('sortOrder') sortOrder?: 'asc' | 'desc',
   ): Promise<unknown> {
     return this.sportsDataReadService.getAdminActiveCompetitions({
       page: page ? Number(page) : undefined,
@@ -180,8 +172,7 @@ export class SportsController {
     @Query('leagueId') leagueId?: string,
     @Query('status') status?: string,
     @Query('sortBy') sortBy?: string,
-    @Query('sortOrder')
-    sortOrder?: 'asc' | 'desc',
+    @Query('sortOrder') sortOrder?: 'asc' | 'desc',
   ): Promise<unknown> {
     return this.sportsDataReadService.getAdminEspnLeagues({
       page: page ? Number(page) : undefined,
@@ -205,8 +196,7 @@ export class SportsController {
     @Query('leagueId') leagueId?: string,
     @Query('eventId') eventId?: string,
     @Query('sortBy') sortBy?: string,
-    @Query('sortOrder')
-    sortOrder?: 'asc' | 'desc',
+    @Query('sortOrder') sortOrder?: 'asc' | 'desc',
   ): Promise<unknown> {
     return this.sportsDataReadService.getAdminEspnLiveMatches({
       page: page ? Number(page) : undefined,
@@ -230,8 +220,7 @@ export class SportsController {
     @Query('from') from?: string,
     @Query('to') to?: string,
     @Query('sortBy') sortBy?: string,
-    @Query('sortOrder')
-    sortOrder?: 'asc' | 'desc',
+    @Query('sortOrder') sortOrder?: 'asc' | 'desc',
   ): Promise<unknown> {
     return this.sportsDataReadService.getAdminEspnNews({
       page: page ? Number(page) : undefined,
@@ -256,8 +245,7 @@ export class SportsController {
     @Query('teamId') teamId?: string,
     @Query('season') season?: string,
     @Query('sortBy') sortBy?: string,
-    @Query('sortOrder')
-    sortOrder?: 'asc' | 'desc',
+    @Query('sortOrder') sortOrder?: 'asc' | 'desc',
   ): Promise<unknown> {
     return this.sportsDataReadService.getAdminEspnStandings({
       page: page ? Number(page) : undefined,
@@ -282,8 +270,7 @@ export class SportsController {
     @Query('leagueId') leagueId?: string,
     @Query('teamId') teamId?: string,
     @Query('sortBy') sortBy?: string,
-    @Query('sortOrder')
-    sortOrder?: 'asc' | 'desc',
+    @Query('sortOrder') sortOrder?: 'asc' | 'desc',
   ): Promise<unknown> {
     return this.sportsDataReadService.getAdminEspnTeams({
       page: page ? Number(page) : undefined,
@@ -317,14 +304,12 @@ export class SportsController {
     @Query('status') status?: string,
     @Query('leagueId') leagueId?: string,
     @Query('eventId') eventId?: string,
-    @Query('competitionId')
-    competitionId?: string,
+    @Query('competitionId') competitionId?: string,
     @Query('season') season?: string,
     @Query('from') from?: string,
     @Query('to') to?: string,
     @Query('sortBy') sortBy?: string,
-    @Query('sortOrder')
-    sortOrder?: 'asc' | 'desc',
+    @Query('sortOrder') sortOrder?: 'asc' | 'desc',
   ): Promise<unknown> {
     return this.sportsDataReadService.getAdminEspnQueues({
       page: page ? Number(page) : undefined,
@@ -361,8 +346,7 @@ export class SportsController {
     @Query('from') from?: string,
     @Query('to') to?: string,
     @Query('sortBy') sortBy?: string,
-    @Query('sortOrder')
-    sortOrder?: 'asc' | 'desc',
+    @Query('sortOrder') sortOrder?: 'asc' | 'desc',
   ): Promise<unknown> {
     return this.sportsDataReadService.getAdminEspnFixtures({
       page: page ? Number(page) : undefined,
@@ -391,8 +375,7 @@ export class SportsController {
     @Query('page') page?: string,
     @Query('limit') limit?: string,
     @Query('sortBy') sortBy?: string,
-    @Query('sortOrder')
-    sortOrder?: 'asc' | 'desc',
+    @Query('sortOrder') sortOrder?: 'asc' | 'desc',
   ): Promise<unknown> {
     return this.sportsDataReadService.getAdminFootballDataCompetitions({
       page: page ? Number(page) : undefined,
@@ -413,14 +396,12 @@ export class SportsController {
   async getAdminFootballDataMatches(
     @Query('page') page?: string,
     @Query('limit') limit?: string,
-    @Query('competitionId')
-    competitionId?: string,
+    @Query('competitionId') competitionId?: string,
     @Query('status') status?: string,
     @Query('from') from?: string,
     @Query('to') to?: string,
     @Query('sortBy') sortBy?: string,
-    @Query('sortOrder')
-    sortOrder?: 'asc' | 'desc',
+    @Query('sortOrder') sortOrder?: 'asc' | 'desc',
   ): Promise<unknown> {
     return this.sportsDataReadService.getAdminFootballDataMatches({
       page: page ? Number(page) : undefined,
@@ -445,12 +426,10 @@ export class SportsController {
   async getAdminFootballDataStandings(
     @Query('page') page?: string,
     @Query('limit') limit?: string,
-    @Query('competitionId')
-    competitionId?: string,
+    @Query('competitionId') competitionId?: string,
     @Query('season') season?: string,
     @Query('sortBy') sortBy?: string,
-    @Query('sortOrder')
-    sortOrder?: 'asc' | 'desc',
+    @Query('sortOrder') sortOrder?: 'asc' | 'desc',
   ): Promise<unknown> {
     return this.sportsDataReadService.getAdminFootballDataStandings({
       page: page ? Number(page) : undefined,
@@ -473,12 +452,10 @@ export class SportsController {
   async getAdminFootballDataTeams(
     @Query('page') page?: string,
     @Query('limit') limit?: string,
-    @Query('competitionId')
-    competitionId?: string,
+    @Query('competitionId') competitionId?: string,
     @Query('teamId') teamId?: string,
     @Query('sortBy') sortBy?: string,
-    @Query('sortOrder')
-    sortOrder?: 'asc' | 'desc',
+    @Query('sortOrder') sortOrder?: 'asc' | 'desc',
   ): Promise<unknown> {
     return this.sportsDataReadService.getAdminFootballDataTeams({
       page: page ? Number(page) : undefined,
@@ -503,8 +480,7 @@ export class SportsController {
     @Query('page') page?: string,
     @Query('limit') limit?: string,
     @Query('sortBy') sortBy?: string,
-    @Query('sortOrder')
-    sortOrder?: 'asc' | 'desc',
+    @Query('sortOrder') sortOrder?: 'asc' | 'desc',
   ): Promise<unknown> {
     return this.sportsDataReadService.getAdminOddsApiSports({
       provider,
@@ -531,8 +507,7 @@ export class SportsController {
     @Query('from') from?: string,
     @Query('to') to?: string,
     @Query('sortBy') sortBy?: string,
-    @Query('sortOrder')
-    sortOrder?: 'asc' | 'desc',
+    @Query('sortOrder') sortOrder?: 'asc' | 'desc',
   ): Promise<unknown> {
     return this.sportsDataReadService.getAdminSportsOddsSnapshots({
       page: page ? Number(page) : undefined,
@@ -559,8 +534,7 @@ export class SportsController {
     @Query('page') page?: string,
     @Query('limit') limit?: string,
     @Query('sortBy') sortBy?: string,
-    @Query('sortOrder')
-    sortOrder?: 'asc' | 'desc',
+    @Query('sortOrder') sortOrder?: 'asc' | 'desc',
   ): Promise<unknown> {
     return this.sportsDataReadService.getAdminProviderRateLimits({
       provider,
@@ -582,13 +556,11 @@ export class SportsController {
   async getAdminTeamCompetitionStats(
     @Query('page') page?: string,
     @Query('limit') limit?: string,
-    @Query('competitionId')
-    competitionId?: string,
+    @Query('competitionId') competitionId?: string,
     @Query('teamId') teamId?: string,
     @Query('season') season?: string,
     @Query('sortBy') sortBy?: string,
-    @Query('sortOrder')
-    sortOrder?: 'asc' | 'desc',
+    @Query('sortOrder') sortOrder?: 'asc' | 'desc',
   ): Promise<unknown> {
     return this.sportsDataReadService.getAdminTeamCompetitionStats({
       page: page ? Number(page) : undefined,
@@ -613,11 +585,9 @@ export class SportsController {
     @Query('page') page?: string,
     @Query('limit') limit?: string,
     @Query('teamId') teamId?: string,
-    @Query('competitionId')
-    competitionId?: string,
+    @Query('competitionId') competitionId?: string,
     @Query('sortBy') sortBy?: string,
-    @Query('sortOrder')
-    sortOrder?: 'asc' | 'desc',
+    @Query('sortOrder') sortOrder?: 'asc' | 'desc',
   ): Promise<unknown> {
     return this.sportsDataReadService.getAdminTeamPerformanceProfiles({
       page: page ? Number(page) : undefined,
@@ -642,8 +612,7 @@ export class SportsController {
     @Query('limit') limit?: string,
     @Query('teamId') teamId?: string,
     @Query('sortBy') sortBy?: string,
-    @Query('sortOrder')
-    sortOrder?: 'asc' | 'desc',
+    @Query('sortOrder') sortOrder?: 'asc' | 'desc',
   ): Promise<unknown> {
     return this.sportsDataReadService.getAdminHeadToHead({
       page: page ? Number(page) : undefined,
@@ -664,14 +633,12 @@ export class SportsController {
     @Query('page') page?: string,
     @Query('limit') limit?: string,
     @Query('status') status?: string,
-    @Query('competitionId')
-    competitionId?: string,
+    @Query('competitionId') competitionId?: string,
     @Query('eventId') eventId?: string,
     @Query('from') from?: string,
     @Query('to') to?: string,
     @Query('sortBy') sortBy?: string,
-    @Query('sortOrder')
-    sortOrder?: 'asc' | 'desc',
+    @Query('sortOrder') sortOrder?: 'asc' | 'desc',
   ): Promise<unknown> {
     return this.sportsDataReadService.getAdminYoutubeHighlights({
       page: page ? Number(page) : undefined,
