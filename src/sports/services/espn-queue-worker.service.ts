@@ -1,5 +1,8 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 
+import { InjectModel } from '@nestjs/mongoose';
+import { Model } from 'mongoose';
+
 import { EspnService } from '../providers/espn.service';
 import { TheOddsApiService } from '../providers/the-odds-api.service';
 
@@ -16,6 +19,10 @@ import { MatchDerivedDataService } from './match-derived-data.service';
 import { TeamCompetitionStatsService } from './team-competition-stats.service';
 import { TeamPerformanceProfileService } from './team-performance-profile.service';
 
+import {
+  EspnFixture,
+  EspnFixtureDocument,
+} from '../schemas/espn/espn-fixture.schema';
 @Injectable()
 export class EspnQueueWorkerService implements OnModuleInit {
   private readonly logger = new Logger(EspnQueueWorkerService.name);
@@ -47,6 +54,9 @@ export class EspnQueueWorkerService implements OnModuleInit {
     private readonly teamPerformanceProfileService: TeamPerformanceProfileService,
     private readonly headToHeadService: HeadToHeadService,
     private readonly matchDerivedDataService: MatchDerivedDataService,
+
+    @InjectModel(EspnFixture.name)
+    private readonly espnFixtureModel: Model<EspnFixtureDocument>,
   ) {}
 
   onModuleInit(): void {
@@ -233,8 +243,28 @@ export class EspnQueueWorkerService implements OnModuleInit {
 
     const season = job.season;
 
-    const homeTeamId = this.stringifyJobId(job.homeTeamId);
-    const awayTeamId = this.stringifyJobId(job.awayTeamId);
+    const fixture = await this.espnFixtureModel
+      .findOne({
+        eventId,
+      })
+      .lean()
+      .exec();
+
+    if (!fixture) {
+      throw new Error(
+        `Finished match fixture ${eventId} not found in sports_espn_fixtures`,
+      );
+    }
+
+    const homeTeamId = fixture.homeTeamId?.trim();
+
+    const awayTeamId = fixture.awayTeamId?.trim();
+
+    if (!homeTeamId || !awayTeamId) {
+      throw new Error(
+        `Finished match fixture ${eventId} is missing homeTeamId or awayTeamId`,
+      );
+    }
 
     /*
      * The scoreboard already supplied the final fixture.
