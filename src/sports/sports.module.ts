@@ -122,6 +122,7 @@ import {
   YouTubeHighlight,
   YouTubeHighlightSchema,
 } from './schemas/youtube-highlight.schema';
+import { SportsDerivedDataBootstrapService } from './services/sports-derived-data-bootstrap.service';
 
 @Module({
   imports: [
@@ -269,6 +270,7 @@ import {
 
     // Startup
     SportsStartupService,
+    SportsDerivedDataBootstrapService,
 
     // Remaining scheduled providers
     FootballDataScheduler,

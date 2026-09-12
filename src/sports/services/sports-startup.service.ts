@@ -13,6 +13,7 @@ import {
   EspnFixtureDocument,
 } from '../schemas/espn/espn-fixture.schema';
 import { EspnService } from '../providers/espn.service';
+import { SportsDerivedDataBootstrapService } from './sports-derived-data-bootstrap.service';
 
 @Injectable()
 export class SportsStartupService implements OnModuleInit {
@@ -30,6 +31,8 @@ export class SportsStartupService implements OnModuleInit {
     private readonly espnQueueService: EspnQueueService,
 
     private readonly espnService: EspnService,
+
+    private readonly sportsDerivedDataBootstrapService: SportsDerivedDataBootstrapService,
 
     @InjectModel(EspnFixture.name)
     private readonly espnFixtureModel: Model<EspnFixtureDocument>,
@@ -76,6 +79,27 @@ export class SportsStartupService implements OnModuleInit {
         'ESPN league catalogue already populated. ' +
           'Skipping initial ESPN bootstrap.',
       );
+
+      /*
+       * Source ESPN data already exists, so give the derived-data
+       * bootstrap an opportunity to build any derived collections
+       * that are still empty.
+       *
+       * SportsDerivedDataBootstrapService is responsible for checking
+       * whether the derived collections already contain data.
+       */
+      try {
+        await this.sportsDerivedDataBootstrapService.initialize();
+
+        this.logger.log(
+          'Derived-data bootstrap check completed using existing ESPN source data',
+        );
+      } catch (error) {
+        this.logger.error(
+          'Derived-data bootstrap failed while using existing ESPN source data',
+          error instanceof Error ? error.stack : String(error),
+        );
+      }
 
       return;
     }
@@ -295,6 +319,8 @@ export class SportsStartupService implements OnModuleInit {
         }`,
       );
     }
+
+    await this.sportsDerivedDataBootstrapService.initialize();
 
     this.logger.log(
       'ESPN complete initial bootstrap finished. ' +

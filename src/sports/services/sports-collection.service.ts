@@ -352,6 +352,12 @@ export class SportsCollectionService {
 
               completed,
 
+              live: this.isLiveEvent(event),
+
+              displayClock:
+                this.getNestedString(event, ['status', 'displayClock']) ??
+                this.getNestedString(competition, ['status', 'displayClock']),
+
               homeTeamId: this.getTeamId(home),
 
               awayTeamId: this.getTeamId(away),
@@ -388,6 +394,423 @@ export class SportsCollectionService {
     };
   }
 
+  // ============================================================
+  // ESPN — LIVE MATCHES
+  // ============================================================
+
+  /**
+   * Synchronize the current ESPN global live scoreboard.
+   *
+   * This method ONLY maintains live match state in MongoDB.
+   *
+   * It does not:
+   *
+   * - create queue jobs
+   * - collect summary
+   * - collect standings
+   * - collect odds
+   * - collect YouTube
+   *
+   * Existing fixture documents are updated by eventId.
+   */
+  async collectEspnLiveMatches(response: unknown): Promise<{
+    received: number;
+    updated: number;
+    cleared: number;
+  }> {
+    const events = this.extractArray(response, ['events', 'items']);
+
+    const leagueMap = this.buildLiveLeagueMap(response);
+
+    const liveEventIds = new Set<string>();
+
+    let updated = 0;
+
+    for (const event of events) {
+      if (!event || typeof event !== 'object') {
+        continue;
+      }
+
+      const eventRecord = event as Record<string, unknown>;
+
+      const eventId = this.toStringValue(eventRecord.id);
+
+      if (!eventId) {
+        continue;
+      }
+
+      if (!this.isLiveEvent(event)) {
+        continue;
+      }
+
+      const fixtureDate = this.parseDate(eventRecord.date);
+
+      if (!fixtureDate) {
+        continue;
+      }
+
+      /*
+       * First try to resolve the league from ESPN's live payload.
+       */
+      let leagueId = this.resolveLiveEventLeagueId(event, leagueMap);
+
+      /*
+       * If ESPN does not expose enough league information in the
+       * global scoreboard, use the fixture already stored in MongoDB.
+       *
+       * This is the primary safety fallback because startup and league
+       * refreshes already populate fixtures with their canonical league.
+       */
+      let existingFixture: {
+        leagueId?: string;
+        season?: number;
+      } | null = null;
+
+      if (!leagueId) {
+        existingFixture = await this.espnFixtureModel
+          .findOne({
+            eventId,
+          })
+          .select({
+            leagueId: 1,
+            season: 1,
+          })
+          .lean()
+          .exec();
+
+        leagueId = existingFixture?.leagueId;
+      }
+
+      /*
+       * Never create a fixture with an untrusted/invented league ID.
+       */
+      if (!leagueId) {
+        this.logger.debug(
+          `Skipping live ESPN event ${eventId}: unable to resolve leagueId`,
+        );
+
+        continue;
+      }
+
+      const competition = this.getFirstCompetition(event);
+
+      const competitors = this.extractArray(competition, ['competitors']);
+
+      const home =
+        competitors.find(
+          (item) => this.getNestedString(item, ['homeAway']) === 'home',
+        ) ?? competitors[0];
+
+      const away =
+        competitors.find(
+          (item) => this.getNestedString(item, ['homeAway']) === 'away',
+        ) ?? competitors[1];
+
+      const season =
+        this.toNumber(this.getNestedString(event, ['season', 'year'])) ??
+        this.toNumber(this.getNestedString(competition, ['season', 'year'])) ??
+        existingFixture?.season ??
+        fixtureDate.getUTCFullYear();
+
+      const status = this.extractStatus(event);
+
+      const displayClock =
+        this.getNestedString(event, ['status', 'displayClock']) ??
+        this.getNestedString(competition, ['status', 'displayClock']);
+
+      const normalizedLeagueId = leagueId.trim().toLowerCase();
+
+      await this.espnFixtureModel
+        .updateOne(
+          {
+            eventId,
+          },
+          {
+            $set: {
+              eventId,
+
+              leagueId: normalizedLeagueId,
+
+              season,
+
+              fixtureDate,
+
+              status,
+
+              statusDetail: this.getNestedString(competition, [
+                'status',
+                'type',
+                'description',
+              ]),
+
+              statusShortDetail: this.getNestedString(competition, [
+                'status',
+                'type',
+                'shortDetail',
+              ]),
+
+              period:
+                this.toNumber(
+                  this.getNestedString(event, ['status', 'period']),
+                ) ??
+                this.toNumber(
+                  this.getNestedString(competition, ['status', 'period']),
+                ),
+
+              displayClock,
+
+              completed: this.isCompleted(event),
+
+              live: true,
+
+              homeTeamId: this.getTeamId(home),
+
+              awayTeamId: this.getTeamId(away),
+
+              homeScore: this.toNumber(this.getNestedString(home, ['score'])),
+
+              awayScore: this.toNumber(this.getNestedString(away, ['score'])),
+
+              venueId: this.getNestedString(competition, ['venue', 'id']),
+
+              venueName:
+                this.getNestedString(competition, ['venue', 'fullName']) ??
+                this.getNestedString(competition, ['venue', 'name']),
+
+              /*
+               * Always replace the stored live payload with the
+               * newest ESPN event snapshot.
+               */
+              payload: eventRecord,
+
+              collectedAt: new Date(),
+            },
+          },
+          {
+            upsert: true,
+          },
+        )
+        .exec();
+
+      await this.collectEspnTeams(normalizedLeagueId, competitors);
+
+      liveEventIds.add(eventId);
+
+      updated += 1;
+    }
+
+    /*
+     * Clear fixtures that were previously live but are not present
+     * in the latest live scoreboard.
+     */
+    const clearedResult = await this.espnFixtureModel
+      .updateMany(
+        {
+          live: true,
+
+          fixtureDate: {
+            $gte: this.getUtcStartOfDay(
+              new Date(Date.now() - 24 * 60 * 60 * 1000),
+            ),
+          },
+
+          eventId: {
+            $nin: [...liveEventIds],
+          },
+        },
+        {
+          $set: {
+            live: false,
+            collectedAt: new Date(),
+          },
+        },
+      )
+      .exec();
+
+    return {
+      received: events.length,
+      updated,
+      cleared: clearedResult.modifiedCount,
+    };
+  }
+
+  // ============================================================
+  // LIVE EVENT HELPERS
+  // ============================================================
+
+  private isLiveEvent(event: unknown): boolean {
+    if (!event || typeof event !== 'object') {
+      return false;
+    }
+
+    const eventRecord = event as Record<string, unknown>;
+
+    const status =
+      eventRecord.status && typeof eventRecord.status === 'object'
+        ? (eventRecord.status as Record<string, unknown>)
+        : undefined;
+
+    const statusType =
+      status?.type && typeof status.type === 'object'
+        ? (status.type as Record<string, unknown>)
+        : undefined;
+
+    if (status?.completed === true || statusType?.completed === true) {
+      return false;
+    }
+
+    const state = this.toStringValue(
+      statusType?.state ?? status?.state,
+    )?.toLowerCase();
+
+    if (
+      state &&
+      ['post', 'final', 'completed', 'complete', 'finished'].includes(state)
+    ) {
+      return false;
+    }
+
+    return Boolean(state && ['in', 'live', 'inprogress'].includes(state));
+  }
+
+  /**
+   * Builds the canonical league lookup from response.leagues[].
+   */
+  private buildLiveLeagueMap(response: unknown): Map<string, string> {
+    const map = new Map<string, string>();
+
+    if (!response || typeof response !== 'object') {
+      return map;
+    }
+
+    const responseRecord = response as Record<string, unknown>;
+
+    const leagues = Array.isArray(responseRecord.leagues)
+      ? responseRecord.leagues
+      : [];
+
+    for (const league of leagues) {
+      const leagueRecord = this.asRecord(league);
+
+      if (!leagueRecord) {
+        continue;
+      }
+
+      const id = this.toStringValue(leagueRecord.id);
+
+      const slug = this.toStringValue(
+        leagueRecord.slug ??
+          this.getNestedString(leagueRecord, ['league', 'slug']),
+      );
+
+      if (!id || !slug) {
+        continue;
+      }
+
+      const normalizedId = id.trim().toLowerCase();
+      const normalizedSlug = slug.trim().toLowerCase();
+
+      map.set(normalizedId, normalizedSlug);
+      map.set(normalizedSlug, normalizedSlug);
+    }
+
+    return map;
+  }
+
+  /**
+   * Resolves the canonical ESPN league slug for a live event.
+   */
+  private resolveLiveEventLeagueId(
+    event: unknown,
+    leagueMap: Map<string, string>,
+  ): string | undefined {
+    const eventRecord = this.asRecord(event);
+
+    if (!eventRecord) {
+      return undefined;
+    }
+
+    const competition = this.getFirstCompetition(event);
+
+    const directCandidates: unknown[] = [
+      this.getNestedString(event, ['league', 'slug']),
+      this.getNestedString(event, ['league', 'id']),
+      this.getNestedString(event, ['league', 'uid']),
+
+      this.getNestedString(competition, ['league', 'slug']),
+      this.getNestedString(competition, ['league', 'id']),
+      this.getNestedString(competition, ['league', 'uid']),
+
+      this.getNestedString(event, ['sport', 'league', 'slug']),
+      this.getNestedString(event, ['sport', 'league', 'id']),
+      this.getNestedString(event, ['sport', 'league', 'uid']),
+    ];
+
+    for (const candidate of directCandidates) {
+      const value = this.toStringValue(candidate);
+
+      if (!value) {
+        continue;
+      }
+
+      const normalized = value.trim().toLowerCase();
+
+      const mapped = leagueMap.get(normalized);
+
+      if (mapped) {
+        return mapped;
+      }
+
+      if (normalized.includes('.')) {
+        return normalized;
+      }
+    }
+
+    const uid = this.toStringValue(eventRecord.uid);
+
+    if (uid) {
+      const leagueMatch = uid.match(/(?:^|~)l:([^~]+)/i);
+
+      if (leagueMatch?.[1]) {
+        const encodedLeagueId = leagueMatch[1].trim().toLowerCase();
+
+        const mappedLeague = leagueMap.get(encodedLeagueId);
+
+        if (mappedLeague) {
+          return mappedLeague;
+        }
+      }
+    }
+
+    const fallbackCandidates: unknown[] = [
+      this.getNestedString(event, ['leagueId']),
+      this.getNestedString(competition, ['leagueId']),
+    ];
+
+    for (const candidate of fallbackCandidates) {
+      const value = this.toStringValue(candidate);
+
+      if (!value) {
+        continue;
+      }
+
+      const mappedLeague = leagueMap.get(value.trim().toLowerCase());
+
+      if (mappedLeague) {
+        return mappedLeague;
+      }
+    }
+
+    return undefined;
+  }
+
+  private getUtcStartOfDay(date: Date): Date {
+    const result = new Date(date);
+
+    result.setUTCHours(0, 0, 0, 0);
+
+    return result;
+  }
   // ============================================================
   // ESPN — TEAMS FROM SCOREBOARD
   // ============================================================
@@ -515,7 +938,9 @@ export class SportsCollectionService {
               teamId,
 
               rank:
-                this.toNumber(entryRecord?.rank ?? entryRecord?.position) ?? 0,
+                value('rank') ??
+                this.toNumber(entryRecord?.rank ?? entryRecord?.position) ??
+                0,
 
               points: value('points'),
 
@@ -1084,7 +1509,7 @@ export class SportsCollectionService {
   // HELPERS
   // ============================================================
 
-  private extractArray(value: unknown, keys: string[] = []): any[] {
+  private extractArray(value: unknown, keys: string[] = []): unknown[] {
     if (Array.isArray(value)) {
       return value;
     }

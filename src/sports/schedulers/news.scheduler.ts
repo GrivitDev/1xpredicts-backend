@@ -4,6 +4,7 @@ import { Cron } from '@nestjs/schedule';
 
 import { EspnService } from '../providers/espn.service';
 import { EspnActiveCompetitionService } from '../services/espn-active-competition.service';
+import { SportsCollectionService } from '../services/sports-collection.service';
 
 @Injectable()
 export class NewsScheduler {
@@ -11,11 +12,64 @@ export class NewsScheduler {
 
   private running = false;
   private catalogueRefreshRunning = false;
+  private liveMatchesRunning = false;
 
   constructor(
     private readonly espnService: EspnService,
+
     private readonly espnActiveCompetitionService: EspnActiveCompetitionService,
+
+    private readonly sportsCollectionService: SportsCollectionService,
   ) {}
+
+  // ============================================================
+  // LIVE MATCHES
+  // ============================================================
+
+  /**
+   * Refresh the live ESPN scoreboard every five seconds.
+   *
+   * This is ONLY for keeping live matches current in MongoDB.
+   *
+   * It does not create queue jobs and does not call:
+   *
+   * - summary
+   * - standings
+   * - odds
+   * - YouTube
+   */
+  @Cron('*/5 * * * * *', {
+    name: 'espn-live-matches',
+    timeZone: 'Africa/Lagos',
+  })
+  async refreshLiveMatches(): Promise<void> {
+    if (this.liveMatchesRunning) {
+      return;
+    }
+
+    this.liveMatchesRunning = true;
+
+    try {
+      const response = await this.espnService.getLiveMatches();
+
+      const result =
+        await this.sportsCollectionService.collectEspnLiveMatches(response);
+
+      this.logger.debug(
+        `ESPN live scoreboard refreshed: ` +
+          `received=${result.received}, ` +
+          `updated=${result.updated}, ` +
+          `cleared=${result.cleared}`,
+      );
+    } catch (error) {
+      this.logger.error(
+        'ESPN live scoreboard refresh failed',
+        error instanceof Error ? error.stack : String(error),
+      );
+    } finally {
+      this.liveMatchesRunning = false;
+    }
+  }
 
   // ============================================================
   // MORNING NEWS

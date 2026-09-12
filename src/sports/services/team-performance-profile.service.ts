@@ -276,7 +276,7 @@ export class TeamPerformanceProfileService {
       }
     }
 
-    const teams = await this.getTeamNames([...teamIds]);
+    const teams = await this.getTeamNames(leagueId, [...teamIds]);
 
     const summaries = this.buildMatchSummaries(completedFixtures, teams);
 
@@ -353,7 +353,7 @@ export class TeamPerformanceProfileService {
       }
     }
 
-    const teams = await this.getTeamNames([...ids]);
+    const teams = await this.getTeamNames(leagueId, [...ids]);
 
     const summaries = this.buildMatchSummaries(
       completedFixtures,
@@ -2251,12 +2251,14 @@ export class TeamPerformanceProfileService {
   // ============================================================
 
   private async getTeamNames(
+    leagueId: string,
     teamIds: string[],
   ): Promise<Map<string, EspnTeamDocument>> {
     const ids = [...new Set(teamIds.filter(Boolean))];
 
     const teams = await this.teamModel
       .find({
+        leagueId: leagueId.trim().toLowerCase(),
         teamId: {
           $in: ids,
         },

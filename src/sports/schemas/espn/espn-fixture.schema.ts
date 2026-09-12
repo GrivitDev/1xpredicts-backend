@@ -80,6 +80,18 @@ export class EspnFixture {
   })
   completed?: boolean;
 
+  @Prop({
+    required: true,
+    default: false,
+    index: true,
+  })
+  live!: boolean;
+
+  @Prop({
+    required: false,
+  })
+  displayClock?: string;
+
   /**
    * ESPN team IDs.
    */

@@ -210,18 +210,6 @@ export class TeamCompetitionStatsService {
   async rebuildCompetition(leagueId: string, season: number): Promise<number> {
     const normalizedLeagueId = leagueId.trim().toLowerCase();
 
-    const competition = await this.activeCompetitionModel
-      .findOne({
-        competitionId: normalizedLeagueId,
-        season,
-      })
-      .lean()
-      .exec();
-
-    if (!competition) {
-      return 0;
-    }
-
     const fixtures = await this.fixtureModel
       .find({
         leagueId: normalizedLeagueId,

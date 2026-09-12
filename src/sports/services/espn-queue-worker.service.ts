@@ -11,6 +11,10 @@ import { PriorityCompetitionService } from './priority-competition.service';
 import { YoutubeHighlightService } from './youtube-highlight.service';
 
 import { EspnQueueJobType } from '../interfaces/espn-queue.interface';
+import { HeadToHeadService } from './head-to-head.service';
+import { MatchDerivedDataService } from './match-derived-data.service';
+import { TeamCompetitionStatsService } from './team-competition-stats.service';
+import { TeamPerformanceProfileService } from './team-performance-profile.service';
 
 @Injectable()
 export class EspnQueueWorkerService implements OnModuleInit {
@@ -38,6 +42,11 @@ export class EspnQueueWorkerService implements OnModuleInit {
     private readonly priorityCompetitionService: PriorityCompetitionService,
 
     private readonly youtubeHighlightService: YoutubeHighlightService,
+
+    private readonly teamCompetitionStatsService: TeamCompetitionStatsService,
+    private readonly teamPerformanceProfileService: TeamPerformanceProfileService,
+    private readonly headToHeadService: HeadToHeadService,
+    private readonly matchDerivedDataService: MatchDerivedDataService,
   ) {}
 
   onModuleInit(): void {
@@ -146,7 +155,11 @@ export class EspnQueueWorkerService implements OnModuleInit {
 
     const leagueId = this.stringifyJobId(job.leagueId);
 
-    const season = typeof job.season === 'number' ? job.season : undefined;
+    if (typeof job.season !== 'number') {
+      throw new Error('Finished match job requires season');
+    }
+
+    const season = job.season;
 
     /*
      * Exactly one provider operation here:
@@ -194,7 +207,9 @@ export class EspnQueueWorkerService implements OnModuleInit {
      * No standings.
      * No YouTube.
      */
-    await this.processOddsApi(leagueId);
+    const eventId = this.stringifyJobId(job.eventId);
+
+    await this.processOddsApi(leagueId, eventId);
   }
 
   // ============================================================
@@ -211,6 +226,15 @@ export class EspnQueueWorkerService implements OnModuleInit {
     const leagueId = this.stringifyJobId(job.leagueId);
 
     const eventId = this.stringifyJobId(job.eventId);
+
+    if (typeof job.season !== 'number') {
+      throw new Error('Finished match job requires season');
+    }
+
+    const season = job.season;
+
+    const homeTeamId = this.stringifyJobId(job.homeTeamId);
+    const awayTeamId = this.stringifyJobId(job.awayTeamId);
 
     /*
      * The scoreboard already supplied the final fixture.
@@ -247,6 +271,22 @@ export class EspnQueueWorkerService implements OnModuleInit {
       typeof job.season === 'number' ? job.season : undefined,
     );
 
+    await this.teamCompetitionStatsService.refreshForFixture(
+      leagueId,
+      season,
+      eventId,
+    );
+
+    await this.teamPerformanceProfileService.refreshForFixture(eventId);
+
+    await this.headToHeadService.refreshForFixture(eventId);
+
+    await this.matchDerivedDataService.rebuildUpcomingForTeams(
+      leagueId,
+      season,
+      [homeTeamId, awayTeamId],
+    );
+
     // ========================================================
     // YOUTUBE
     // ========================================================
@@ -258,7 +298,10 @@ export class EspnQueueWorkerService implements OnModuleInit {
   // ODDS API
   // ============================================================
 
-  private async processOddsApi(leagueId: string): Promise<void> {
+  private async processOddsApi(
+    leagueId: string,
+    eventId: string,
+  ): Promise<void> {
     const competition = this.priorityCompetitionService.getById(leagueId);
 
     if (!competition) {
@@ -309,6 +352,8 @@ export class EspnQueueWorkerService implements OnModuleInit {
     if (odds.length > 0) {
       await this.sportsCollectionService.collectOdds(odds);
     }
+
+    await this.matchDerivedDataService.rebuildForFixture(eventId);
   }
 
   // ============================================================

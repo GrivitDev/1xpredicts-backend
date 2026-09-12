@@ -438,6 +438,59 @@ export class MatchDerivedDataService {
     );
   }
 
+  async rebuildUpcomingForTeams(
+    competitionId: string,
+    season: number,
+    teamIds: string[],
+  ): Promise<number> {
+    const normalizedCompetitionId = competitionId.trim().toLowerCase();
+
+    const normalizedTeamIds = [
+      ...new Set(teamIds.map((teamId) => teamId.trim()).filter(Boolean)),
+    ];
+
+    if (!normalizedTeamIds.length) {
+      return 0;
+    }
+
+    const fixtures = await this.fixtureModel
+      .find({
+        leagueId: normalizedCompetitionId,
+        season,
+        fixtureDate: {
+          $gte: new Date(),
+        },
+        completed: {
+          $ne: true,
+        },
+        $or: [
+          {
+            homeTeamId: {
+              $in: normalizedTeamIds,
+            },
+          },
+          {
+            awayTeamId: {
+              $in: normalizedTeamIds,
+            },
+          },
+        ],
+      })
+      .sort({
+        fixtureDate: 1,
+      })
+      .lean()
+      .exec();
+
+    return this.rebuildForFixtures(
+      fixtures
+        .map((fixture) => fixture.eventId)
+        .filter(
+          (eventId): eventId is string =>
+            typeof eventId === 'string' && eventId.length > 0,
+        ),
+    );
+  }
   // ============================================================
   // HEAD TO HEAD
   // ============================================================
