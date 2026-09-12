@@ -495,26 +495,27 @@ export class SportsDataReadService {
   async getTeamStats(
     competitionId: string,
     season: number,
-    teamId: string,
+    teamId: string | number,
   ): Promise<TeamCompetitionStatsDocument | null> {
+    const normalizedTeamId = String(teamId).trim();
+
     const filter: Record<string, unknown> = {
       competitionId: String(competitionId).trim().toLowerCase(),
       season,
-      teamId: teamId.trim(),
+      teamId: normalizedTeamId,
     };
 
     return this.teamCompetitionStatsModel.findOne(filter).lean().exec();
   }
-
   // ============================================================
   // HEAD TO HEAD
   // ============================================================
   async getHeadToHead(
-    teamOneId: string,
-    teamTwoId: string,
+    teamOneId: string | number,
+    teamTwoId: string | number,
   ): Promise<HeadToHeadDocument | null> {
-    const first = teamOneId.trim();
-    const second = teamTwoId.trim();
+    const first = String(teamOneId).trim();
+    const second = String(teamTwoId).trim();
 
     if (!first || !second || first === second) {
       return null;
@@ -533,7 +534,6 @@ export class SportsDataReadService {
       .lean()
       .exec();
   }
-
   // ============================================================
   // ODDS
   // ============================================================
