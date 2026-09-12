@@ -876,3 +876,25 @@ export interface EspnLeaderItem {
 
   [key: string]: unknown;
 }
+
+export interface EspnNewsResponse {
+  resultsCount?: number;
+  resultsLimit?: number;
+  resultsOffset?: number;
+  headlines?: EspnNewsArticle[];
+
+  [key: string]: unknown;
+}
+
+export interface EspnNewsArticle {
+  id?: string;
+  type?: string;
+  headline?: string;
+  description?: string;
+  published?: string;
+  lastModified?: string;
+  links?: EspnLink[];
+  images?: EspnImage[];
+
+  [key: string]: unknown;
+}

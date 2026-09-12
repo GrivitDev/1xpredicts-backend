@@ -11,6 +11,7 @@ import {
   EspnApiResponse,
   EspnEvent,
   EspnLeague,
+  EspnNewsResponse,
   EspnStandingsResponse,
 } from './espn.interfaces';
 
@@ -313,7 +314,7 @@ export class EspnService {
   // 9. GLOBAL SOCCER NEWS
   // ============================================================
 
-  async getNews(limit = 50): Promise<Record<string, unknown>> {
+  async getNews(limit = 50): Promise<EspnNewsResponse> {
     if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
       throw new BadRequestException(
         'limit must be an integer between 1 and 100',

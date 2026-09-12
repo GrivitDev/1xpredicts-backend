@@ -59,9 +59,11 @@ import {
   OddsApiEventOdds,
 } from '../providers/the-odds-api.interfaces';
 import {
+  EspnApiResponse,
   EspnStandingEntry,
   EspnStandingsResponse,
 } from '../providers/espn.interfaces';
+import { EspnNews, EspnNewsDocument } from '../schemas/espn/espn-news.schema';
 
 @Injectable()
 export class SportsCollectionService {
@@ -88,6 +90,9 @@ export class SportsCollectionService {
 
     @InjectModel(EspnTeam.name)
     private readonly espnTeamModel: Model<EspnTeamDocument>,
+
+    @InjectModel(EspnNews.name)
+    private readonly espnNewsModel: Model<EspnNewsDocument>,
 
     // ----------------------------------------------------------
     // Football-Data
@@ -989,6 +994,280 @@ export class SportsCollectionService {
       .exec();
 
     return collected;
+  }
+
+  async collectEspnNews(response: EspnApiResponse): Promise<{
+    received: number;
+    created: number;
+    updated: number;
+    skipped: number;
+  }> {
+    const articles = Array.isArray(response.items) ? response.items : [];
+
+    let created = 0;
+    let updated = 0;
+    let skipped = 0;
+
+    for (const article of articles) {
+      const payload = article as Record<string, unknown>;
+
+      const articleId = this.extractString(payload, 'id', 'articleId', 'uid');
+
+      if (!articleId) {
+        skipped++;
+        continue;
+      }
+
+      const leagueId = this.extractNewsLeagueId(payload);
+
+      if (!leagueId) {
+        skipped++;
+        continue;
+      }
+
+      const headline = this.extractString(payload, 'headline', 'title');
+
+      const description = this.extractString(payload, 'description', 'summary');
+
+      const published = this.parseDate(
+        this.extractString(payload, 'published', 'publishedAt'),
+      );
+
+      const lastModified = this.parseDate(
+        this.extractString(payload, 'lastModified', 'updated', 'updatedAt'),
+      );
+
+      const link = this.extractNewsLink(payload);
+      const imageUrl = this.extractNewsImage(payload);
+
+      const type = this.extractString(payload, 'type', 'contentType');
+
+      const author = this.extractNewsAuthor(payload);
+
+      const collectedAt = new Date();
+
+      const existing = await this.espnNewsModel
+        .findOne({ articleId })
+        .select({ _id: 1 })
+        .lean()
+        .exec();
+
+      await this.espnNewsModel.updateOne(
+        { articleId },
+        {
+          $set: {
+            leagueId,
+            headline,
+            description,
+            published,
+            lastModified,
+            link,
+            imageUrl,
+            type,
+            author,
+            payload,
+            collectedAt,
+          },
+        },
+        {
+          upsert: true,
+        },
+      );
+
+      if (existing) {
+        updated++;
+      } else {
+        created++;
+      }
+    }
+
+    return {
+      received: articles.length,
+      created,
+      updated,
+      skipped,
+    };
+  }
+
+  private extractNewsLeagueId(
+    payload: Record<string, unknown>,
+  ): string | undefined {
+    const directLeagueId = this.extractString(payload, 'leagueId');
+
+    if (directLeagueId) {
+      return directLeagueId.toLowerCase();
+    }
+
+    const league = payload['league'];
+
+    if (league && typeof league === 'object' && !Array.isArray(league)) {
+      const leagueObject = league as Record<string, unknown>;
+
+      const leagueId = this.extractString(
+        leagueObject,
+        'slug',
+        'id',
+        'abbreviation',
+      );
+
+      if (leagueId) {
+        return leagueId.toLowerCase();
+      }
+    }
+
+    const categories = payload['categories'];
+
+    if (Array.isArray(categories)) {
+      for (const category of categories) {
+        if (
+          !category ||
+          typeof category !== 'object' ||
+          Array.isArray(category)
+        ) {
+          continue;
+        }
+
+        const categoryObject = category as Record<string, unknown>;
+
+        const leagueObject = categoryObject['league'];
+
+        if (
+          leagueObject &&
+          typeof leagueObject === 'object' &&
+          !Array.isArray(leagueObject)
+        ) {
+          const leagueId = this.extractString(
+            leagueObject as Record<string, unknown>,
+            'slug',
+            'id',
+            'abbreviation',
+          );
+
+          if (leagueId) {
+            return leagueId.toLowerCase();
+          }
+        }
+
+        const leagueId = this.extractString(
+          categoryObject,
+          'leagueId',
+          'league',
+        );
+
+        if (leagueId) {
+          return leagueId.toLowerCase();
+        }
+      }
+    }
+
+    return undefined;
+  }
+
+  private extractNewsLink(
+    payload: Record<string, unknown>,
+  ): string | undefined {
+    const directLink = this.extractString(payload, 'link', 'url');
+
+    if (directLink) {
+      return directLink;
+    }
+
+    const links = payload['links'];
+
+    if (links && typeof links === 'object' && !Array.isArray(links)) {
+      const linksObject = links as Record<string, unknown>;
+
+      const web = linksObject['web'];
+
+      if (web && typeof web === 'object' && !Array.isArray(web)) {
+        return this.extractString(
+          web as Record<string, unknown>,
+          'href',
+          'url',
+        );
+      }
+
+      return this.extractString(linksObject, 'href', 'url');
+    }
+
+    return undefined;
+  }
+
+  private extractNewsImage(
+    payload: Record<string, unknown>,
+  ): string | undefined {
+    const directImage = this.extractString(payload, 'imageUrl', 'image');
+
+    if (directImage) {
+      return directImage;
+    }
+
+    const images = payload['images'];
+
+    if (!Array.isArray(images)) {
+      return undefined;
+    }
+
+    for (const image of images) {
+      if (!image || typeof image !== 'object' || Array.isArray(image)) {
+        continue;
+      }
+
+      const imageObject = image as Record<string, unknown>;
+
+      const url = this.extractString(imageObject, 'url', 'href');
+
+      if (url) {
+        return url;
+      }
+    }
+
+    return undefined;
+  }
+
+  private extractNewsAuthor(
+    payload: Record<string, unknown>,
+  ): string | undefined {
+    const directAuthor = this.extractString(payload, 'author', 'byline');
+
+    if (directAuthor) {
+      return directAuthor;
+    }
+
+    const authorObject = payload['author'];
+
+    if (
+      authorObject &&
+      typeof authorObject === 'object' &&
+      !Array.isArray(authorObject)
+    ) {
+      return this.extractString(
+        authorObject as Record<string, unknown>,
+        'name',
+        'displayName',
+      );
+    }
+
+    return undefined;
+  }
+
+  private extractString(
+    payload: Record<string, unknown>,
+    ...keys: string[]
+  ): string | undefined {
+    for (const key of keys) {
+      const value = payload[key];
+
+      if (typeof value === 'string' && value.trim()) {
+        return value.trim();
+      }
+
+      if (typeof value === 'number' || typeof value === 'boolean') {
+        return String(value);
+      }
+    }
+
+    return undefined;
   }
 
   // ============================================================

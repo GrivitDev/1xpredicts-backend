@@ -72,7 +72,7 @@ export class NewsScheduler {
   }
 
   // ============================================================
-  // MORNING NEWS
+  // MORNING NEWS — 08:00
   // ============================================================
 
   @Cron('0 8 * * *', {
@@ -84,7 +84,19 @@ export class NewsScheduler {
   }
 
   // ============================================================
-  // EVENING NEWS
+  // AFTERNOON NEWS — 15:00
+  // ============================================================
+
+  @Cron('0 15 * * *', {
+    name: 'espn-news-afternoon',
+    timeZone: 'Africa/Lagos',
+  })
+  async collectAfternoonNews(): Promise<void> {
+    await this.collectNews('afternoon');
+  }
+
+  // ============================================================
+  // EVENING NEWS — 20:00
   // ============================================================
 
   @Cron('0 20 * * *', {
@@ -93,6 +105,18 @@ export class NewsScheduler {
   })
   async collectEveningNews(): Promise<void> {
     await this.collectNews('evening');
+  }
+
+  // ============================================================
+  // NIGHT NEWS — 23:00
+  // ============================================================
+
+  @Cron('0 23 * * *', {
+    name: 'espn-news-night',
+    timeZone: 'Africa/Lagos',
+  })
+  async collectNightNews(): Promise<void> {
+    await this.collectNews('night');
   }
 
   // ============================================================
@@ -156,7 +180,9 @@ export class NewsScheduler {
   // COLLECT NEWS
   // ============================================================
 
-  private async collectNews(period: 'morning' | 'evening'): Promise<void> {
+  private async collectNews(
+    period: 'morning' | 'afternoon' | 'evening' | 'night',
+  ): Promise<void> {
     if (this.running) {
       this.logger.warn(
         `Skipping ${period} ESPN news collection because another news collection is already running`,
@@ -170,12 +196,15 @@ export class NewsScheduler {
     try {
       const response = await this.espnService.getNews();
 
-      const itemCount = Array.isArray(response.items)
-        ? response.items.length
-        : 0;
+      const result =
+        await this.sportsCollectionService.collectEspnNews(response);
 
       this.logger.log(
-        `ESPN ${period} news collection completed: ${itemCount} articles received`,
+        `ESPN ${period} news collection completed: ` +
+          `received=${result.received}, ` +
+          `created=${result.created}, ` +
+          `updated=${result.updated}, ` +
+          `skipped=${result.skipped}`,
       );
     } catch (error) {
       this.logger.error(
