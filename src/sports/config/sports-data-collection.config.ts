@@ -115,10 +115,10 @@ export const SPORTS_DATA_COLLECTION_CONFIG = {
      *
      * This remains separate from ESPN.
      */
-    dailyRequestLimit: 30,
+    dailyRequestLimit: 90,
 
     rateLimit: {
-      minIntervalSeconds: 60,
+      minIntervalSeconds: 200,
     },
 
     queue: {

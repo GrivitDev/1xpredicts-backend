@@ -52,8 +52,8 @@ export class SportsProviderRateLimitService {
     },
 
     youtube: {
-      minIntervalSeconds: 60,
-      dailyLimit: 10_000,
+      minIntervalSeconds: 200,
+      dailyLimit: 90,
     },
   };
 
