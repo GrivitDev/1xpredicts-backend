@@ -58,6 +58,10 @@ import {
   OddsApiSport as OddsApiSportPayload,
   OddsApiEventOdds,
 } from '../providers/the-odds-api.interfaces';
+import {
+  EspnStandingEntry,
+  EspnStandingsResponse,
+} from '../providers/espn.interfaces';
 
 @Injectable()
 export class SportsCollectionService {
@@ -454,7 +458,9 @@ export class SportsCollectionService {
     response: unknown,
     season?: number,
   ): Promise<number> {
-    const entries = this.extractStandingEntries(response);
+    const entries = this.extractStandingEntries(
+      response as Record<string, unknown> | null | undefined,
+    );
 
     if (!entries.length) {
       return 0;
@@ -529,7 +535,7 @@ export class SportsCollectionService {
                 'description',
               ]),
 
-              payload: entry as Record<string, unknown>,
+              payload: entry,
 
               collectedAt: new Date(),
             },
@@ -1071,48 +1077,135 @@ export class SportsCollectionService {
     return [];
   }
 
-  private extractStandingEntries(response: unknown): unknown[] {
+  private extractStandingEntries(
+    response:
+      | EspnStandingsResponse
+      | Record<string, unknown>
+      | null
+      | undefined,
+  ): EspnStandingEntry[] {
     if (!response || typeof response !== 'object') {
       return [];
     }
 
-    const root = response as Record<string, unknown>;
+    const root = this.asRecord(response);
 
-    const entries = root.entries;
-    if (Array.isArray(entries)) {
+    if (!root) {
+      return [];
+    }
+
+    // ============================================================
+    // DIRECT:
+    // standings: {
+    //   entries: [...]
+    // }
+    // ============================================================
+
+    const directStandings = this.asRecord(root.standings);
+
+    if (Array.isArray(directStandings?.entries)) {
+      return directStandings.entries as EspnStandingEntry[];
+    }
+
+    // ============================================================
+    // CHILD GROUPS:
+    //
+    // children: [
+    //   {
+    //     standings: {
+    //       entries: [...]
+    //     }
+    //   }
+    // ]
+    // ============================================================
+
+    const children = Array.isArray(root.children)
+      ? (root.children as unknown[])
+      : [];
+
+    const entries: EspnStandingEntry[] = [];
+
+    for (const child of children) {
+      this.collectStandingEntriesFromGroup(child, entries);
+    }
+
+    if (entries.length > 0) {
       return entries;
     }
 
-    const standings = root.standings;
-    if (Array.isArray(standings)) {
-      return standings.flatMap((group: unknown) => {
-        if (!group || typeof group !== 'object') {
-          return [];
-        }
+    // ============================================================
+    // LEGACY / ALTERNATIVE:
+    //
+    // standings: [
+    //   {
+    //     entries: [...]
+    //   }
+    // ]
+    // ============================================================
 
-        const groupEntries = (group as Record<string, unknown>).entries;
-        return Array.isArray(groupEntries) ? (groupEntries as unknown[]) : [];
-      });
+    if (Array.isArray(root.standings)) {
+      for (const group of root.standings as unknown[]) {
+        this.collectStandingEntriesFromGroup(group, entries);
+      }
+
+      if (entries.length > 0) {
+        return entries;
+      }
     }
 
-    const standingsGroups =
-      standings && typeof standings === 'object'
-        ? (standings as Record<string, unknown>).groups
-        : undefined;
-    const groups = root.groups ?? standingsGroups;
+    // ============================================================
+    // GROUPS:
+    //
+    // groups: [
+    //   {
+    //     standings: {
+    //       entries: [...]
+    //     }
+    //   }
+    // ]
+    // ============================================================
 
-    if (Array.isArray(groups)) {
-      return groups.flatMap((group: unknown) => {
-        if (!group || typeof group !== 'object') {
-          return [];
-        }
+    const groups = Array.isArray(root.groups) ? (root.groups as unknown[]) : [];
 
-        const groupEntries = (group as Record<string, unknown>).entries;
-        return Array.isArray(groupEntries) ? (groupEntries as unknown[]) : [];
-      });
+    for (const group of groups) {
+      this.collectStandingEntriesFromGroup(group, entries);
     }
 
-    return [];
+    return entries;
+  }
+
+  private collectStandingEntriesFromGroup(
+    value: unknown,
+    output: EspnStandingEntry[],
+  ): void {
+    const group = this.asRecord(value);
+
+    if (!group) {
+      return;
+    }
+
+    // Direct standings container:
+    //
+    // standings: {
+    //   entries: [...]
+    // }
+    const standings = this.asRecord(group.standings);
+
+    if (Array.isArray(standings?.entries)) {
+      output.push(...(standings.entries as EspnStandingEntry[]));
+    }
+
+    // Alternative direct entries:
+    if (Array.isArray(group.entries)) {
+      output.push(...(group.entries as EspnStandingEntry[]));
+    }
+
+    // Nested children:
+    if (Array.isArray(group.children)) {
+      for (const child of group.children as unknown[]) {
+        this.collectStandingEntriesFromGroup(child, output);
+      }
+    }
   }
 
   private getStatisticNumber(

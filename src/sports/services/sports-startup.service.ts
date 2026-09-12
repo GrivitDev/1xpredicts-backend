@@ -33,19 +33,59 @@ export class SportsStartupService implements OnModuleInit {
   /**
    * Startup flow:
    *
-   * 1. Discover complete ESPN catalogue.
-   * 2. Synchronize league details.
-   * 3. Determine current active seasons.
-   * 4. Bootstrap fixtures:
+   * 1. Check whether the ESPN league catalogue is empty.
    *
-   *       seasonStartDate
-   *              ->
-   *       today + 4 days
+   * 2. If the catalogue already contains leagues:
+   *      - Skip the initial bootstrap completely.
    *
-   * 5. Build league refresh queue.
-   * 6. Read queue state.
+   * 3. If the catalogue is empty:
+   *      - Discover complete ESPN catalogue.
+   *      - Synchronize league details.
+   *      - Determine current active seasons.
+   *      - Bootstrap fixtures.
+   *      - Build initial league refresh queue.
+   *      - Read queue state.
    */
   private async initializeEspn(): Promise<void> {
+    // ==========================================================
+    // STEP 0 — CHECK ESPN CATALOGUE
+    // ==========================================================
+
+    let catalogueEmpty: boolean;
+
+    try {
+      catalogueEmpty =
+        await this.espnActiveCompetitionService.isLeagueCatalogueEmpty();
+    } catch (error) {
+      this.logger.error(
+        'Unable to check ESPN league catalogue state',
+        error instanceof Error ? error.stack : String(error),
+      );
+
+      return;
+    }
+
+    // ==========================================================
+    // EXISTING CATALOGUE — SKIP INITIAL BOOTSTRAP
+    // ==========================================================
+
+    if (!catalogueEmpty) {
+      this.logger.log(
+        'ESPN league catalogue already populated. ' +
+          'Skipping initial ESPN startup bootstrap.',
+      );
+
+      return;
+    }
+
+    // ==========================================================
+    // EMPTY CATALOGUE — INITIAL BOOTSTRAP REQUIRED
+    // ==========================================================
+
+    this.logger.log(
+      'ESPN league catalogue is empty. ' + 'Starting initial ESPN bootstrap.',
+    );
+
     // ==========================================================
     // STEP 1 — COMPLETE ESPN CATALOGUE
     // ==========================================================

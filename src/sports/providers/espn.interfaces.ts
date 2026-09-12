@@ -666,6 +666,8 @@ export interface EspnImage {
 // ============================================================
 
 export interface EspnStandingsResponse {
+  uid?: string;
+
   name?: string;
 
   abbreviation?: string;
@@ -674,9 +676,11 @@ export interface EspnStandingsResponse {
 
   seasonType?: EspnSeasonType;
 
-  standings?: EspnStandingsGroup[];
+  fullViewLink?: EspnLink;
 
   children?: EspnStandingsGroup[];
+
+  standings?: EspnStandingsContainer;
 
   [key: string]: unknown;
 }
@@ -694,9 +698,19 @@ export interface EspnStandingsGroup {
 
   abbreviation?: string;
 
-  standings?: EspnStandingEntry[];
+  standings?: EspnStandingsContainer;
 
   children?: EspnStandingsGroup[];
+
+  [key: string]: unknown;
+}
+
+// ============================================================
+// ESPN STANDINGS CONTAINER
+// ============================================================
+
+export interface EspnStandingsContainer {
+  entries?: EspnStandingEntry[];
 
   [key: string]: unknown;
 }

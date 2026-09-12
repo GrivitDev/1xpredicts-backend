@@ -752,4 +752,21 @@ export class EspnActiveCompetitionService {
   private normalizeLeagueId(value?: string): string {
     return typeof value === 'string' ? value.trim().toLowerCase() : '';
   }
+
+  /**
+   * Check whether the ESPN league catalogue has been populated.
+   *
+   * The ESPN league catalogue is the startup bootstrap gate.
+   * If at least one league exists, the initial bootstrap does not
+   * need to run again on server restart.
+   */
+  async isLeagueCatalogueEmpty(): Promise<boolean> {
+    const league = await this.espnLeagueModel
+      .findOne({})
+      .select({ _id: 1 })
+      .lean()
+      .exec();
+
+    return !league;
+  }
 }
