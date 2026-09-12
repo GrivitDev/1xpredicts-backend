@@ -314,6 +314,10 @@ export class EspnService {
   // 9. GLOBAL SOCCER NEWS
   // ============================================================
 
+  // ============================================================
+  // 9. GLOBAL SOCCER NEWS
+  // ============================================================
+
   async getNews(limit = 50): Promise<EspnNewsResponse> {
     if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
       throw new BadRequestException(
@@ -321,14 +325,10 @@ export class EspnService {
       );
     }
 
-    return this.request<Record<string, unknown>>(
-      `${this.newsBaseUrl}/news`,
-      'news',
-      {
-        sport: 'soccer',
-        limit: String(limit),
-      },
-    );
+    return this.request<EspnNewsResponse>(`${this.newsBaseUrl}/news`, 'news', {
+      sport: 'soccer',
+      limit: String(limit),
+    });
   }
 
   // ============================================================

@@ -877,24 +877,138 @@ export interface EspnLeaderItem {
   [key: string]: unknown;
 }
 
+// ============================================================
+// ESPN NEWS RESPONSE
+// ============================================================
+
 export interface EspnNewsResponse {
   resultsCount?: number;
+
   resultsLimit?: number;
+
   resultsOffset?: number;
+
   headlines?: EspnNewsArticle[];
 
   [key: string]: unknown;
 }
 
+// ============================================================
+// ESPN NEWS ARTICLE
+// ============================================================
+
 export interface EspnNewsArticle {
   id?: string;
+
+  nowId?: string;
+
   type?: string;
+
   headline?: string;
+
   description?: string;
+
   published?: string;
+
   lastModified?: string;
-  links?: EspnLink[];
-  images?: EspnImage[];
+
+  story?: string;
+
+  source?: string;
+
+  author?: string;
+
+  premium?: boolean;
+
+  video?: unknown;
+
+  keywords?: string[];
+
+  categories?: EspnNewsCategory[];
+
+  images?: EspnNewsImage[];
+
+  links?: {
+    web?: {
+      href?: string;
+
+      text?: string;
+
+      shortText?: string;
+
+      rel?: string[];
+
+      isExternal?: boolean;
+
+      isPremium?: boolean;
+
+      isAffiliate?: boolean;
+
+      [key: string]: unknown;
+    };
+
+    [key: string]: unknown;
+  };
+
+  [key: string]: unknown;
+}
+
+// ============================================================
+// ESPN NEWS CATEGORY
+// ============================================================
+
+export interface EspnNewsCategory {
+  id?: string;
+
+  type?: string;
+
+  leagueId?: string | number;
+
+  league?: {
+    id?: string | number;
+
+    description?: string;
+
+    abbreviation?: string;
+
+    links?: EspnLink[];
+
+    [key: string]: unknown;
+  };
+
+  teamId?: string | number;
+
+  team?: EspnTeam;
+
+  athleteId?: string | number;
+
+  athlete?: EspnAthlete;
+
+  [key: string]: unknown;
+}
+
+// ============================================================
+// ESPN NEWS IMAGE
+// ============================================================
+
+export interface EspnNewsImage {
+  id?: string;
+
+  url?: string | string[];
+
+  width?: number;
+
+  height?: number;
+
+  alt?: string;
+
+  caption?: string;
+
+  credit?: string;
+
+  type?: string;
+
+  rel?: string[];
 
   [key: string]: unknown;
 }

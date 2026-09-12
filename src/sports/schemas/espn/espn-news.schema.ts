@@ -21,7 +21,11 @@ export class EspnNews {
   articleId!: string;
 
   /**
-   * ESPN league slug.
+   * ESPN league identifier associated with the article.
+   *
+   * This may be the ESPN league ID, abbreviation,
+   * or canonical league slug depending on the
+   * ESPN news payload and collection mapping.
    */
   @Prop({
     required: true,

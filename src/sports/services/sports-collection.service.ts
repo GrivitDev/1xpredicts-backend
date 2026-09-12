@@ -59,7 +59,7 @@ import {
   OddsApiEventOdds,
 } from '../providers/the-odds-api.interfaces';
 import {
-  EspnApiResponse,
+  EspnNewsResponse,
   EspnStandingEntry,
   EspnStandingsResponse,
 } from '../providers/espn.interfaces';
@@ -996,13 +996,19 @@ export class SportsCollectionService {
     return collected;
   }
 
-  async collectEspnNews(response: EspnApiResponse): Promise<{
+  // ============================================================
+  // ESPN — NEWS
+  // ============================================================
+
+  async collectEspnNews(response: EspnNewsResponse): Promise<{
     received: number;
     created: number;
     updated: number;
     skipped: number;
   }> {
-    const articles = Array.isArray(response.items) ? response.items : [];
+    const articles = Array.isArray(response.headlines)
+      ? response.headlines
+      : [];
 
     let created = 0;
     let updated = 0;
@@ -1038,6 +1044,7 @@ export class SportsCollectionService {
       );
 
       const link = this.extractNewsLink(payload);
+
       const imageUrl = this.extractNewsImage(payload);
 
       const type = this.extractString(payload, 'type', 'contentType');
@@ -1047,32 +1054,41 @@ export class SportsCollectionService {
       const collectedAt = new Date();
 
       const existing = await this.espnNewsModel
-        .findOne({ articleId })
-        .select({ _id: 1 })
+        .findOne({
+          articleId,
+        })
+        .select({
+          _id: 1,
+        })
         .lean()
         .exec();
 
-      await this.espnNewsModel.updateOne(
-        { articleId },
-        {
-          $set: {
-            leagueId,
-            headline,
-            description,
-            published,
-            lastModified,
-            link,
-            imageUrl,
-            type,
-            author,
-            payload,
-            collectedAt,
+      await this.espnNewsModel
+        .updateOne(
+          {
+            articleId,
           },
-        },
-        {
-          upsert: true,
-        },
-      );
+          {
+            $set: {
+              articleId,
+              leagueId,
+              headline,
+              description,
+              published,
+              lastModified,
+              link,
+              imageUrl,
+              type,
+              author,
+              payload,
+              collectedAt,
+            },
+          },
+          {
+            upsert: true,
+          },
+        )
+        .exec();
 
       if (existing) {
         updated++;
@@ -1088,14 +1104,13 @@ export class SportsCollectionService {
       skipped,
     };
   }
-
   private extractNewsLeagueId(
     payload: Record<string, unknown>,
   ): string | undefined {
     const directLeagueId = this.extractString(payload, 'leagueId');
 
     if (directLeagueId) {
-      return directLeagueId.toLowerCase();
+      return directLeagueId.trim().toLowerCase();
     }
 
     const league = payload['league'];
@@ -1106,63 +1121,75 @@ export class SportsCollectionService {
       const leagueId = this.extractString(
         leagueObject,
         'slug',
-        'id',
         'abbreviation',
+        'id',
       );
 
       if (leagueId) {
-        return leagueId.toLowerCase();
+        return leagueId.trim().toLowerCase();
       }
     }
 
     const categories = payload['categories'];
 
-    if (Array.isArray(categories)) {
-      for (const category of categories) {
-        if (
-          !category ||
-          typeof category !== 'object' ||
-          Array.isArray(category)
-        ) {
-          continue;
+    if (!Array.isArray(categories)) {
+      return undefined;
+    }
+
+    for (const category of categories) {
+      if (
+        !category ||
+        typeof category !== 'object' ||
+        Array.isArray(category)
+      ) {
+        continue;
+      }
+
+      const categoryObject = category as Record<string, unknown>;
+
+      if (
+        this.extractString(categoryObject, 'type')?.toLowerCase() !== 'league'
+      ) {
+        continue;
+      }
+
+      const leagueObject = categoryObject['league'];
+
+      if (
+        leagueObject &&
+        typeof leagueObject === 'object' &&
+        !Array.isArray(leagueObject)
+      ) {
+        const leagueRecord = leagueObject as Record<string, unknown>;
+
+        const leagueSlug = this.extractString(leagueRecord, 'slug');
+
+        if (leagueSlug) {
+          return leagueSlug.trim().toLowerCase();
         }
 
-        const categoryObject = category as Record<string, unknown>;
+        const abbreviation = this.extractString(leagueRecord, 'abbreviation');
 
-        const leagueObject = categoryObject['league'];
-
-        if (
-          leagueObject &&
-          typeof leagueObject === 'object' &&
-          !Array.isArray(leagueObject)
-        ) {
-          const leagueId = this.extractString(
-            leagueObject as Record<string, unknown>,
-            'slug',
-            'id',
-            'abbreviation',
-          );
-
-          if (leagueId) {
-            return leagueId.toLowerCase();
-          }
+        if (abbreviation) {
+          return abbreviation.trim().toLowerCase();
         }
 
-        const leagueId = this.extractString(
-          categoryObject,
-          'leagueId',
-          'league',
-        );
+        const leagueId = this.extractString(leagueRecord, 'id');
 
         if (leagueId) {
-          return leagueId.toLowerCase();
+          return leagueId.trim().toLowerCase();
         }
+      }
+
+      const leagueId = this.extractString(categoryObject, 'leagueId');
+
+      if (leagueId) {
+        return leagueId.trim().toLowerCase();
       }
     }
 
     return undefined;
   }
-
   private extractNewsLink(
     payload: Record<string, unknown>,
   ): string | undefined {
@@ -1215,10 +1242,24 @@ export class SportsCollectionService {
 
       const imageObject = image as Record<string, unknown>;
 
-      const url = this.extractString(imageObject, 'url', 'href');
+      const url = imageObject['url'];
 
-      if (url) {
-        return url;
+      if (typeof url === 'string' && url.trim()) {
+        return url.trim();
+      }
+
+      if (Array.isArray(url)) {
+        for (const item of url) {
+          if (typeof item === 'string' && item.trim()) {
+            return item.trim();
+          }
+        }
+      }
+
+      const href = imageObject['href'];
+
+      if (typeof href === 'string' && href.trim()) {
+        return href.trim();
       }
     }
 
