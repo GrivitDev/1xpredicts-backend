@@ -31,12 +31,6 @@ interface ProviderLimitConfig {
 export class SportsProviderRateLimitService {
   private readonly logger = new Logger(SportsProviderRateLimitService.name);
 
-  /**
-   * Endpoint interval throttling.
-   *
-   * Quota counters are provider-wide and are tracked
-   * separately from these endpoint slots.
-   */
   private readonly limits: Record<SportsProvider, ProviderLimitConfig> = {
     espn: {
       minIntervalSeconds: 5,
@@ -57,16 +51,8 @@ export class SportsProviderRateLimitService {
     },
   };
 
-  /**
-   * Special provider-wide accounting record.
-   *
-   * This record does not participate in endpoint throttling.
-   */
   private readonly PROVIDER_QUOTA_ENDPOINT = '__provider_quota__';
 
-  /**
-   * Temporary endpoint lock.
-   */
   private readonly lockSeconds = 30;
 
   constructor(
@@ -78,14 +64,6 @@ export class SportsProviderRateLimitService {
   // PUBLIC REQUEST EXECUTION
   // ============================================================
 
-  /**
-   * Execute one outbound provider request.
-   *
-   * 1. Acquire endpoint slot.
-   * 2. Reserve/increment provider-wide request counter.
-   * 3. Execute actual provider request.
-   * 4. Release endpoint slot.
-   */
   async execute<T>(
     provider: SportsProvider,
     endpoint: string,
@@ -115,10 +93,14 @@ export class SportsProviderRateLimitService {
       const now = new Date();
 
       /*
-       * Always ensure the provider-wide counter record exists
-       * and is on the current daily/monthly period.
+       * Provider-wide quota record.
        */
       await this.ensurePeriodState(provider, now);
+
+      /*
+       * Endpoint-specific usage record.
+       */
+      await this.ensureEndpointPeriodState(provider, normalizedEndpoint, now);
 
       const state = await this.rateLimitModel
         .findOne({
@@ -218,19 +200,11 @@ export class SportsProviderRateLimitService {
       }
 
       /*
-       * Now reserve one provider-wide request.
-       *
-       * This ALWAYS increments the counters.
-       *
-       * Providers without configured limits are still counted.
+       * Provider-wide quota remains authoritative.
        */
       const quotaReserved = await this.reserveProviderQuota(provider, now);
 
       if (!quotaReserved) {
-        /*
-         * Release endpoint ownership because the request
-         * is not allowed to proceed.
-         */
         await this.rateLimitModel
           .updateOne(
             {
@@ -250,9 +224,15 @@ export class SportsProviderRateLimitService {
       }
 
       /*
-       * Request is officially allowed to leave the application.
+       * Record this request against the specific
+       * provider + endpoint record as well.
        *
-       * Record the actual request start time on the endpoint slot.
+       * This is usage tracking only.
+       */
+      await this.recordEndpointRequest(provider, normalizedEndpoint, now);
+
+      /*
+       * Record actual request start time.
        */
       await this.rateLimitModel
         .updateOne(
@@ -306,13 +286,6 @@ export class SportsProviderRateLimitService {
   // PROVIDER QUOTA
   // ============================================================
 
-  /**
-   * Provider-wide atomic request accounting.
-   *
-   * Every provider request increments the appropriate counters.
-   *
-   * Limits are enforced only when configured.
-   */
   private async reserveProviderQuota(
     provider: SportsProvider,
     now: Date,
@@ -323,10 +296,6 @@ export class SportsProviderRateLimitService {
 
     const monthlyPeriod = this.getMonthlyPeriod(now);
 
-    /*
-     * First make sure the provider quota record exists
-     * and has current period values.
-     */
     await this.ensurePeriodState(provider, now);
 
     const filter: Record<string, unknown> = {
@@ -336,9 +305,6 @@ export class SportsProviderRateLimitService {
       monthlyPeriod,
     };
 
-    /*
-     * Apply limits only when configured.
-     */
     if (config.dailyLimit !== undefined) {
       filter.dailyRequests = {
         $lt: config.dailyLimit,
@@ -354,12 +320,6 @@ export class SportsProviderRateLimitService {
       };
     }
 
-    /*
-     * Increment every configured counter.
-     *
-     * At the moment daily/monthly counters exist for
-     * every provider, even when no limit is configured.
-     */
     const updated = await this.rateLimitModel
       .findOneAndUpdate(
         filter,
@@ -383,6 +343,48 @@ export class SportsProviderRateLimitService {
       .exec();
 
     return Boolean(updated);
+  }
+
+  // ============================================================
+  // ENDPOINT REQUEST ACCOUNTING
+  // ============================================================
+
+  private async recordEndpointRequest(
+    provider: SportsProvider,
+    endpoint: string,
+    now: Date,
+  ): Promise<void> {
+    const dailyPeriod = this.getDailyPeriod(now);
+
+    const monthlyPeriod = this.getMonthlyPeriod(now);
+
+    await this.rateLimitModel
+      .findOneAndUpdate(
+        {
+          provider,
+          endpoint,
+          dailyPeriod,
+          monthlyPeriod,
+        },
+        {
+          $inc: {
+            dailyRequests: 1,
+            monthlyRequests: 1,
+          },
+
+          $set: {
+            provider,
+            endpoint,
+            dailyPeriod,
+            monthlyPeriod,
+          },
+        },
+        {
+          returnDocument: 'after',
+          upsert: true,
+        },
+      )
+      .exec();
   }
 
   // ============================================================
@@ -482,6 +484,56 @@ export class SportsProviderRateLimitService {
   }
 
   // ============================================================
+  // ENDPOINT DAILY USAGE
+  // ============================================================
+
+  async getEndpointDailyUsage(
+    provider: SportsProvider,
+    endpoint: string,
+  ): Promise<number> {
+    const normalizedEndpoint = this.normalizeEndpoint(endpoint);
+
+    const now = new Date();
+
+    await this.ensureEndpointPeriodState(provider, normalizedEndpoint, now);
+
+    const state = await this.rateLimitModel
+      .findOne({
+        provider,
+        endpoint: normalizedEndpoint,
+      })
+      .lean()
+      .exec();
+
+    return state?.dailyRequests ?? 0;
+  }
+
+  // ============================================================
+  // ENDPOINT MONTHLY USAGE
+  // ============================================================
+
+  async getEndpointMonthlyUsage(
+    provider: SportsProvider,
+    endpoint: string,
+  ): Promise<number> {
+    const normalizedEndpoint = this.normalizeEndpoint(endpoint);
+
+    const now = new Date();
+
+    await this.ensureEndpointPeriodState(provider, normalizedEndpoint, now);
+
+    const state = await this.rateLimitModel
+      .findOne({
+        provider,
+        endpoint: normalizedEndpoint,
+      })
+      .lean()
+      .exec();
+
+    return state?.monthlyRequests ?? 0;
+  }
+
+  // ============================================================
   // QUOTA AVAILABILITY
   // ============================================================
 
@@ -498,6 +550,10 @@ export class SportsProviderRateLimitService {
       throw error;
     }
   }
+
+  // ============================================================
+  // PROVIDER STATE
+  // ============================================================
 
   async getProviderState(
     provider: SportsProvider,
@@ -522,10 +578,6 @@ export class SportsProviderRateLimitService {
   ): Promise<void> {
     const config = this.getConfig(provider);
 
-    /*
-     * No configured limits means unlimited,
-     * but usage is still tracked.
-     */
     if (config.dailyLimit === undefined && config.monthlyLimit === undefined) {
       return;
     }
@@ -604,21 +656,13 @@ export class SportsProviderRateLimitService {
       return new SportsProviderQuotaExceededError(provider, 'monthly');
     }
 
-    /*
-     * This should only be reached in an unexpected state,
-     * but monthly is the safest fallback.
-     */
     return new SportsProviderQuotaExceededError(provider, 'monthly');
   }
 
   // ============================================================
-  // PERIOD STATE
+  // PROVIDER PERIOD STATE
   // ============================================================
 
-  /**
-   * Every provider gets a provider-wide quota record,
-   * regardless of whether a quota limit is configured.
-   */
   private async ensurePeriodState(
     provider: SportsProvider,
     now: Date,
@@ -684,6 +728,77 @@ export class SportsProviderRateLimitService {
         {
           provider,
           endpoint: this.PROVIDER_QUOTA_ENDPOINT,
+        },
+        {
+          $set: update,
+        },
+      )
+      .exec();
+  }
+
+  // ============================================================
+  // ENDPOINT PERIOD STATE
+  // ============================================================
+
+  private async ensureEndpointPeriodState(
+    provider: SportsProvider,
+    endpoint: string,
+    now: Date,
+  ): Promise<void> {
+    const dailyPeriod = this.getDailyPeriod(now);
+
+    const monthlyPeriod = this.getMonthlyPeriod(now);
+
+    const existing = await this.rateLimitModel
+      .findOne({
+        provider,
+        endpoint,
+      })
+      .lean()
+      .exec();
+
+    if (!existing) {
+      try {
+        await this.rateLimitModel.create({
+          provider,
+          endpoint,
+          dailyPeriod,
+          dailyRequests: 0,
+          monthlyPeriod,
+          monthlyRequests: 0,
+        });
+
+        return;
+      } catch (error) {
+        if (this.isDuplicateEndpointKeyError(error)) {
+          return;
+        }
+
+        throw error;
+      }
+    }
+
+    const update: Record<string, unknown> = {};
+
+    if (existing.dailyPeriod !== dailyPeriod) {
+      update.dailyPeriod = dailyPeriod;
+      update.dailyRequests = 0;
+    }
+
+    if (existing.monthlyPeriod !== monthlyPeriod) {
+      update.monthlyPeriod = monthlyPeriod;
+      update.monthlyRequests = 0;
+    }
+
+    if (Object.keys(update).length === 0) {
+      return;
+    }
+
+    await this.rateLimitModel
+      .updateOne(
+        {
+          provider,
+          endpoint,
         },
         {
           $set: update,
