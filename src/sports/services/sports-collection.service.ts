@@ -186,16 +186,24 @@ export class SportsCollectionService {
    *     ->
    * today + 6 days
    *
-   * This keeps the local fixture database continuously aligned
-   * with ESPN without repeatedly downloading the entire season.
+   * This method performs ONLY:
+   *
+   * 1. scoreboard request
+   * 2. fixture update/create
+   *
+   * Standings are intentionally NOT collected here.
+   *
+   * The fresh scoreboard response is returned so the queue
+   * builder can identify completed matches and create
+   * FINISHED_MATCH jobs.
    */
   async processEspnLeagueRefresh(params: {
     leagueId: string;
     season?: number;
   }): Promise<{
+    scoreboard: unknown;
     fixtureIds: string[];
     collected: number;
-    standings: number;
     dateFrom: string;
     dateTo: string;
   }> {
@@ -224,20 +232,16 @@ export class SportsCollectionService {
       scoreboard,
     );
 
-    const standingsResponse = await this.espnService.getStandings(
-      params.leagueId,
-    );
-
-    const standings = await this.collectEspnStandings(
-      params.leagueId,
-      standingsResponse,
-      params.season ?? this.getSeasonFromFixtures(scoreboard),
+    this.logger.log(
+      `ESPN league refresh completed for ${params.leagueId}: ` +
+        `${fixtureResult.collected} fixtures ` +
+        `(${dateFrom} -> ${dateTo})`,
     );
 
     return {
+      scoreboard,
       fixtureIds: fixtureResult.fixtureIds,
       collected: fixtureResult.collected,
-      standings,
       dateFrom,
       dateTo,
     };
@@ -675,6 +679,29 @@ export class SportsCollectionService {
       .exec();
 
     await this.collectEspnTeams(params.leagueId, competitors);
+  }
+
+  // ============================================================
+  // ESPN — CHECK STORED MATCH SUMMARY
+  // ============================================================
+
+  async hasEspnMatchSummary(eventId: string): Promise<boolean> {
+    const fixture = await this.espnFixtureModel
+      .findOne({
+        eventId: eventId.trim(),
+      })
+      .select({
+        'payload.summary': 1,
+      })
+      .lean()
+      .exec();
+
+    return Boolean(
+      fixture?.payload &&
+      typeof fixture.payload === 'object' &&
+      'summary' in fixture.payload &&
+      fixture.payload.summary,
+    );
   }
 
   // ============================================================

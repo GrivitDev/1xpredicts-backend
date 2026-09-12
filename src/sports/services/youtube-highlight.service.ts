@@ -1,7 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-
 import { InjectModel } from '@nestjs/mongoose';
-
 import { Model } from 'mongoose';
 
 import {
@@ -17,8 +15,6 @@ import {
 import { YoutubeService } from '../providers/youtube.service';
 
 import { YoutubeHighlightStatus } from '../interfaces/youtube-highlight.interface';
-
-import { SPORTS_DATA_COLLECTION_CONFIG } from '../config/sports-data-collection.config';
 
 import { SportsProviderRateLimitService } from './sports-provider-rate-limit.service';
 
@@ -36,8 +32,6 @@ interface MatchInfo {
 export class YoutubeHighlightService {
   private readonly logger = new Logger(YoutubeHighlightService.name);
 
-  private readonly config = SPORTS_DATA_COLLECTION_CONFIG.YOUTUBE;
-
   constructor(
     private readonly youtubeService: YoutubeService,
 
@@ -51,17 +45,30 @@ export class YoutubeHighlightService {
   ) {}
 
   // ============================================================
-  // QUEUE FIXTURE
+  // PROCESS FINISHED FIXTURE
   // ============================================================
 
-  async queueFixture(
+  /**
+   * Called directly by FINISHED_MATCH.
+   *
+   * Flow:
+   *
+   * FINISHED_MATCH
+   *      ↓
+   * YouTube search
+   *      ↓
+   * save/update highlight
+   *
+   * There is no separate YouTube queue.
+   */
+  async processFixture(
     fixtureId: string,
     competitionId?: string,
-  ): Promise<YouTubeHighlightDocument | null> {
+  ): Promise<void> {
     const normalizedFixtureId = fixtureId.trim();
 
     if (!normalizedFixtureId) {
-      return null;
+      throw new Error('YouTube fixture ID is required');
     }
 
     const existing = await this.highlightModel
@@ -70,25 +77,58 @@ export class YoutubeHighlightService {
       })
       .exec();
 
-    if (
-      existing &&
-      (existing.status === YoutubeHighlightStatus.FOUND ||
-        existing.status === YoutubeHighlightStatus.SEARCHING)
-    ) {
-      return existing;
+    /*
+     * A FOUND highlight does not need to be searched again.
+     */
+    if (existing && existing.status === YoutubeHighlightStatus.FOUND) {
+      return;
     }
 
+    /*
+     * FINISHED_MATCH is the only caller, so the provider quota
+     * is checked immediately before the actual YouTube request.
+     */
+    const remaining =
+      (await this.sportsProviderRateLimitService.getRemainingDailyRequests(
+        'youtube',
+      )) ?? 0;
+
+    if (remaining <= 0) {
+      throw new Error('YouTube daily provider quota exhausted');
+    }
+
+    /*
+     * Match information comes from the fixture already stored
+     * by the ESPN scoreboard refresh.
+     */
     const match = await this.getMatchInfo(normalizedFixtureId);
 
     if (!match) {
-      this.logger.warn(
-        `Unable to queue YouTube highlight: ESPN fixture ${normalizedFixtureId} was not found`,
+      throw new Error(
+        `ESPN fixture ${normalizedFixtureId} was not found after scoreboard collection`,
       );
-
-      return null;
     }
 
-    return this.highlightModel
+    /*
+     * One YouTube search request.
+     */
+    const result = await this.youtubeService.findHighlight(
+      match.homeTeam,
+      match.awayTeam,
+      match.date,
+    );
+
+    if (!result) {
+      throw new Error(
+        `No suitable YouTube highlight found for ${match.homeTeam} vs ${match.awayTeam}`,
+      );
+    }
+
+    /*
+     * Update the existing highlight or create it if it does
+     * not already exist.
+     */
+    await this.highlightModel
       .findOneAndUpdate(
         {
           fixtureId: normalizedFixtureId,
@@ -96,12 +136,39 @@ export class YoutubeHighlightService {
         {
           $set: {
             competitionId: competitionId ?? match.competitionId,
+
             homeTeam: match.homeTeam,
+
             awayTeam: match.awayTeam,
+
+            videoId: result.videoId,
+
+            videoUrl: result.videoUrl,
+
+            title: result.title,
+
+            channelId: result.channelId,
+
+            channelTitle: result.channelTitle,
+
+            publishedAt: result.publishedAt
+              ? new Date(result.publishedAt)
+              : undefined,
+
+            thumbnailUrl: result.thumbnailUrl,
+
+            status: YoutubeHighlightStatus.FOUND,
+
+            nextRetryAt: null,
+
+            error: undefined,
+
+            payload: result as unknown as Record<string, unknown>,
           },
+
           $setOnInsert: {
             fixtureId: normalizedFixtureId,
-            status: YoutubeHighlightStatus.PENDING,
+
             retryCount: 0,
           },
         },
@@ -111,160 +178,10 @@ export class YoutubeHighlightService {
         },
       )
       .exec();
-  }
 
-  // ============================================================
-  // PROCESS PENDING
-  // ============================================================
-
-  async processPending(limit = 1): Promise<number> {
-    let processed = 0;
-
-    for (let index = 0; index < limit; index += 1) {
-      const now = new Date();
-
-      const job = await this.highlightModel
-        .findOneAndUpdate(
-          {
-            status: {
-              $in: [
-                YoutubeHighlightStatus.PENDING,
-                YoutubeHighlightStatus.RETRY,
-              ],
-            },
-
-            $or: [
-              {
-                nextRetryAt: {
-                  $exists: false,
-                },
-              },
-              {
-                nextRetryAt: {
-                  $lte: now,
-                },
-              },
-            ],
-          },
-          {
-            $set: {
-              status: YoutubeHighlightStatus.SEARCHING,
-              searchedAt: now,
-            },
-
-            $inc: {
-              retryCount: 1,
-            },
-          },
-          {
-            sort: {
-              createdAt: 1,
-            },
-
-            returnDocument: 'after',
-          },
-        )
-        .exec();
-
-      if (!job) {
-        break;
-      }
-
-      try {
-        const remaining =
-          (await this.sportsProviderRateLimitService.getRemainingDailyRequests(
-            'youtube',
-          )) ?? 0;
-
-        if (remaining <= 0) {
-          await this.highlightModel
-            .updateOne(
-              {
-                _id: job._id,
-              },
-              {
-                $set: {
-                  status: YoutubeHighlightStatus.RETRY,
-                  nextRetryAt: this.getNextRetryDate(),
-                  error: 'YouTube daily provider quota exhausted',
-                },
-              },
-            )
-            .exec();
-
-          break;
-        }
-
-        const match = await this.getMatchInfo(job.fixtureId);
-
-        if (!match) {
-          await this.markFailed(job, 'ESPN match data not found');
-
-          continue;
-        }
-
-        const result = await this.youtubeService.findHighlight(
-          match.homeTeam,
-          match.awayTeam,
-          match.date,
-        );
-
-        if (!result) {
-          await this.scheduleRetry(job, 'No suitable highlight found');
-
-          continue;
-        }
-
-        await this.highlightModel
-          .updateOne(
-            {
-              _id: job._id,
-            },
-            {
-              $set: {
-                competitionId: match.competitionId ?? job.competitionId,
-
-                homeTeam: match.homeTeam,
-
-                awayTeam: match.awayTeam,
-
-                videoId: result.videoId,
-
-                videoUrl: result.videoUrl,
-
-                title: result.title,
-
-                channelId: result.channelId,
-
-                channelTitle: result.channelTitle,
-
-                publishedAt: result.publishedAt
-                  ? new Date(result.publishedAt)
-                  : undefined,
-
-                thumbnailUrl: result.thumbnailUrl,
-
-                status: YoutubeHighlightStatus.FOUND,
-
-                nextRetryAt: null,
-
-                error: undefined,
-
-                payload: result as unknown as Record<string, unknown>,
-              },
-            },
-          )
-          .exec();
-
-        processed += 1;
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-
-        await this.scheduleRetry(job, message);
-      }
-    }
-
-    return processed;
+    this.logger.debug(
+      `YouTube highlight collected for ESPN fixture ${normalizedFixtureId}`,
+    );
   }
 
   // ============================================================
@@ -277,16 +194,6 @@ export class YoutubeHighlightService {
         'youtube',
       )) ?? 0
     );
-  }
-
-  // ============================================================
-  // DAILY USAGE
-  // ============================================================
-
-  private async getDailyUsedRequests(): Promise<number> {
-    const remaining = await this.getRemainingDailyQuota();
-
-    return Math.max(this.config.dailyRequestLimit - remaining, 0);
   }
 
   // ============================================================
@@ -351,12 +258,14 @@ export class YoutubeHighlightService {
     );
 
     const home =
-      competitorObjects.find((item) => item['homeAway'] === 'home') ??
-      competitorObjects[0];
+      competitorObjects.find(
+        (item) => item['homeAway'] === 'home' || item['isHome'] === true,
+      ) ?? competitorObjects[0];
 
     const away =
-      competitorObjects.find((item) => item['homeAway'] === 'away') ??
-      competitorObjects[1];
+      competitorObjects.find(
+        (item) => item['homeAway'] === 'away' || item['isAway'] === true,
+      ) ?? competitorObjects[1];
 
     const homeTeamValue = home?.['team'];
 
@@ -376,6 +285,10 @@ export class YoutubeHighlightService {
 
     const awayName = this.getTeamName(awayTeam);
 
+    /*
+     * Prefer the original event date, then the competition date,
+     * then the normalized fixtureDate stored in MongoDB.
+     */
     const dateValue =
       event['date'] ?? firstCompetition?.['date'] ?? fixture.fixtureDate;
 
@@ -408,75 +321,19 @@ export class YoutubeHighlightService {
 
     return {
       fixtureId: normalizedFixtureId,
+
       competitionId,
+
       homeTeamId,
+
       awayTeamId,
+
       homeTeam: homeName,
+
       awayTeam: awayName,
+
       date,
     };
-  }
-
-  // ============================================================
-  // RETRY
-  // ============================================================
-
-  private async scheduleRetry(
-    job: YouTubeHighlightDocument,
-    reason: string,
-  ): Promise<void> {
-    const maxAttempts = this.config.queue.maxAttempts;
-
-    const retryDelayMinutes = this.config.queue.retryDelayMinutes;
-
-    if (job.retryCount >= maxAttempts) {
-      await this.markFailed(job, reason);
-
-      return;
-    }
-
-    await this.highlightModel
-      .updateOne(
-        {
-          _id: job._id,
-        },
-        {
-          $set: {
-            status: YoutubeHighlightStatus.RETRY,
-
-            nextRetryAt: new Date(Date.now() + retryDelayMinutes * 60_000),
-
-            error: reason,
-          },
-        },
-      )
-      .exec();
-  }
-
-  // ============================================================
-  // FAILED
-  // ============================================================
-
-  private async markFailed(
-    job: YouTubeHighlightDocument,
-    reason: string,
-  ): Promise<void> {
-    await this.highlightModel
-      .updateOne(
-        {
-          _id: job._id,
-        },
-        {
-          $set: {
-            status: YoutubeHighlightStatus.FAILED,
-
-            error: reason,
-
-            nextRetryAt: null,
-          },
-        },
-      )
-      .exec();
   }
 
   // ============================================================
@@ -519,11 +376,5 @@ export class YoutubeHighlightService {
     }
 
     return undefined;
-  }
-
-  private getNextRetryDate(): Date {
-    const retryDelayMinutes = this.config.queue.retryDelayMinutes;
-
-    return new Date(Date.now() + retryDelayMinutes * 60_000);
   }
 }

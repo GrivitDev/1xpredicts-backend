@@ -25,10 +25,12 @@ export class EspnQueueService {
     season?: number;
     priority: number;
     scheduledFor?: Date;
+    triggerEventId?: string;
   }): Promise<EspnQueueDocument> {
     return this.addJob({
       jobType: EspnQueueJobType.LEAGUE_REFRESH,
       leagueId: params.leagueId,
+      eventId: params.triggerEventId,
       season: params.season,
       priority: params.priority,
       scheduledFor: params.scheduledFor ?? new Date(),
@@ -103,6 +105,21 @@ export class EspnQueueService {
       .exec();
 
     if (existing) {
+      /*
+       * A completed job stays completed.
+       *
+       * This is important because:
+       *
+       * LEAGUE_REFRESH + triggerEventId
+       *
+       * represents one specific three-hour fixture trigger.
+       *
+       * It must not be recreated every five seconds.
+       */
+      if (existing.status === EspnQueueStatus.COMPLETED) {
+        return existing;
+      }
+
       if (
         existing.status === EspnQueueStatus.PENDING ||
         existing.status === EspnQueueStatus.PROCESSING
@@ -110,12 +127,16 @@ export class EspnQueueService {
         return existing;
       }
 
+      /*
+       * FAILED jobs can be re-queued by a future trigger.
+       */
       existing.status = EspnQueueStatus.PENDING;
       existing.priority = params.priority;
       existing.scheduledFor = params.scheduledFor;
       existing.attempts = 0;
       existing.startedAt = undefined;
       existing.completedAt = undefined;
+      existing.failedAt = undefined;
       existing.lastError = undefined;
       existing.nextAttemptAt = undefined;
 
@@ -238,6 +259,7 @@ export class EspnQueueService {
           $unset: {
             startedAt: 1,
             completedAt: 1,
+            failedAt: 1,
           },
         },
       );
@@ -275,6 +297,7 @@ export class EspnQueueService {
     const result = await this.queueModel.updateMany(
       {
         status: EspnQueueStatus.PROCESSING,
+
         startedAt: {
           $lte: cutoff,
         },
@@ -304,6 +327,7 @@ export class EspnQueueService {
 
     const result = await this.queueModel.deleteMany({
       status: EspnQueueStatus.COMPLETED,
+
       completedAt: {
         $lte: cutoff,
       },
@@ -351,6 +375,18 @@ export class EspnQueueService {
     season?: number,
   ): string {
     const league = leagueId.trim().toLowerCase();
+
+    /*
+     * League refreshes are tied to the fixture that reached
+     * the three-hour threshold.
+     *
+     * Example:
+     *
+     * LEAGUE_REFRESH:eng.1:401882868
+     */
+    if (jobType === EspnQueueJobType.LEAGUE_REFRESH && eventId) {
+      return [jobType, league, eventId.trim()].join(':');
+    }
 
     if (eventId) {
       return [jobType, league, eventId.trim()].join(':');

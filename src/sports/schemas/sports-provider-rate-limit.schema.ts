@@ -17,7 +17,6 @@ export class SportsProviderRateLimit {
    */
   @Prop({
     required: true,
-    index: true,
     trim: true,
   })
   provider!: string;
@@ -57,7 +56,6 @@ export class SportsProviderRateLimit {
   @Prop({
     required: true,
     trim: true,
-    index: true,
   })
   endpoint!: string;
 
@@ -67,7 +65,6 @@ export class SportsProviderRateLimit {
    */
   @Prop({
     type: Date,
-    index: true,
   })
   lockedUntil?: Date;
 
@@ -135,6 +132,9 @@ export const SportsProviderRateLimitSchema = SchemaFactory.createForClass(
 
 /**
  * One rate-limit record per provider + endpoint.
+ *
+ * This is the canonical lookup and uniqueness index
+ * for rate-limit records.
  */
 SportsProviderRateLimitSchema.index(
   {
@@ -151,12 +151,4 @@ SportsProviderRateLimitSchema.index(
  */
 SportsProviderRateLimitSchema.index({
   lockedUntil: 1,
-});
-
-/**
- * Useful for provider-wide quota lookups.
- */
-SportsProviderRateLimitSchema.index({
-  provider: 1,
-  endpoint: 1,
 });

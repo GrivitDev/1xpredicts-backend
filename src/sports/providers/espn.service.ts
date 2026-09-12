@@ -276,23 +276,6 @@ export class EspnService {
   }
 
   // ============================================================
-  // 6. MATCH
-  // ============================================================
-
-  async getMatch(league: string, eventId: string): Promise<EspnEvent> {
-    this.validateLeague(league);
-
-    this.validateId(eventId, 'eventId');
-
-    return this.request<EspnEvent>(
-      `${this.coreBaseUrl}/leagues/${encodeURIComponent(
-        league.trim().toLowerCase(),
-      )}/events/${encodeURIComponent(eventId.trim())}`,
-      'match',
-    );
-  }
-
-  // ============================================================
   // 7. MATCH SUMMARY
   // ============================================================
 

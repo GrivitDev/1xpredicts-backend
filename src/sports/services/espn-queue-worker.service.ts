@@ -65,6 +65,12 @@ export class EspnQueueWorkerService implements OnModuleInit {
     this.polling = true;
 
     try {
+      /*
+       * The three-hour check is part of the normal
+       * five-second worker cycle.
+       */
+      await this.espnQueueBuilderService.watchThreeHourFixtures();
+
       await this.processNextJob();
     } catch (error) {
       this.logger.error(
@@ -142,34 +148,35 @@ export class EspnQueueWorkerService implements OnModuleInit {
 
     const season = typeof job.season === 'number' ? job.season : undefined;
 
-    await this.sportsCollectionService.processEspnLeagueRefresh({
+    /*
+     * Exactly one provider operation here:
+     *
+     * scoreboard yesterday -> today + 6 days
+     *
+     * The collection service only updates fixtures.
+     */
+    const result = await this.sportsCollectionService.processEspnLeagueRefresh({
       leagueId,
       season,
     });
 
-    await this.espnQueueBuilderService.buildLeagueMatchJobs(leagueId, season);
+    /*
+     * The returned scoreboard then determines:
+     *
+     * UPCOMING_MATCH
+     * FINISHED_MATCH
+     */
+    await this.espnQueueBuilderService.buildLeagueMatchJobs(
+      leagueId,
+      season,
+      result.scoreboard,
+    );
   }
 
   // ============================================================
   // UPCOMING MATCH
   // ============================================================
 
-  /**
-   * Normal upcoming-match pipeline:
-   *
-   * 1. Refresh event from ESPN.
-   * 2. Save the complete event payload.
-   * 3. Collect the richer ESPN summary.
-   * 4. Collect independent Odds API data.
-   * 5. Schedule the finished-match job.
-   *
-   * No separate:
-   * - competition call
-   * - leaders call
-   * - plays call
-   * - statistics call
-   * - ESPN odds call
-   */
   private async processUpcomingMatch(
     job: Record<string, unknown>,
   ): Promise<void> {
@@ -179,65 +186,21 @@ export class EspnQueueWorkerService implements OnModuleInit {
 
     const leagueId = this.stringifyJobId(job.leagueId);
 
-    const eventId = this.stringifyJobId(job.eventId);
-
-    const event = await this.espnService.getMatch(leagueId, eventId);
-
     /*
-     * The event already contains its competition,
-     * competitors, statistics and details when ESPN provides them.
-     */
-    await this.sportsCollectionService.collectEspnMatchDetails({
-      leagueId,
-      event,
-    });
-
-    /*
-     * Summary is the only additional ESPN match-level
-     * enrichment call.
-     */
-    const summary = await this.espnService.getMatchSummary(leagueId, eventId);
-
-    await this.sportsCollectionService.collectEspnMatchSummary({
-      leagueId,
-      eventId,
-      summary,
-    });
-
-    /*
-     * The Odds API remains the independent odds source.
+     * UPCOMING_MATCH = ODDS ONLY.
+     *
+     * No match endpoint.
+     * No summary.
+     * No standings.
+     * No YouTube.
      */
     await this.processOddsApi(leagueId);
-
-    await this.enqueueFinishedMatch(
-      leagueId,
-      eventId,
-      typeof job.season === 'number' ? job.season : undefined,
-      event,
-      typeof job.priority === 'number' ? job.priority : 99,
-    );
   }
 
   // ============================================================
   // FINISHED MATCH
   // ============================================================
 
-  /**
-   * Normal finished-match pipeline:
-   *
-   * 1. Refresh final event from ESPN.
-   * 2. Save complete final event payload.
-   * 3. Collect summary.
-   * 4. Collect independent Odds API data.
-   * 5. Queue YouTube processing.
-   *
-   * We do not make separate:
-   * - competition
-   * - plays
-   * - statistics
-   * - ESPN odds
-   * requests.
-   */
   private async processFinishedMatch(
     job: Record<string, unknown>,
   ): Promise<void> {
@@ -249,12 +212,15 @@ export class EspnQueueWorkerService implements OnModuleInit {
 
     const eventId = this.stringifyJobId(job.eventId);
 
-    const event = await this.espnService.getMatch(leagueId, eventId);
+    /*
+     * The scoreboard already supplied the final fixture.
+     *
+     * There is no getMatch() request.
+     */
 
-    await this.sportsCollectionService.collectEspnMatchDetails({
-      leagueId,
-      event,
-    });
+    // ========================================================
+    // SUMMARY
+    // ========================================================
 
     const summary = await this.espnService.getMatchSummary(leagueId, eventId);
 
@@ -264,12 +230,28 @@ export class EspnQueueWorkerService implements OnModuleInit {
       summary,
     });
 
-    /*
-     * Odds remain sourced independently from The Odds API.
-     */
-    await this.processOddsApi(leagueId);
+    // ========================================================
+    // STANDINGS
+    // ========================================================
 
-    await this.processYoutube(eventId);
+    /*
+     * Standings are league-level data.
+     *
+     * FINISHED_MATCH refreshes the owning league's standings.
+     */
+    const standingsResponse = await this.espnService.getStandings(leagueId);
+
+    await this.sportsCollectionService.collectEspnStandings(
+      leagueId,
+      standingsResponse,
+      typeof job.season === 'number' ? job.season : undefined,
+    );
+
+    // ========================================================
+    // YOUTUBE
+    // ========================================================
+
+    await this.youtubeHighlightService.processFixture(eventId);
   }
 
   // ============================================================
@@ -312,6 +294,12 @@ export class EspnQueueWorkerService implements OnModuleInit {
       return;
     }
 
+    /*
+     * One Odds API request.
+     *
+     * Only the required football prediction markets
+     * currently requested by the project are included.
+     */
     const odds = await this.theOddsApiService.getOdds(sportKey, 'eu', [
       'h2h',
       'totals',
@@ -321,73 +309,6 @@ export class EspnQueueWorkerService implements OnModuleInit {
     if (odds.length > 0) {
       await this.sportsCollectionService.collectOdds(odds);
     }
-  }
-
-  // ============================================================
-  // YOUTUBE
-  // ============================================================
-
-  private async processYoutube(eventId: string): Promise<void> {
-    const remaining =
-      (await this.sportsProviderRateLimitService.getRemainingDailyRequests(
-        'youtube',
-      )) ?? 0;
-
-    if (remaining <= 0) {
-      this.logger.warn('YouTube daily quota is exhausted. Skipping request.');
-
-      return;
-    }
-
-    await this.youtubeHighlightService.queueFixture(eventId);
-  }
-
-  // ============================================================
-  // FINISHED MATCH JOB
-  // ============================================================
-
-  private async enqueueFinishedMatch(
-    leagueId: string,
-    eventId: string,
-    season: number | undefined,
-    event: Record<string, unknown>,
-    priority: number,
-  ): Promise<void> {
-    const startTime = this.extractEventStartTime(event);
-
-    const scheduledFor = startTime
-      ? new Date(startTime.getTime() + 3 * 60 * 60 * 1000)
-      : new Date(Date.now() + 3 * 60 * 60 * 1000);
-
-    await this.espnQueueService.addFinishedMatchJob({
-      leagueId,
-      eventId,
-      season: season ?? 0,
-      priority,
-      scheduledFor,
-    });
-  }
-
-  // ============================================================
-  // EVENT START TIME
-  // ============================================================
-
-  private extractEventStartTime(
-    event?: Record<string, unknown>,
-  ): Date | undefined {
-    if (!event) {
-      return undefined;
-    }
-
-    const value = event.date;
-
-    if (typeof value !== 'string') {
-      return undefined;
-    }
-
-    const date = new Date(value);
-
-    return Number.isNaN(date.getTime()) ? undefined : date;
   }
 
   // ============================================================
