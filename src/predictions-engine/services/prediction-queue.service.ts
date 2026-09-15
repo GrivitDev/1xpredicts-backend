@@ -260,7 +260,7 @@ export class PredictionQueueService {
           },
         },
         {
-          new: true,
+          returnDocument: 'after',
 
           sort: {
             priorityWeight: 1,

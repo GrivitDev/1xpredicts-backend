@@ -1,6 +1,7 @@
+// src/prediction/engines/value.engine.ts
+
 import { Injectable } from '@nestjs/common';
 
-import { PredictionMarket } from '../../enums/prediction-market.enum';
 import { MarketModelInput } from '../../interfaces/market-model-input.interface';
 import { ValueResult } from '../../interfaces/value-result.interface';
 import { MarketProbabilityUtil } from '../../utils/probability.util';
@@ -16,9 +17,14 @@ export class ValueEngine {
     );
 
     /*
-     * MarketModelInput currently does not expose bookmaker implied
-     * probabilities, so bookmaker value cannot be established here.
-     * Do not infer or fabricate bookmaker odds.
+     * Odds are not yet part of MarketModelInput.
+     *
+     * Do not fabricate bookmaker odds, implied probability,
+     * expected value, or betting edge.
+     *
+     * The prediction engine should continue producing genuine
+     * statistical predictions without pretending that market
+     * value has been calculated.
      */
     const bookmakerProbability: number | null = null;
 
@@ -26,9 +32,13 @@ export class ValueEngine {
       return {
         market: input.market,
         selection: input.selection,
-        modelProbability: normalizedProbability,
+
+        modelProbability: PredictionMathUtil.round(normalizedProbability, 6),
+
         probabilityEdge: 0,
+
         valueScore: 0,
+
         hasValue: false,
       };
     }
@@ -49,64 +59,20 @@ export class ValueEngine {
     return {
       market: input.market,
       selection: input.selection,
+
       availableOdds: odds,
+
       impliedProbability: bookmakerProbability,
-      modelProbability: normalizedProbability,
+
+      modelProbability: PredictionMathUtil.round(normalizedProbability, 6),
+
       probabilityEdge: edge,
+
       expectedValue,
+
       valueScore,
-      hasValue: edge > 0,
+
+      hasValue: Number.isFinite(edge) && edge > 0,
     };
-  }
-
-  private findBookmakerProbability(
-    market: PredictionMarket,
-    selection: string,
-    probabilities: Record<string, number>,
-  ): number | null {
-    const keys = this.getProbabilityKeys(market, selection);
-
-    for (const key of keys) {
-      const value = probabilities[key];
-
-      if (
-        typeof value === 'number' &&
-        Number.isFinite(value) &&
-        value > 0 &&
-        value <= 1
-      ) {
-        return value;
-      }
-    }
-
-    return null;
-  }
-
-  private getProbabilityKeys(
-    market: PredictionMarket,
-    selection: string,
-  ): string[] {
-    switch (market) {
-      case PredictionMarket.DOUBLE_CHANCE:
-        return [
-          `DOUBLE_CHANCE_${selection}`,
-          `DOUBLE_CHANCE_${selection.replaceAll('OR_', '_OR_')}`,
-        ];
-
-      case PredictionMarket.DRAW_NO_BET:
-        return [`DNB_${selection}`, `DRAW_NO_BET_${selection}`];
-
-      case PredictionMarket.BOTH_TEAMS_TO_SCORE:
-        return [`BTTS_${selection}`, `BOTH_TEAMS_TO_SCORE_${selection}`];
-
-      case PredictionMarket.BTTS_GOALS:
-        return [`BTTS_GOALS_${selection}`];
-
-      case PredictionMarket.OVER_UNDER:
-        return [`TOTALS_${selection}`];
-
-      default:
-        return [`${market}_${selection}`, selection];
-    }
   }
 }

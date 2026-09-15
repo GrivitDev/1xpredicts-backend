@@ -1,3 +1,5 @@
+// src/prediction/utils/market-key.util.ts
+
 import { PredictionMarket } from '../enums/prediction-market.enum';
 
 export class MarketKeyUtil {
@@ -17,10 +19,6 @@ export class MarketKeyUtil {
     return `BOTH_TEAMS_TO_SCORE_${selection}`;
   }
 
-  static cleanSheetKey(selection: string): string {
-    return `CLEAN_SHEET_${selection}`;
-  }
-
   static halfTimeResultKey(selection: string): string {
     return `HALF_TIME_RESULT_${selection}`;
   }
@@ -35,9 +33,5 @@ export class MarketKeyUtil {
 
   static secondHalfGoalsKey(selection: string): string {
     return `SECOND_HALF_GOALS_${selection}`;
-  }
-
-  static halfTimeFullTimeKey(selection: string): string {
-    return `HALF_TIME_FULL_TIME_${selection}`;
   }
 }

@@ -6,7 +6,6 @@ import { PredictionRisk } from '../../enums/prediction-risk.enum';
 import { SafetyResult } from '../../interfaces/safety-result.interface';
 
 import { CalibrationRiskUtil } from '../../utils/calibration-risk.util';
-
 import { PredictionRiskUtil } from '../../utils/prediction-risk.util';
 
 @Injectable()
@@ -41,7 +40,14 @@ export class SafetyEngine {
 
     const sampleReliability = 1 - Math.exp(-sampleSize / 25);
 
-    const probabilityRisk = this.clamp(1 - probability, 0, 1);
+    /*
+     * Probability contributes to safety, but it must not dominate
+     * the assessment. A high probability that is poorly supported
+     * should not automatically receive a high safety score.
+     */
+    const probabilitySupport = this.calculateProbabilitySupport(probability);
+
+    const probabilityRisk = 1 - probabilitySupport;
 
     const modelRisk = 1 - modelReliability;
 
@@ -54,11 +60,8 @@ export class SafetyEngine {
     /*
      * Calibration is advisory.
      *
-     * A brand-new market has no historical calibration record.
-     * In that case calibration must contribute no artificial risk.
-     *
-     * Once historical calibration exists, its risk can modestly
-     * influence the safety assessment.
+     * New markets without sufficient history should not receive
+     * artificial calibration penalties.
      */
     const calibrationRisk =
       sampleSize > 0
@@ -70,19 +73,26 @@ export class SafetyEngine {
           })
         : 0;
 
+    /*
+     * Market risk now reflects only the remaining market families.
+     *
+     * It does not decide whether a market is valuable.
+     * It only accounts for additional structural complexity.
+     */
     const marketRisk = this.calculateMarketRisk(input.market);
 
     /*
-     * Safety is primarily driven by the actual evidence supporting
-     * the prediction. Calibration provides a smaller advisory signal.
+     * Evidence quality is deliberately more important than raw
+     * probability. This prevents the engine from treating every
+     * 85-95% estimate as inherently safe.
      */
     const riskScore = this.clamp(
-      probabilityRisk * 0.24 +
-        dataRisk * 0.2 +
-        modelRisk * 0.16 +
-        agreementRisk * 0.15 +
+      probabilityRisk * 0.16 +
+        dataRisk * 0.24 +
+        modelRisk * 0.2 +
+        agreementRisk * 0.2 +
         sampleRisk * 0.1 +
-        calibrationRisk * 0.1 +
+        calibrationRisk * 0.05 +
         marketRisk * 0.05,
       0,
       1,
@@ -100,17 +110,13 @@ export class SafetyEngine {
     });
 
     /*
-     * Safety is an assessment, not a publication blocker.
+     * Safety does not determine whether a prediction is interesting.
      *
-     * Calibration history is not required for a prediction to be
-     * considered safe enough for further decision processing.
-     *
-     * HIGH risk remains visible to the final decision layer so it
-     * can rank and compare candidates, but it does not automatically
-     * invalidate this market here.
+     * It only determines whether the underlying evidence is strong
+     * enough to continue through the decision pipeline.
      */
     const isSafe =
-      safetyScore >= 60 &&
+      safetyScore >= 55 &&
       agreement >= 0.5 &&
       input.dataQuality >= 50 &&
       sampleReliability >= 0.5;
@@ -147,30 +153,87 @@ export class SafetyEngine {
       riskScore: riskScore * 100,
 
       isSafe,
+
       reasons,
     };
   }
 
-  private calculateMarketRisk(market: PredictionMarket): number {
-    const normalized = String(market).trim().toUpperCase();
-
+  private calculateProbabilitySupport(probability: number): number {
     /*
-     * These are not "hardcoded market difficulty" ratings.
-     * They only reflect settlement/model complexity.
+     * The strongest safety contribution comes from probabilities
+     * meaningfully above 50%, but returns diminish as probability
+     * becomes extremely high.
+     *
+     * This prevents 90%+ probabilities from receiving almost
+     * automatic safety simply because they are numerically high.
      */
-    if (
-      normalized.includes('EXACT') ||
-      normalized.includes('HANDICAP') ||
-      normalized.includes('HALF_TIME_FULL_TIME')
-    ) {
-      return 0.15;
+    if (probability < 0.5) {
+      return 0;
     }
 
-    if (normalized.includes('FIRST_TO_SCORE')) {
+    if (probability < 0.55) {
+      return 0.1;
+    }
+
+    if (probability < 0.6) {
       return 0.2;
     }
 
-    return 0.05;
+    if (probability < 0.65) {
+      return 0.35;
+    }
+
+    if (probability < 0.7) {
+      return 0.5;
+    }
+
+    if (probability < 0.75) {
+      return 0.62;
+    }
+
+    if (probability < 0.8) {
+      return 0.72;
+    }
+
+    if (probability < 0.85) {
+      return 0.8;
+    }
+
+    if (probability < 0.9) {
+      return 0.86;
+    }
+
+    if (probability < 0.95) {
+      return 0.9;
+    }
+
+    return 0.92;
+  }
+
+  private calculateMarketRisk(market: PredictionMarket): number {
+    switch (market) {
+      case PredictionMarket.MATCH_RESULT:
+      case PredictionMarket.DOUBLE_CHANCE:
+      case PredictionMarket.DRAW_NO_BET:
+      case PredictionMarket.OVER_UNDER:
+      case PredictionMarket.BOTH_TEAMS_TO_SCORE:
+      case PredictionMarket.GOAL_RANGE:
+      case PredictionMarket.TEAM_TOTAL_GOALS:
+        return 0.05;
+
+      case PredictionMarket.HALF_TIME_RESULT:
+      case PredictionMarket.SECOND_HALF_RESULT:
+      case PredictionMarket.FIRST_HALF_GOALS:
+      case PredictionMarket.SECOND_HALF_GOALS:
+        return 0.1;
+
+      case PredictionMarket.ASIAN_HANDICAP:
+      case PredictionMarket.EUROPEAN_HANDICAP:
+        return 0.12;
+
+      default:
+        return 0.1;
+    }
   }
 
   private buildReasons(input: {
@@ -185,7 +248,7 @@ export class SafetyEngine {
   }): string[] {
     const reasons: string[] = [];
 
-    if (input.probability < 0.7) {
+    if (input.probability < 0.65) {
       reasons.push(
         'Underlying probability is below the stronger prediction range.',
       );
@@ -213,6 +276,8 @@ export class SafetyEngine {
 
     if (input.safetyScore >= 80) {
       reasons.push('Overall evidence supports a strong safety assessment.');
+    } else if (input.safetyScore >= 65) {
+      reasons.push('Evidence supports a moderate safety assessment.');
     }
 
     if (input.risk === PredictionRisk.HIGH) {

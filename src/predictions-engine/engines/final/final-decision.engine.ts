@@ -1,3 +1,5 @@
+// src/prediction/engines/final-decision.engine.ts
+
 import { Injectable } from '@nestjs/common';
 
 import { PredictionMarket } from '../../enums/prediction-market.enum';
@@ -112,51 +114,53 @@ export class FinalDecisionEngine {
 
     /*
      * ----------------------------------------------------------
-     * CALIBRATION
+     * CORE PREDICTION GATE
      * ----------------------------------------------------------
      *
-     * Calibration is never a rejection condition.
+     * We do not publish every statistically possible outcome.
      *
-     * It can influence:
-     * - probability
-     * - confidence
-     * - safety
-     * - risk
-     * - decision score
-     *
-     * But it cannot prevent a new prediction from existing.
+     * A prediction must first reach a meaningful probability,
+     * confidence, safety, model agreement and data-quality level.
      */
+    if (input.probability < config.probability.minimumPublishable) {
+      return `Probability below publishable threshold (${config.probability.minimumPublishable}).`;
+    }
+
+    if (input.confidence < config.confidence.minimumPublishable) {
+      return `Confidence below publishable threshold (${config.confidence.minimumPublishable}).`;
+    }
+
+    if (input.safetyScore < config.safety.minimumPublishable) {
+      return `Safety score below publishable threshold (${config.safety.minimumPublishable}).`;
+    }
+
+    if (input.modelAgreement < config.agreement.minimumPublishable) {
+      return `Model agreement below publishable threshold (${config.agreement.minimumPublishable}).`;
+    }
+
+    if (input.dataQuality < config.dataQuality.minimumPublishable) {
+      return `Data quality below publishable threshold (${config.dataQuality.minimumPublishable}).`;
+    }
 
     /*
      * ----------------------------------------------------------
-     * CORE CANDIDATE GATE
+     * PROBABILITY / CONFIDENCE ALIGNMENT
      * ----------------------------------------------------------
      *
-     * These are the minimum standards for a prediction to be
-     * considered usable.
+     * Higher probability claims require stronger evidence.
      *
-     * The purpose here is NOT to select the strongest market.
-     * It is only to remove predictions that are genuinely too
-     * weak to belong in the candidate pool.
+     * This is critical for preventing artificial 85-95%
+     * predictions from being presented as trustworthy when the
+     * confidence behind them is weak.
      */
-    if (input.probability < config.probability.minimumCandidate) {
-      return `Probability below minimum candidate threshold (${config.probability.minimumCandidate}).`;
-    }
+    const minimumConfidence = this.getRequiredConfidence(input.probability);
 
-    if (input.confidence < config.confidence.minimumCandidate) {
-      return `Confidence below minimum candidate threshold (${config.confidence.minimumCandidate}).`;
-    }
-
-    if (input.safetyScore < config.safety.minimumCandidate) {
-      return `Safety score below minimum candidate threshold (${config.safety.minimumCandidate}).`;
-    }
-
-    if (input.modelAgreement < config.agreement.minimumCandidate) {
-      return `Model agreement below minimum candidate threshold (${config.agreement.minimumCandidate}).`;
-    }
-
-    if (input.dataQuality < config.dataQuality.minimumCandidate) {
-      return `Data quality below minimum candidate threshold (${config.dataQuality.minimumCandidate}).`;
+    if (input.confidence < minimumConfidence) {
+      return `Confidence (${input.confidence.toFixed(
+        2,
+      )}) does not sufficiently support the predicted probability (${(
+        input.probability * 100
+      ).toFixed(2)}%).`;
     }
 
     /*
@@ -164,13 +168,7 @@ export class FinalDecisionEngine {
      * DECISION SCORE
      * ----------------------------------------------------------
      *
-     * A candidate must still have enough combined strength.
-     *
-     * The decision score is deliberately the final combined
-     * ranking signal rather than another market-specific rule.
-     *
-     * The stronger publishable thresholds are NOT used as
-     * automatic rejection conditions here.
+     * The candidate must have enough combined strength.
      */
     if (input.decisionScore < config.selection.minimumDecisionScore) {
       return `Decision score below minimum threshold (${config.selection.minimumDecisionScore}).`;
@@ -181,13 +179,69 @@ export class FinalDecisionEngine {
      * RISK
      * ----------------------------------------------------------
      *
-     * HIGH risk does not automatically reject a prediction.
+     * HIGH risk is not useful as a public prediction.
      *
-     * Risk is information for ranking and later presentation.
-     * The market-selection layer should prefer lower-risk,
-     * higher-scoring predictions.
+     * It can still be calculated internally for diagnostics and
+     * ranking, but it should not survive the final publication
+     * gate.
      */
+    if (input.risk === PredictionRisk.HIGH) {
+      return 'Prediction remains high risk after combining probability and evidence quality.';
+    }
+
+    /*
+     * ----------------------------------------------------------
+     * STRONG PROBABILITY SAFETY
+     * ----------------------------------------------------------
+     *
+     * A very high probability requires stronger supporting
+     * evidence than an ordinary prediction.
+     */
+    if (input.probability >= 0.9 && input.modelAgreement < 0.75) {
+      return 'Very high probability requires stronger model agreement.';
+    }
+
+    if (input.probability >= 0.9 && input.safetyScore < 75) {
+      return 'Very high probability requires stronger safety evidence.';
+    }
+
+    if (input.probability >= 0.8 && input.modelAgreement < 0.65) {
+      return 'High probability requires stronger model agreement.';
+    }
+
     return null;
+  }
+
+  private getRequiredConfidence(probability: number): number {
+    if (probability >= 0.95) {
+      return 88;
+    }
+
+    if (probability >= 0.9) {
+      return 82;
+    }
+
+    if (probability >= 0.85) {
+      return 76;
+    }
+
+    if (probability >= 0.8) {
+      return 72;
+    }
+
+    if (probability >= 0.75) {
+      return 68;
+    }
+
+    if (probability >= 0.7) {
+      return 65;
+    }
+
+    if (probability >= 0.65) {
+      return 62;
+    }
+
+    return 60;
   }
 
   private clamp(value: number, minimum: number, maximum: number): number {

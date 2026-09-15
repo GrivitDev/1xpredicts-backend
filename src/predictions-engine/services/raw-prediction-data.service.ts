@@ -276,18 +276,35 @@ export class RawPredictionDataService {
     headToHead: HeadToHeadDocument,
     cutoff: Date,
   ): HeadToHeadDocument {
-    const source = headToHead.toObject();
+    const source = headToHead.toObject() as unknown as {
+      meetings?: unknown;
+    };
 
-    const meetings = Array.isArray((source as any).meetings)
-      ? (source as any).meetings
+    const meetings: unknown[] = Array.isArray(source.meetings)
+      ? source.meetings
       : [];
 
     if (!meetings.length) {
       return headToHead;
     }
 
-    const filteredMeetings = meetings.filter((meeting: any) => {
-      const date = new Date(meeting.fixtureDate ?? meeting.date);
+    const filteredMeetings = meetings.filter((meeting: unknown) => {
+      if (typeof meeting !== 'object' || meeting === null) {
+        return false;
+      }
+
+      const meetingRecord = meeting as Record<string, unknown>;
+      const meetingDate = meetingRecord.fixtureDate ?? meetingRecord.date;
+
+      if (
+        typeof meetingDate !== 'string' &&
+        typeof meetingDate !== 'number' &&
+        !(meetingDate instanceof Date)
+      ) {
+        return false;
+      }
+
+      const date = new Date(meetingDate);
 
       return Number.isFinite(date.getTime()) && date < cutoff;
     });
@@ -296,10 +313,10 @@ export class RawPredictionDataService {
       return headToHead;
     }
 
-    const cloned = headToHead.toObject();
+    const cloned = headToHead.toObject() as unknown as Record<string, unknown>;
 
-    (cloned as any).meetings = filteredMeetings;
+    cloned.meetings = filteredMeetings;
 
-    return cloned as HeadToHeadDocument;
+    return cloned as unknown as HeadToHeadDocument;
   }
 }

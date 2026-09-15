@@ -38,7 +38,7 @@ export class PredictionEngineService {
       return null;
     }
 
-    const features = await this.rawPredictionFeatureService.build(rawData);
+    const features = this.rawPredictionFeatureService.build(rawData);
 
     const markets = this.getEnabledMarkets();
 

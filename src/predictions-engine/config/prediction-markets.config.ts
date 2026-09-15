@@ -1,3 +1,5 @@
+// src/prediction/config/enabled-prediction-markets.ts
+
 import { PredictionMarket } from '../enums/prediction-market.enum';
 
 export interface PredictionMarketCandidate {
@@ -43,11 +45,6 @@ export const ENABLED_PREDICTION_MARKETS: PredictionMarketCandidate[] = [
     selection: 'AWAY_OR_DRAW',
     enabled,
   },
-  {
-    market: PredictionMarket.DOUBLE_CHANCE,
-    selection: 'HOME_OR_AWAY',
-    enabled,
-  },
 
   // ============================================================
   // DRAW NO BET
@@ -68,7 +65,7 @@ export const ENABLED_PREDICTION_MARKETS: PredictionMarketCandidate[] = [
   // OVER / UNDER
   // ============================================================
 
-  ...['0.5', '1.5', '2.5', '3.5', '4.5', '5.5'].flatMap((line) => [
+  ...['1.5', '2.5', '3.5', '4.5'].flatMap((line) => [
     {
       market: PredictionMarket.OVER_UNDER,
       selection: `OVER_${line}`,
@@ -95,19 +92,6 @@ export const ENABLED_PREDICTION_MARKETS: PredictionMarketCandidate[] = [
     selection: 'NO',
     enabled,
   },
-
-  // ============================================================
-  // BTTS GOALS
-  //
-  // Retained as a market family, but the exact semantic meaning
-  // of 1+, 2+, 3+ will be enforced by the market model.
-  // ============================================================
-
-  ...['1+', '2+', '3+'].map((line) => ({
-    market: PredictionMarket.BTTS_GOALS,
-    selection: line,
-    enabled,
-  })),
 
   // ============================================================
   // GOAL RANGE
@@ -147,37 +131,6 @@ export const ENABLED_PREDICTION_MARKETS: PredictionMarketCandidate[] = [
   ]),
 
   // ============================================================
-  // EXACT TEAM GOALS
-  // ============================================================
-
-  ...Array.from({ length: 7 }, (_, goals) => ({
-    market: PredictionMarket.EXACT_GOALS,
-    selection: `HOME_${goals}`,
-    enabled,
-  })),
-
-  ...Array.from({ length: 7 }, (_, goals) => ({
-    market: PredictionMarket.EXACT_GOALS,
-    selection: `AWAY_${goals}`,
-    enabled,
-  })),
-
-  // ============================================================
-  // CLEAN SHEET
-  // ============================================================
-
-  {
-    market: PredictionMarket.CLEAN_SHEET,
-    selection: 'HOME',
-    enabled,
-  },
-  {
-    market: PredictionMarket.CLEAN_SHEET,
-    selection: 'AWAY',
-    enabled,
-  },
-
-  // ============================================================
   // HALF TIME RESULT
   // ============================================================
 
@@ -193,26 +146,6 @@ export const ENABLED_PREDICTION_MARKETS: PredictionMarketCandidate[] = [
 
   ...['HOME', 'DRAW', 'AWAY'].map((selection) => ({
     market: PredictionMarket.SECOND_HALF_RESULT,
-    selection,
-    enabled,
-  })),
-
-  // ============================================================
-  // HALF TIME / FULL TIME
-  // ============================================================
-
-  ...[
-    'HOME_HOME',
-    'HOME_DRAW',
-    'HOME_AWAY',
-    'DRAW_HOME',
-    'DRAW_DRAW',
-    'DRAW_AWAY',
-    'AWAY_HOME',
-    'AWAY_DRAW',
-    'AWAY_AWAY',
-  ].map((selection) => ({
-    market: PredictionMarket.HALF_TIME_FULL_TIME,
     selection,
     enabled,
   })),
@@ -252,30 +185,10 @@ export const ENABLED_PREDICTION_MARKETS: PredictionMarketCandidate[] = [
   ]),
 
   // ============================================================
-  // FIRST TO SCORE
-  // ============================================================
-
-  {
-    market: PredictionMarket.FIRST_TO_SCORE,
-    selection: 'HOME',
-    enabled,
-  },
-  {
-    market: PredictionMarket.FIRST_TO_SCORE,
-    selection: 'AWAY',
-    enabled,
-  },
-  {
-    market: PredictionMarket.FIRST_TO_SCORE,
-    selection: 'NONE',
-    enabled,
-  },
-
-  // ============================================================
   // ASIAN HANDICAP
   // ============================================================
 
-  ...['-2', '-1.5', '-1', '-0.5', '0', '0.5', '1', '1.5', '2'].map((line) => ({
+  ...['-1.5', '-1', '-0.5', '0', '0.5', '1', '1.5'].map((line) => ({
     market: PredictionMarket.ASIAN_HANDICAP,
     selection: `HOME_${line}`,
     enabled,
@@ -285,7 +198,7 @@ export const ENABLED_PREDICTION_MARKETS: PredictionMarketCandidate[] = [
   // EUROPEAN HANDICAP
   // ============================================================
 
-  ...['-2', '-1', '0', '1', '2'].flatMap((line) => [
+  ...['-1', '0', '1'].flatMap((line) => [
     {
       market: PredictionMarket.EUROPEAN_HANDICAP,
       selection: `HOME_${line}`,

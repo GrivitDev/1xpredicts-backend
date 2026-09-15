@@ -33,11 +33,11 @@ export class ProbabilityEngine {
 
     /*
      * ----------------------------------------------------------
-     * REALITY MODEL
+     * PRIMARY MARKET MODEL
      * ----------------------------------------------------------
      *
-     * This is the dedicated market model already registered
-     * for the current market.
+     * The registered market model is the primary probability
+     * source for this market and selection.
      */
     const result = model.calculate(input);
 
@@ -45,14 +45,12 @@ export class ProbabilityEngine {
 
     /*
      * ----------------------------------------------------------
-     * THREE-ANGLE ENSEMBLE
+     * MODEL AGREEMENT
      * ----------------------------------------------------------
      *
-     * 1. Safety model
-     * 2. Reality model
-     * 3. Independent model
-     *
-     * All three are estimating the SAME market selection.
+     * The additional models challenge the primary estimate.
+     * They should improve reliability without overwhelming the
+     * actual market model.
      */
     const agreement = RawModelAgreementUtil.calculate(
       input.features,
@@ -63,33 +61,74 @@ export class ProbabilityEngine {
 
     const safetyProbability = this.clamp(
       agreement.modelOutputs.safetyModel ?? 0.5,
+      0,
+      1,
     );
 
     const independentProbability = this.clamp(
       agreement.modelOutputs.independentModel ?? 0.5,
+      0,
+      1,
     );
 
+    const modelAgreement = this.clamp(agreement.agreement ?? 0, 0, 1);
+
     /*
-     * Reality is the main market model.
+     * ----------------------------------------------------------
+     * PROBABILITY ENSEMBLE
+     * ----------------------------------------------------------
      *
-     * Safety receives the second-largest weight because the
-     * objective is reliable betting decisions rather than
-     * maximizing aggressive probability.
+     * Primary market model:
+     *   60%
      *
-     * The independent model supplies the separate challenge
-     * to the primary prediction.
+     * Independent model:
+     *   25%
+     *
+     * Safety model:
+     *   15%
+     *
+     * Safety is intentionally not allowed to dominate the
+     * probability estimate. Its stronger role comes later through
+     * the safety/decision layers.
      */
-    const ensembleProbability = this.clamp(
-      realityProbability * 0.45 +
-        safetyProbability * 0.3 +
-        independentProbability * 0.25,
+    const rawEnsembleProbability = this.clamp(
+      realityProbability * 0.6 +
+        independentProbability * 0.25 +
+        safetyProbability * 0.15,
+      0,
+      1,
     );
 
     /*
-     * Calibration remains advisory.
+     * ----------------------------------------------------------
+     * AGREEMENT CONTROL
+     * ----------------------------------------------------------
      *
-     * It adjusts the ensemble only after all three predictive
-     * angles have produced their estimate.
+     * A high probability should require reasonable agreement.
+     *
+     * Weak agreement does not automatically reject the market.
+     * Instead, it reduces extreme probabilities so that a single
+     * model cannot manufacture an unrealistic 90%+ estimate.
+     */
+    const agreementDamping = this.getAgreementDamping(
+      modelAgreement,
+      rawEnsembleProbability,
+    );
+
+    const ensembleProbability = this.clamp(
+      rawEnsembleProbability +
+        (0.5 - rawEnsembleProbability) * agreementDamping,
+      0,
+      1,
+    );
+
+    /*
+     * ----------------------------------------------------------
+     * CALIBRATION
+     * ----------------------------------------------------------
+     *
+     * Calibration remains advisory and is applied only after the
+     * predictive ensemble has been established.
      */
     const calibrationAdjustment = this.getCalibrationAdjustment(
       input.calibrationAdjustment,
@@ -107,26 +146,59 @@ export class ProbabilityEngine {
 
       supportingProbability: ensembleProbability,
 
-      modelAgreement: agreement.agreement,
+      modelAgreement,
 
       modelSignals: agreement.modelOutputs,
 
       modelOutputs: {
         ...(result.modelOutputs ?? {}),
 
-        safetyModel: agreement.modelOutputs.safetyModel,
+        safetyModel: safetyProbability,
+        realityModel: realityProbability,
+        independentModel: independentProbability,
 
-        realityModel: agreement.modelOutputs.realityModel,
-
-        independentModel: agreement.modelOutputs.independentModel,
-
+        rawEnsembleProbability,
         ensembleProbability,
-
         calibratedProbability,
 
         calibrationAdjustment,
+        agreementDamping,
       },
     };
+  }
+
+  private getAgreementDamping(agreement: number, probability: number): number {
+    /*
+     * Ordinary probabilities do not need aggressive damping.
+     * Extreme probabilities require stronger agreement.
+     */
+    const probabilityDistance = Math.abs(probability - 0.5);
+
+    if (probabilityDistance < 0.15) {
+      return 0;
+    }
+
+    if (agreement >= 0.8) {
+      return 0;
+    }
+
+    if (agreement >= 0.7) {
+      return 0.025;
+    }
+
+    if (agreement >= 0.6) {
+      return 0.06;
+    }
+
+    if (agreement >= 0.5) {
+      return 0.12;
+    }
+
+    if (agreement >= 0.4) {
+      return 0.2;
+    }
+
+    return 0.3;
   }
 
   private getCalibrationAdjustment(
