@@ -1,32 +1,23 @@
-import { Controller, Get, Param, Post, Query } from '@nestjs/common';
+import { Controller, Post, UseGuards } from '@nestjs/common';
 
-import { PredictionGenerationService } from '../services/prediction-generation.service';
-import { PredictionSaveService } from '../services/prediction-save.service';
+import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+
+import { RolesGuard } from '../../common/guards/roles.guard';
+
+import { Roles } from '../../common/decorators/roles.decorator';
+
+import { PredictionTriggerService } from '../services/prediction-trigger.service';
 
 @Controller('predictions-engine')
 export class PredictionsEngineController {
   constructor(
-    private readonly predictionGenerationService: PredictionGenerationService,
-    private readonly predictionSaveService: PredictionSaveService,
+    private readonly predictionTriggerService: PredictionTriggerService,
   ) {}
 
-  @Post(':fixtureId/generate')
-  async generate(
-    @Param('fixtureId') fixtureId: string,
-    @Query('forceRefresh') forceRefresh?: string,
-  ) {
-    return this.predictionGenerationService.generate(fixtureId, {
-      forceRefresh: forceRefresh === 'true',
-    });
-  }
-
-  @Get('fixture/:fixtureId')
-  async getByFixture(@Param('fixtureId') fixtureId: string) {
-    return this.predictionSaveService.findByFixture(fixtureId);
-  }
-
-  @Get(':predictionId')
-  async getById(@Param('predictionId') predictionId: string) {
-    return this.predictionSaveService.findById(predictionId);
+  @Post('trigger')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin', 'platform_admin')
+  async trigger() {
+    return this.predictionTriggerService.trigger();
   }
 }

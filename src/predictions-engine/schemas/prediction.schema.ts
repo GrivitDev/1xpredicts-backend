@@ -1,477 +1,347 @@
-// src/predictions-engine/schemas/prediction.schema.ts
-
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 
 import { HydratedDocument, Schema as MongooseSchema } from 'mongoose';
 
 import { PredictionMarket } from '../enums/prediction-market.enum';
-
 import { PredictionRisk } from '../enums/prediction-risk.enum';
-
 import { PredictionSource } from '../enums/prediction-source.enum';
-
 import { PredictionStatus } from '../enums/prediction-status.enum';
+import { SettlementStatus } from '../enums/settlement-status.enum';
 
 export type PredictionDocument = HydratedDocument<Prediction>;
 
 @Schema({
   _id: false,
 })
-export class PredictionReason {
+export class PredictionTeam {
   @Prop({
+    type: String,
     required: true,
     trim: true,
   })
-  code!: string;
+  id!: string;
 
   @Prop({
+    type: String,
     required: true,
     trim: true,
   })
-  message!: string;
+  name!: string;
 }
 
-export const PredictionReasonSchema =
-  SchemaFactory.createForClass(PredictionReason);
+export const PredictionTeamSchema =
+  SchemaFactory.createForClass(PredictionTeam);
 
 @Schema({
   _id: false,
 })
-export class PredictionRecommendation {
+export class PredictionSettlement {
   @Prop({
+    type: String,
+    enum: Object.values(SettlementStatus),
     required: true,
-    enum: Object.values(PredictionRisk),
+    default: SettlementStatus.PENDING,
   })
-  risk!: PredictionRisk;
+  status!: SettlementStatus;
 
   @Prop({
-    required: true,
+    type: Boolean,
+    default: null,
+  })
+  actualOutcome!: boolean | null;
+
+  @Prop({
+    type: MongooseSchema.Types.Mixed,
+    default: null,
+  })
+  actualValue!: unknown;
+
+  @Prop({
+    type: String,
+    default: null,
     trim: true,
   })
-  selection!: string;
-
-  @Prop({
-    required: true,
-    trim: true,
-  })
-  label!: string;
-
-  @Prop({
-    required: true,
-    min: 0,
-    max: 100,
-  })
-  probability!: number;
-
-  @Prop({
-    required: true,
-    min: 0,
-    max: 100,
-  })
-  confidence!: number;
-
-  @Prop({
-    required: true,
-    min: 0,
-  })
-  odds!: number;
-
-  @Prop({
-    required: true,
-    min: 0,
-    max: 100,
-  })
-  sourceAgreement!: number;
-
-  @Prop({
-    required: true,
-    min: 0,
-    max: 100,
-  })
-  dataQuality!: number;
-
-  @Prop({
-    type: [PredictionReasonSchema],
-    default: [],
-  })
-  reasons!: PredictionReason[];
-}
-
-export const PredictionRecommendationSchema = SchemaFactory.createForClass(
-  PredictionRecommendation,
-);
-
-@Schema({
-  _id: false,
-})
-export class PredictionMarketSelection {
-  @Prop({
-    required: true,
-    trim: true,
-  })
-  selection!: string;
-
-  @Prop({
-    required: true,
-    trim: true,
-  })
-  label!: string;
-
-  @Prop({
-    required: true,
-    min: 0,
-    max: 100,
-  })
-  probability!: number;
-
-  @Prop({
-    required: true,
-    min: 0,
-    max: 100,
-  })
-  confidence!: number;
-
-  @Prop({
-    required: true,
-    min: 0,
-  })
-  odds!: number;
-}
-
-export const PredictionMarketSelectionSchema = SchemaFactory.createForClass(
-  PredictionMarketSelection,
-);
-
-@Schema({
-  _id: false,
-})
-export class PredictionMarketResult {
-  @Prop({
-    required: true,
-    enum: Object.values(PredictionMarket),
-  })
-  market!: PredictionMarket;
-
-  @Prop({
-    required: true,
-    enum: Object.values(PredictionStatus),
-  })
-  status!: PredictionStatus;
-
-  @Prop({
-    type: [PredictionMarketSelectionSchema],
-    default: [],
-  })
-  selections!: PredictionMarketSelection[];
-
-  @Prop({
-    type: PredictionRecommendationSchema,
-    default: undefined,
-  })
-  low?: PredictionRecommendation;
-
-  @Prop({
-    type: PredictionRecommendationSchema,
-    default: undefined,
-  })
-  medium?: PredictionRecommendation;
-
-  @Prop({
-    type: PredictionRecommendationSchema,
-    default: undefined,
-  })
-  high?: PredictionRecommendation;
-}
-
-export const PredictionMarketResultSchema = SchemaFactory.createForClass(
-  PredictionMarketResult,
-);
-
-@Schema({
-  _id: false,
-})
-export class PredictionSourceSnapshot {
-  @Prop({
-    required: true,
-    enum: Object.values(PredictionSource),
-  })
-  source!: PredictionSource;
-
-  @Prop({
-    required: true,
-    enum: Object.values(PredictionStatus),
-  })
-  status!: PredictionStatus;
-
-  @Prop({
-    required: true,
-  })
-  available!: boolean;
-
-  @Prop({
-    trim: true,
-  })
-  modelName?: string;
-
-  @Prop({
-    trim: true,
-  })
-  modelVersion?: string;
-
-  @Prop({
-    type: Date,
-  })
-  startedAt?: Date;
-
-  @Prop({
-    type: Date,
-  })
-  completedAt?: Date;
+  resultLabel!: string | null;
 
   @Prop({
     type: Number,
-    min: 0,
+    default: null,
   })
-  durationMs?: number;
+  finalHomeScore!: number | null;
 
   @Prop({
-    min: 0,
-    max: 100,
+    type: Number,
+    default: null,
   })
-  dataQuality?: number;
+  finalAwayScore!: number | null;
 
   @Prop({
-    type: MongooseSchema.Types.Mixed,
-    default: undefined,
+    type: Number,
+    default: null,
   })
-  matchProbability?: {
-    home: number;
-    draw: number;
-    away: number;
-  };
+  halfTimeHomeScore!: number | null;
 
   @Prop({
-    type: MongooseSchema.Types.Mixed,
-    default: [],
+    type: Number,
+    default: null,
   })
-  recommendations!: unknown[];
+  halfTimeAwayScore!: number | null;
 
   @Prop({
-    trim: true,
-  })
-  errorCode?: string;
-
-  @Prop({
-    trim: true,
-  })
-  errorMessage?: string;
-}
-
-export const PredictionSourceSnapshotSchema = SchemaFactory.createForClass(
-  PredictionSourceSnapshot,
-);
-
-@Schema({
-  _id: false,
-})
-export class PredictionMatchProbability {
-  @Prop({
+    type: String,
     required: true,
-    min: 0,
-    max: 100,
+    default: 'ESPN_FIXTURE',
   })
-  home!: number;
+  source!: string;
 
   @Prop({
+    type: String,
     required: true,
-    min: 0,
-    max: 100,
+    default: 'settlement-v2',
   })
-  draw!: number;
+  settlementVersion!: string;
 
   @Prop({
-    required: true,
-    min: 0,
-    max: 100,
-  })
-  away!: number;
-
-  @Prop({
-    required: true,
-    min: 0,
-    max: 100,
-  })
-  confidence!: number;
-}
-
-export const PredictionMatchProbabilitySchema = SchemaFactory.createForClass(
-  PredictionMatchProbability,
-);
-
-@Schema({
-  _id: false,
-})
-export class PredictionMetadata {
-  @Prop({
-    required: true,
-    trim: true,
-  })
-  engineVersion!: string;
-
-  @Prop({
-    required: true,
-    trim: true,
-  })
-  calibrationVersion!: string;
-
-  @Prop({
-    required: true,
     type: Date,
+    default: null,
   })
-  generatedAt!: Date;
-
-  @Prop({
-    required: true,
-    min: 0,
-  })
-  completedSources!: number;
-
-  @Prop({
-    required: true,
-    min: 0,
-  })
-  availableSources!: number;
-
-  @Prop({
-    required: true,
-    min: 0,
-    max: 100,
-  })
-  sourceAgreement!: number;
-
-  @Prop({
-    required: true,
-    min: 0,
-    max: 100,
-  })
-  dataQuality!: number;
+  settledAt!: Date | null;
 }
 
-export const PredictionMetadataSchema =
-  SchemaFactory.createForClass(PredictionMetadata);
+export const PredictionSettlementSchema =
+  SchemaFactory.createForClass(PredictionSettlement);
 
 @Schema({
+  collection: 'predictions',
   timestamps: true,
-  collection: 'predictions_engine_predictions',
 })
 export class Prediction {
   @Prop({
+    type: String,
     required: true,
-    unique: true,
+    trim: true,
     index: true,
   })
-  fixtureId!: number;
+  eventId!: string;
 
   @Prop({
+    type: String,
     required: true,
-    index: true,
     trim: true,
     lowercase: true,
+    index: true,
   })
   competitionId!: string;
 
   @Prop({
-    required: true,
-    index: true,
-  })
-  leagueId!: number;
-
-  @Prop({
+    type: Number,
     required: true,
     index: true,
   })
   season!: number;
 
   @Prop({
-    required: true,
     type: Date,
+    required: true,
+    index: true,
   })
-  kickoff!: Date;
+  fixtureDate!: Date;
 
   @Prop({
+    type: PredictionTeamSchema,
     required: true,
   })
-  homeTeamId!: number;
+  homeTeam!: PredictionTeam;
 
   @Prop({
+    type: PredictionTeamSchema,
+    required: true,
+  })
+  awayTeam!: PredictionTeam;
+
+  @Prop({
+    type: String,
+    enum: Object.values(PredictionMarket),
+    required: true,
+    index: true,
+  })
+  market!: PredictionMarket;
+
+  @Prop({
+    type: String,
     required: true,
     trim: true,
   })
-  homeTeamName!: string;
+  selection!: string;
 
   @Prop({
+    type: Number,
+    required: true,
+    min: 0,
+    max: 1,
+  })
+  probability!: number;
+
+  @Prop({
+    type: Number,
+    required: true,
+    min: 0,
+    max: 98,
+  })
+  confidence!: number;
+
+  @Prop({
+    type: Number,
+    required: true,
+    min: 0,
+    max: 100,
+  })
+  safetyScore!: number;
+
+  @Prop({
+    type: Number,
+    required: true,
+    min: 0,
+    max: 1,
+  })
+  modelAgreement!: number;
+
+  @Prop({
+    type: Number,
+    required: true,
+    min: 0,
+    max: 100,
+  })
+  dataQuality!: number;
+
+  @Prop({
+    type: Number,
+    required: true,
+    min: 0,
+    max: 100,
+  })
+  calibrationReliability!: number;
+
+  @Prop({
+    type: String,
+    enum: Object.values(PredictionRisk),
     required: true,
   })
-  awayTeamId!: number;
+  risk!: PredictionRisk;
 
   @Prop({
+    type: Number,
     required: true,
-    trim: true,
+    min: 0,
+    max: 1,
   })
-  awayTeamName!: string;
+  decisionScore!: number;
 
   @Prop({
+    type: String,
+    enum: Object.values(PredictionSource),
     required: true,
+  })
+  source!: PredictionSource;
+
+  @Prop({
+    type: String,
+    required: true,
+    index: true,
+  })
+  modelVersion!: string;
+
+  @Prop({
+    type: String,
     enum: Object.values(PredictionStatus),
+    required: true,
+    default: PredictionStatus.ACTIVE,
     index: true,
   })
   status!: PredictionStatus;
 
   @Prop({
+    type: Boolean,
+    default: null,
+  })
+  actualOutcome!: boolean | null;
+
+  @Prop({
+    type: Date,
+    default: null,
+  })
+  settledAt!: Date | null;
+
+  @Prop({
+    type: PredictionSettlementSchema,
     required: true,
-    type: PredictionMatchProbabilitySchema,
+    default: () => ({
+      status: SettlementStatus.PENDING,
+      actualOutcome: null,
+      actualValue: null,
+      resultLabel: null,
+      finalHomeScore: null,
+      finalAwayScore: null,
+      halfTimeHomeScore: null,
+      halfTimeAwayScore: null,
+      source: 'ESPN_FIXTURE',
+      settlementVersion: 'settlement-v2',
+      settledAt: null,
+    }),
   })
-  matchProbability!: PredictionMatchProbability;
+  settlement!: PredictionSettlement;
 
   @Prop({
-    type: [PredictionMarketResultSchema],
-    default: [],
+    type: MongooseSchema.Types.Mixed,
+    default: {},
   })
-  markets!: PredictionMarketResult[];
+  metadata!: Record<string, unknown>;
 
   @Prop({
-    type: [PredictionSourceSnapshotSchema],
-    default: [],
-  })
-  sourceSnapshots!: PredictionSourceSnapshot[];
-
-  @Prop({
+    type: Date,
     required: true,
-    type: PredictionMetadataSchema,
+    default: Date.now,
+    index: true,
   })
-  metadata!: PredictionMetadata;
-
-  @Prop({
-    required: true,
-    type: Object,
-  })
-  fixtureSnapshot!: Record<string, unknown>;
+  generatedAt!: Date;
 }
 
 export const PredictionSchema = SchemaFactory.createForClass(Prediction);
 
+PredictionSchema.index(
+  {
+    eventId: 1,
+    market: 1,
+    selection: 1,
+  },
+  {
+    unique: true,
+  },
+);
+
 PredictionSchema.index({
-  kickoff: 1,
+  eventId: 1,
   status: 1,
 });
 
 PredictionSchema.index({
-  competitionId: 1,
-  kickoff: 1,
+  market: 1,
+  selection: 1,
+  modelVersion: 1,
+  status: 1,
 });
 
 PredictionSchema.index({
-  homeTeamId: 1,
-  awayTeamId: 1,
-  kickoff: 1,
+  risk: 1,
+  status: 1,
+});
+
+PredictionSchema.index({
+  confidence: -1,
+  probability: -1,
+});
+
+PredictionSchema.index({
+  fixtureDate: 1,
+  status: 1,
 });

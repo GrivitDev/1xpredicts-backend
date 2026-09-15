@@ -4,214 +4,160 @@ import { MongooseModule } from '@nestjs/mongoose';
 import { SportsModule } from '../sports/sports.module';
 
 import { Prediction, PredictionSchema } from './schemas/prediction.schema';
+
 import {
   PredictionQueue,
   PredictionQueueSchema,
 } from './schemas/prediction-queue.schema';
+
 import {
   PredictionCalibration,
   PredictionCalibrationSchema,
 } from './schemas/prediction-calibration.schema';
 
-import { PredictionsEngineController } from './controllers/predictions-engine.controller';
+import {
+  PredictionRun,
+  PredictionRunSchema,
+} from './schemas/prediction-run.schema';
 
-import { GoalModelEngine } from './engines/statistical/goal-model.engine';
-import { MatchResultEngine } from './engines/statistical/match-result.engine';
-import { GoalsMarketEngine } from './engines/statistical/goals-market.engine';
-import { BttsMarketEngine } from './engines/statistical/btts-market.engine';
-import { HalfGoalsEngine } from './engines/statistical/half-goals.engine';
-import { HandicapMarketEngine } from './engines/statistical/handicap-market.engine';
-import { StatisticalPredictionEngine } from './engines/statistical/statistical-prediction.engine';
-
-import { GeminiPredictionEngine } from './engines/ai/gemini-prediction.engine';
-import { GroqPredictionEngine } from './engines/ai/grok-prediction.engine';
-
-import { FinalDecisionEngine } from './engines/final/final-decision.engine';
-
-import { AsianHandicapMarket } from './markets/asian-handicap.market';
-import { BttsGoalsMarket } from './markets/btts-goals.market';
-import { BttsMarket } from './markets/btts.market';
-import { CleanSheetMarket } from './markets/clean-sheet.market';
-import { DoubleChanceMarket } from './markets/double-chance.market';
-import { DrawNoBetMarket } from './markets/draw-no-bet.market';
-import { EuropeanHandicapMarket } from './markets/european-handicap.market';
-import { FirstHalfGoalsMarket } from './markets/first-half-goals.market';
-import { GoalRangeMarket } from './markets/goal-range.market';
-import { OverUnderMarket } from './markets/over-under.market';
-import { SecondHalfGoalsMarket } from './markets/second-half-goals.market';
-import { TeamTotalGoalsMarket } from './markets/team-total-goals.market';
-
-import { CalibrationService } from './calibration/calibration.service';
-import { CalibrationTrackerService } from './calibration/calibration-tracker.service';
-
-import { ConfidenceCalculator } from './calculators/confidence.calculator';
-import { JointProbabilityCalculator } from './calculators/joint-probability.calculator';
-import { ProbabilityCalculator } from './calculators/probability.calculator';
-import { RiskCalculator } from './calculators/risk.calculator';
-import { OddsCalculator } from './calculators/odds.calculator';
-
-import { AiPredictionPromptService } from './services/ai-prediction-prompt.service';
-import { AiPredictionRequestService } from './services/ai-prediction-request.service';
-import { FinalDecisionService } from './services/final-decision.service';
-import { FixtureAnalysisService } from './services/fixture-analysis.service';
-import { GeminiPredictionService } from './services/gemini-prediction.service';
-import { GroqPredictionService } from './services/groq-prediction.service';
-import { HalfGoalDistributionService } from './services/half-goal-distribution.service';
-import { PredictionCombinationService } from './services/prediction-combination.service';
-import { PredictionConfidenceService } from './services/prediction-confidence.service';
-import { PredictionGenerationService } from './services/prediction-generation.service';
-import { PredictionOddsService } from './services/prediction-odds.service';
-import { PredictionProbabilityService } from './services/prediction-probability.service';
+import { PredictionTriggerService } from './services/prediction-trigger.service';
 import { PredictionProcessingService } from './services/prediction-processing.service';
 import { PredictionQueueService } from './services/prediction-queue.service';
-import { PredictionRiskService } from './services/prediction-risk.service';
+import { PredictionWorkerService } from './services/prediction-worker.service';
+import { PredictionEngineService } from './services/prediction-engine.service';
 import { PredictionSaveService } from './services/prediction-save.service';
-import { PredictionSchedulerService } from './services/prediction-scheduler.service';
-import { PredictionSignalService } from './services/prediction-signal.service';
-import { PredictionSourceOrchestratorService } from './services/prediction-source-orchestrator.service';
-import { PredictionsEngineService } from './services/predictions-engine.service';
-import { SignalAggregatorService } from './services/signal-aggregator.service';
-import { StatisticalSignalService } from './services/statistical-signal.service';
+import { PredictionReadService } from './services/prediction-read.service';
+import { PredictionRunReadService } from './services/prediction-run-read.service';
+import { RawPredictionDataService } from './services/raw-prediction-data.service';
+import { RawPredictionFeatureService } from './services/raw-prediction-feature.service';
+import { MarketEvaluationService } from './services/market-evaluation.service';
 
-import { PredictionQueueBuilderCron } from './schedulers/prediction-queue-builder.cron';
-import { PredictionProcessingCron } from './schedulers/prediction-processing.cron';
+import { CalibrationService } from './calibration/calibration.service';
+import { CalibrationCalculator } from './calibration/calibration.calculator';
+import { CalibrationAssessment } from './calibration/calibration.assessment';
+import { CalibrationEngine } from './calibration/calibration.engine';
+
+import { ValueEngine } from './engines/value/value.engine';
+import { SafetyEngine } from './engines/safety/safety.engine';
+import { ProbabilityEngine } from './engines/probability/probability.engine';
+import { MarketModelRegistry } from './engines/probability/market-model.registry';
+
+import { ResultMarketEngine } from './engines/probability/result-market.engine';
+import { BttsMarketEngine } from './engines/probability/btts-market.engine';
+import { GoalMarketEngine } from './engines/probability/goal-market.engine';
+import { CleanSheetMarketEngine } from './engines/probability/clean-sheet-market.engine';
+import { HalfMarketEngine } from './engines/probability/half-market.engine';
+import { HandicapMarketEngine } from './engines/probability/handicap-market.engine';
+import { FirstToScoreMarketEngine } from './engines/probability/first-to-score-market.engine';
+
+import { EnsembleEngine } from './engines/ensemble/ensemble.engine';
+import { ConfidenceEngine } from './engines/ensemble/confidence.engine';
+import { FinalDecisionEngine } from './engines/final/final-decision.engine';
+
+import { SettlementModule } from './settlement/settlement.module';
+
+import { PredictionsEngineController } from './controllers/predictions-engine.controller';
+import { PredictionsReadController } from './controllers/predictions-read.controller';
+import { SettlementController } from './controllers/settlement.controller';
+import { PredictionQueueWorkerService } from './services/prediction-queue-worker.service';
 
 @Module({
   imports: [
+    /*
+     * Sports owns all factual sports models and services.
+     */
     SportsModule,
 
+    SettlementModule,
+
+    /*
+     * Prediction-specific persistence only.
+     *
+     * Sports models are intentionally not registered again
+     * in this module.
+     */
     MongooseModule.forFeature([
       {
         name: Prediction.name,
         schema: PredictionSchema,
       },
+
       {
         name: PredictionQueue.name,
         schema: PredictionQueueSchema,
       },
+
       {
         name: PredictionCalibration.name,
         schema: PredictionCalibrationSchema,
       },
+
+      {
+        name: PredictionRun.name,
+        schema: PredictionRunSchema,
+      },
     ]),
   ],
 
-  controllers: [PredictionsEngineController],
+  controllers: [
+    PredictionsEngineController,
+    PredictionsReadController,
+    SettlementController,
+  ],
 
   providers: [
-    // ============================================================
-    // STATISTICAL ENGINES
-    // ============================================================
-
-    GoalModelEngine,
-    MatchResultEngine,
-    GoalsMarketEngine,
-    BttsMarketEngine,
-    HalfGoalsEngine,
-    HandicapMarketEngine,
-    StatisticalPredictionEngine,
-
-    // ============================================================
-    // MARKETS
-    // ============================================================
-
-    AsianHandicapMarket,
-    BttsGoalsMarket,
-    BttsMarket,
-    CleanSheetMarket,
-    DoubleChanceMarket,
-    DrawNoBetMarket,
-    EuropeanHandicapMarket,
-    FirstHalfGoalsMarket,
-    GoalRangeMarket,
-    OverUnderMarket,
-    SecondHalfGoalsMarket,
-    TeamTotalGoalsMarket,
-
-    // ============================================================
-    // AI ENGINES / SERVICES
-    // ============================================================
-
-    GeminiPredictionEngine,
-    GroqPredictionEngine,
-
-    GeminiPredictionService,
-    GroqPredictionService,
-
-    AiPredictionPromptService,
-    AiPredictionRequestService,
-
-    // ============================================================
-    // FINAL DECISION
-    // ============================================================
-
-    FinalDecisionEngine,
-    FinalDecisionService,
-
-    // ============================================================
-    // CALCULATORS
-    // ============================================================
-
-    ConfidenceCalculator,
-    JointProbabilityCalculator,
-    ProbabilityCalculator,
-    RiskCalculator,
-    OddsCalculator,
-
-    // ============================================================
-    // SIGNALS
-    // ============================================================
-
-    FixtureAnalysisService,
-    StatisticalSignalService,
-    PredictionSignalService,
-    PredictionSourceOrchestratorService,
-    SignalAggregatorService,
-
-    // ============================================================
-    // PREDICTION SERVICES
-    // ============================================================
-
-    PredictionProbabilityService,
-    PredictionConfidenceService,
-    PredictionRiskService,
-    PredictionOddsService,
-    PredictionCombinationService,
-
-    HalfGoalDistributionService,
-
-    // ============================================================
-    // CALIBRATION
-    // ============================================================
-
-    CalibrationService,
-    CalibrationTrackerService,
-
-    // ============================================================
-    // QUEUE / GENERATION / PROCESSING
-    // ============================================================
-
-    PredictionQueueService,
-    PredictionSchedulerService,
-    PredictionGenerationService,
+    PredictionTriggerService,
     PredictionProcessingService,
+    PredictionQueueService,
+    PredictionQueueWorkerService,
+    PredictionWorkerService,
+
+    PredictionEngineService,
     PredictionSaveService,
 
-    PredictionsEngineService,
+    PredictionReadService,
+    PredictionRunReadService,
 
-    // ============================================================
-    // CRONS
-    // ============================================================
+    RawPredictionDataService,
+    RawPredictionFeatureService,
 
-    PredictionQueueBuilderCron,
-    PredictionProcessingCron,
+    MarketEvaluationService,
+
+    CalibrationService,
+    CalibrationCalculator,
+    CalibrationAssessment,
+    CalibrationEngine,
+
+    ValueEngine,
+    SafetyEngine,
+    ProbabilityEngine,
+    MarketModelRegistry,
+
+    ResultMarketEngine,
+    BttsMarketEngine,
+    GoalMarketEngine,
+    CleanSheetMarketEngine,
+    HalfMarketEngine,
+    HandicapMarketEngine,
+    FirstToScoreMarketEngine,
+
+    EnsembleEngine,
+    ConfidenceEngine,
+    FinalDecisionEngine,
   ],
 
   exports: [
-    PredictionGenerationService,
-    PredictionSaveService,
-    PredictionCombinationService,
-    PredictionsEngineService,
+    PredictionTriggerService,
+    PredictionProcessingService,
+    PredictionEngineService,
+
+    PredictionReadService,
+    PredictionRunReadService,
+
+    CalibrationService,
+
+    RawPredictionDataService,
+    RawPredictionFeatureService,
   ],
 })
 export class PredictionsEngineModule {}

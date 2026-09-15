@@ -1,24 +1,28 @@
-export interface CalibrationResult {
-  predictionId: string;
-  fixtureId: string;
-  market: string;
-  selection: string;
-  probability: number;
-  confidence: number;
-  wasCorrect: boolean;
-}
-
-export interface CalibrationMarketSummary {
-  market: string;
+export interface CalibrationAssessmentInput {
+  averageConfidence: number;
   sampleSize: number;
-  accuracy: number;
-  brierScore: number | null;
-  calibrationError: number | null;
+  actualSuccessRate: number;
+  averageProbability: number;
+  calibrationError: number;
 }
 
 export interface CalibrationBucket {
-  bucket: number;
+  minimumConfidence: number;
+  maximumConfidence: number;
+
   sampleSize: number;
-  predictedProbability: number;
-  actualRate: number;
+  wins: number;
+  losses: number;
+
+  winRate: number;
+  averageProbability: number;
+  calibrationError: number;
+}
+
+export interface CalibrationFailureAssessment {
+  meaningful: boolean;
+  severe: boolean;
+  critical: boolean;
+  shouldAdjust: boolean;
+  reason: string;
 }

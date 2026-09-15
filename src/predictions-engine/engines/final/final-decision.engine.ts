@@ -2,272 +2,184 @@ import { Injectable } from '@nestjs/common';
 
 import { PredictionRisk } from '../../enums/prediction-risk.enum';
 
-import { PredictionStatus } from '../../enums/prediction-status.enum';
+import { PredictionSource } from '../../enums/prediction-source.enum';
 
-import {
-  PredictionSignal,
-  PredictionSignalRecommendation,
-} from '../../interfaces/prediction-signal.interface';
+import { FinalDecision } from '../../interfaces/final-decision.interface';
 
-import {
-  FinalDecisionRecommendation,
-  FinalMarketDecision,
-} from '../../interfaces/final-decision-result.interface';
+import { DecisionScoreUtil } from '../../utils/decision-score.util';
 
-import { FinalMarketCandidate } from '../../interfaces/final-market-candidate.interface';
+import { PredictionRiskUtil } from '../../utils/prediction-risk.util';
 
-import { PredictionConfidenceService } from '../../services/prediction-confidence.service';
-
-import { PredictionOddsService } from '../../services/prediction-odds.service';
-
-import { PredictionRiskService } from '../../services/prediction-risk.service';
-
-import { SignalAggregatorService } from '../../services/signal-aggregator.service';
+import { PREDICTION_DECISION_CONFIG } from '../../config/prediction-decision.config';
+import { PredictionMarket } from 'src/predictions-engine/enums/prediction-market.enum';
 
 @Injectable()
 export class FinalDecisionEngine {
-  constructor(
-    private readonly signalAggregatorService: SignalAggregatorService,
+  decide(input: {
+    market: string;
+    selection: string;
 
-    private readonly confidenceService: PredictionConfidenceService,
+    probability: number;
+    confidence: number;
+    safetyScore: number;
+    modelAgreement: number;
+    dataQuality: number;
+    calibrationReliability: number;
+  }): FinalDecision {
+    const probability = this.clamp(input.probability, 0, 1);
 
-    private readonly riskService: PredictionRiskService,
+    const confidence = this.clamp(input.confidence, 0, 98);
 
-    private readonly oddsService: PredictionOddsService,
-  ) {}
+    const safetyScore = this.clamp(input.safetyScore, 0, 100);
 
-  decide(
-    signals: PredictionSignal[],
-    calibrationBySelection: Map<string, number> = new Map(),
-  ): FinalMarketDecision[] {
-    const marketSelections = new Map<
-      string,
-      Map<string, PredictionSignalRecommendation[]>
-    >();
+    const modelAgreement = this.clamp(input.modelAgreement, 0, 1);
 
-    for (const signal of signals) {
-      if (
-        signal.status !== PredictionStatus.COMPLETED &&
-        signal.status !== PredictionStatus.PARTIAL
-      ) {
-        continue;
-      }
+    const dataQuality = this.clamp(input.dataQuality, 0, 100);
 
-      for (const recommendation of signal.recommendations ?? []) {
-        if (!recommendation.market || !recommendation.selection) {
-          continue;
-        }
-
-        if (!marketSelections.has(recommendation.market)) {
-          marketSelections.set(recommendation.market, new Map());
-        }
-
-        const selections = marketSelections.get(recommendation.market)!;
-
-        if (!selections.has(recommendation.selection)) {
-          selections.set(recommendation.selection, []);
-        }
-
-        selections.get(recommendation.selection)!.push(recommendation);
-      }
-    }
-
-    const decisions: FinalMarketDecision[] = [];
-
-    for (const [market, selections] of marketSelections) {
-      const candidates: FinalMarketCandidate[] = [];
-
-      for (const [selection, recommendations] of selections) {
-        const aggregate =
-          this.signalAggregatorService.combineRecommendation(recommendations);
-
-        const calibration =
-          calibrationBySelection.get(`${market}:${selection}`) ?? 70;
-
-        const confidence = this.confidenceService.calculate(
-          aggregate.probability,
-          aggregate.dataQuality,
-          aggregate.sourceAgreement,
-          calibration,
-          aggregate.dataQuality,
-        );
-
-        const odds = this.oddsService.calculateFairOdds(aggregate.probability);
-
-        const reasonCodes = this.collectReasonCodes(recommendations);
-
-        candidates.push({
-          market: market as FinalMarketCandidate['market'],
-
-          selection,
-
-          label:
-            recommendations.find((item) => item.selection === selection)
-              ?.selection ?? selection,
-
-          probability: aggregate.probability,
-
-          confidence,
-
-          odds,
-
-          sourceAgreement: aggregate.sourceAgreement,
-
-          dataQuality: aggregate.dataQuality,
-
-          calibration,
-
-          availableSources: aggregate.availableSources,
-
-          reasonCodes,
-        });
-      }
-
-      const validCandidates = candidates.filter(
-        (candidate) =>
-          candidate.probability >= 30 &&
-          candidate.confidence >= 50 &&
-          candidate.dataQuality >= 40,
-      );
-
-      if (validCandidates.length === 0) {
-        decisions.push({
-          market,
-
-          status: PredictionStatus.INSUFFICIENT_DATA,
-
-          candidates,
-        });
-
-        continue;
-      }
-
-      const recommendations = this.selectRiskRecommendations(validCandidates);
-
-      decisions.push({
-        market,
-
-        status:
-          recommendations.low || recommendations.medium || recommendations.high
-            ? PredictionStatus.COMPLETED
-            : PredictionStatus.INSUFFICIENT_DATA,
-
-        candidates,
-
-        ...recommendations,
-      });
-    }
-
-    return decisions;
-  }
-
-  private selectRiskRecommendations(candidates: FinalMarketCandidate[]): {
-    low?: FinalDecisionRecommendation;
-    medium?: FinalDecisionRecommendation;
-    high?: FinalDecisionRecommendation;
-  } {
-    const ordered = [...candidates].sort(
-      (a, b) => b.probability - a.probability || b.confidence - a.confidence,
+    const calibrationReliability = this.clamp(
+      input.calibrationReliability,
+      0,
+      100,
     );
 
-    if (ordered.length === 0) {
-      return {};
-    }
+    const risk = PredictionRiskUtil.fromScores({
+      probability,
+      confidence,
+      safetyScore,
+      modelAgreement,
+      dataQuality,
+      calibrationReliability,
+    });
 
-    const lowCandidate =
-      ordered.find(
-        (candidate) =>
-          candidate.probability >= 70 && candidate.confidence >= 80,
-      ) ?? ordered[0];
+    const score = DecisionScoreUtil.calculate({
+      probability,
+      confidence,
+      safetyScore,
+      modelAgreement,
+      dataQuality,
+      calibrationReliability,
+    });
 
-    const remainingAfterLow = ordered.filter(
-      (candidate) => candidate.selection !== lowCandidate.selection,
-    );
-
-    const mediumPool = remainingAfterLow.filter(
-      (candidate) => candidate.probability >= 50 && candidate.probability < 70,
-    );
-
-    const mediumCandidate =
-      mediumPool[0] ?? this.findClosestToProbability(remainingAfterLow, 60);
-
-    const remainingAfterMedium = remainingAfterLow.filter(
-      (candidate) =>
-        !mediumCandidate || candidate.selection !== mediumCandidate.selection,
-    );
-
-    const highPool = remainingAfterMedium.filter(
-      (candidate) => candidate.probability < 55,
-    );
-
-    const highCandidate =
-      highPool[0] ?? this.findClosestToProbability(remainingAfterMedium, 40);
+    const rejectionReason = this.getRejectionReason({
+      probability,
+      confidence,
+      safetyScore,
+      modelAgreement,
+      dataQuality,
+      calibrationReliability,
+      risk,
+      decisionScore: score.total,
+    });
 
     return {
-      low: this.toRecommendation(lowCandidate, PredictionRisk.LOW),
+      market: input.market as PredictionMarket,
 
-      medium:
-        mediumCandidate && mediumCandidate.selection !== lowCandidate.selection
-          ? this.toRecommendation(mediumCandidate, PredictionRisk.MEDIUM)
-          : undefined,
+      selection: input.selection,
 
-      high:
-        highCandidate &&
-        highCandidate.selection !== lowCandidate.selection &&
-        highCandidate.selection !== mediumCandidate?.selection
-          ? this.toRecommendation(highCandidate, PredictionRisk.HIGH)
-          : undefined,
-    };
-  }
+      probability,
+      confidence,
 
-  private toRecommendation(
-    candidate: FinalMarketCandidate,
-    risk: PredictionRisk,
-  ): FinalDecisionRecommendation {
-    return {
+      safetyScore,
+      modelAgreement,
+      dataQuality,
+      calibrationReliability,
+
       risk,
 
-      selection: candidate.selection,
+      decisionScore: score.total,
 
-      label: candidate.label,
+      source: PredictionSource.ENSEMBLE,
 
-      probability: candidate.probability,
+      accepted: rejectionReason === null,
 
-      confidence: candidate.confidence,
-
-      odds: candidate.odds,
-
-      sourceAgreement: candidate.sourceAgreement,
-
-      dataQuality: candidate.dataQuality,
-
-      reasonCodes: candidate.reasonCodes,
+      rejectionReason: rejectionReason ?? undefined,
     };
   }
 
-  private findClosestToProbability(
-    candidates: FinalMarketCandidate[],
-    target: number,
-  ): FinalMarketCandidate | undefined {
-    if (candidates.length === 0) {
-      return undefined;
+  private getRejectionReason(input: {
+    probability: number;
+    confidence: number;
+    safetyScore: number;
+    modelAgreement: number;
+    dataQuality: number;
+    calibrationReliability: number;
+    risk: PredictionRisk;
+    decisionScore: number;
+  }): string | null {
+    const config = PREDICTION_DECISION_CONFIG;
+
+    /*
+     * Candidate-level gate.
+     */
+    if (input.probability < config.probability.minimumCandidate) {
+      return `Probability below minimum candidate threshold (${config.probability.minimumCandidate}).`;
     }
 
-    return [...candidates].sort(
-      (a, b) =>
-        Math.abs(a.probability - target) - Math.abs(b.probability - target),
-    )[0];
+    if (input.confidence < config.confidence.minimumCandidate) {
+      return `Confidence below minimum candidate threshold (${config.confidence.minimumCandidate}).`;
+    }
+
+    if (input.safetyScore < config.safety.minimumCandidate) {
+      return `Safety score below minimum candidate threshold (${config.safety.minimumCandidate}).`;
+    }
+
+    if (input.modelAgreement < config.agreement.minimumCandidate) {
+      return `Model agreement below minimum candidate threshold (${config.agreement.minimumCandidate}).`;
+    }
+
+    if (input.dataQuality < config.dataQuality.minimumCandidate) {
+      return `Data quality below minimum candidate threshold (${config.dataQuality.minimumCandidate}).`;
+    }
+
+    /*
+     * HIGH risk is never publishable.
+     */
+    if (input.risk === PredictionRisk.HIGH) {
+      return 'Prediction remains HIGH risk after combining probability and supporting evidence.';
+    }
+
+    /*
+     * Publishable prediction gate.
+     */
+    if (input.probability < config.probability.minimumPublishable) {
+      return `Probability below publishable threshold (${config.probability.minimumPublishable}).`;
+    }
+
+    if (input.confidence < config.confidence.minimumPublishable) {
+      return `Confidence below publishable threshold (${config.confidence.minimumPublishable}).`;
+    }
+
+    if (input.safetyScore < config.safety.minimumPublishable) {
+      return `Safety score below publishable threshold (${config.safety.minimumPublishable}).`;
+    }
+
+    if (input.modelAgreement < config.agreement.minimumPublishable) {
+      return `Model agreement below publishable threshold (${config.agreement.minimumPublishable}).`;
+    }
+
+    if (input.dataQuality < config.dataQuality.minimumPublishable) {
+      return `Data quality below publishable threshold (${config.dataQuality.minimumPublishable}).`;
+    }
+
+    if (
+      input.calibrationReliability <
+      config.calibration.minimumReliabilityPublishable
+    ) {
+      return `Calibration reliability below publishable threshold (${config.calibration.minimumReliabilityPublishable}).`;
+    }
+
+    if (input.decisionScore < config.selection.minimumDecisionScore) {
+      return `Decision score below minimum threshold (${config.selection.minimumDecisionScore}).`;
+    }
+
+    return null;
   }
 
-  private collectReasonCodes(
-    recommendations: PredictionSignalRecommendation[],
-  ): string[] {
-    return [
-      ...new Set(
-        recommendations.flatMap(
-          (recommendation) => recommendation.reasonCodes ?? [],
-        ),
-      ),
-    ];
+  private clamp(value: number, minimum: number, maximum: number): number {
+    if (!Number.isFinite(value)) {
+      return minimum;
+    }
+
+    return Math.min(Math.max(value, minimum), maximum);
   }
 }

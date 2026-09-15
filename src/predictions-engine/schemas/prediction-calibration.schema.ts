@@ -1,111 +1,128 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-
 import { HydratedDocument } from 'mongoose';
-
-import { PredictionMarket } from '../enums/prediction-market.enum';
-
-import { PredictionRisk } from '../enums/prediction-risk.enum';
 
 export type PredictionCalibrationDocument =
   HydratedDocument<PredictionCalibration>;
 
 @Schema({
+  collection: 'predictions_calibration',
   timestamps: true,
-  collection: 'predictions_engine_calibration',
 })
 export class PredictionCalibration {
   @Prop({
+    type: String,
     required: true,
     index: true,
-    enum: Object.values(PredictionMarket),
-  })
-  market!: PredictionMarket;
-
-  @Prop({
     trim: true,
+  })
+  market!: string;
+
+  @Prop({
+    type: String,
+    default: null,
     index: true,
+    trim: true,
   })
-  selection?: string;
+  selection!: string | null;
 
   @Prop({
+    type: String,
     required: true,
-    min: 0,
-    max: 100,
+    index: true,
+    trim: true,
   })
-  minimumProbability!: number;
+  modelVersion!: string;
 
   @Prop({
+    type: Number,
     required: true,
-    min: 0,
-    max: 100,
-  })
-  maximumProbability!: number;
-
-  @Prop({
-    required: true,
-    min: 0,
     default: 0,
+    min: 0,
   })
-  predictionCount!: number;
+  sampleSize!: number;
 
   @Prop({
+    type: Number,
     required: true,
-    min: 0,
     default: 0,
+    min: 0,
   })
-  settledCount!: number;
+  wins!: number;
 
   @Prop({
+    type: Number,
     required: true,
-    min: 0,
     default: 0,
+    min: 0,
   })
-  correctCount!: number;
+  losses!: number;
 
   @Prop({
+    type: Number,
     required: true,
-    min: 0,
     default: 0,
+    min: 0,
+    max: 1,
   })
-  incorrectCount!: number;
+  averageProbability!: number;
 
   @Prop({
+    type: Number,
     required: true,
-    min: 0,
-    max: 100,
     default: 0,
+    min: 0,
+    max: 1,
   })
-  empiricalAccuracy!: number;
+  actualSuccessRate!: number;
 
   @Prop({
+    type: Number,
     required: true,
-    min: 0,
     default: 0,
-  })
-  brierScore!: number;
-
-  @Prop({
-    required: true,
     min: 0,
-    max: 100,
-    default: 0,
+    max: 1,
   })
   calibrationError!: number;
 
   @Prop({
-    enum: Object.values(PredictionRisk),
+    type: Number,
+    required: true,
+    default: 0,
+    min: 0,
+    max: 1,
   })
-  risk?: PredictionRisk;
+  adjustment!: number;
 
   @Prop({
+    type: Number,
     required: true,
-    trim: true,
+    default: 0,
+    min: 0,
+    max: 100,
   })
-  calibrationVersion!: string;
+  reliabilityScore!: number;
 
   @Prop({
+    type: Number,
     required: true,
+    default: 0,
+    min: 0,
+    max: 98,
+  })
+  averageConfidence!: number;
+
+  @Prop({
+    type: Boolean,
+    required: true,
+    default: false,
+  })
+  shouldAdjust!: boolean;
+
+  @Prop({
     type: Date,
+    required: true,
+    default: Date.now,
+    index: true,
   })
   calculatedAt!: Date;
 }
@@ -118,10 +135,14 @@ PredictionCalibrationSchema.index(
   {
     market: 1,
     selection: 1,
-    minimumProbability: 1,
-    maximumProbability: 1,
+    modelVersion: 1,
   },
   {
     unique: true,
   },
 );
+
+PredictionCalibrationSchema.index({
+  market: 1,
+  modelVersion: 1,
+});

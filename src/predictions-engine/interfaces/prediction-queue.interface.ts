@@ -1,31 +1,34 @@
+import { CompetitionPriority } from '../../sports/enums/competition-priority.enum';
 import { PredictionQueueStatus } from '../enums/prediction-queue-status.enum';
 
 export interface PredictionQueueItem {
-  fixtureId: number;
+  eventId: string;
 
   competitionId: string;
 
-  leagueId: number;
-
   season: number;
 
-  kickoff: Date;
+  fixtureDate: Date;
 
-  homeTeamName: string;
+  homeTeamId: string;
 
-  awayTeamName: string;
+  awayTeamId: string;
+
+  priority: CompetitionPriority;
+
+  priorityWeight: number;
 
   status: PredictionQueueStatus;
 
-  priority: number;
-
   attempts: number;
 
-  maxAttempts: number;
-
-  lockedUntil?: Date;
+  availableAt: Date;
 
   startedAt?: Date;
 
   completedAt?: Date;
+
+  failedAt?: Date;
+
+  error?: string;
 }

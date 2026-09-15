@@ -3,5 +3,4 @@ export enum PredictionQueueStatus {
   PROCESSING = 'PROCESSING',
   COMPLETED = 'COMPLETED',
   FAILED = 'FAILED',
-  CANCELLED = 'CANCELLED',
 }

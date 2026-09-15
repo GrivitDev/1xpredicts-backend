@@ -1,90 +1,116 @@
-export function clampProbability(value: number): number {
-  if (!Number.isFinite(value)) {
+import { ProbabilityModelResult } from '../interfaces/probability-result.interface';
+
+export class MarketProbabilityUtil {
+  static getProbability(
+    result: ProbabilityModelResult | null | undefined,
+  ): number {
+    if (!result) {
+      return 0;
+    }
+
+    return this.clamp(result.probability, 0, 1);
+  }
+
+  static firstAvailable(...values: Array<number | null | undefined>): number {
+    for (const value of values) {
+      if (typeof value === 'number' && Number.isFinite(value)) {
+        return value;
+      }
+    }
+
     return 0;
   }
 
-  return Math.min(1, Math.max(0, value));
-}
-
-export function clampPercentage(value: number): number {
-  if (!Number.isFinite(value)) {
-    return 0;
+  static complement(value: number): number {
+    return this.clamp(1 - value, 0, 1);
   }
 
-  return Math.min(100, Math.max(0, value));
-}
+  static normalize(values: number[]): number[] {
+    if (!values.length) {
+      return [];
+    }
 
-export function probabilityToPercentage(value: number): number {
-  return Number((clampProbability(value) * 100).toFixed(2));
-}
+    const safeValues = values.map((value) => this.clamp(value, 0, 1));
 
-export function percentageToProbability(value: number): number {
-  return clampPercentage(value) / 100;
-}
+    const total = safeValues.reduce((sum, value) => sum + value, 0);
 
-export function normalizeProbabilities(
-  probabilities: Record<string, number>,
-): Record<string, number> {
-  const entries = Object.entries(probabilities);
+    if (total <= 0) {
+      const equalShare = 1 / safeValues.length;
+      return safeValues.map(() => equalShare);
+    }
 
-  if (entries.length === 0) {
-    return {};
+    return safeValues.map((value) => value / total);
   }
 
-  const total = entries.reduce(
-    (sum, [, probability]) => sum + clampProbability(probability),
-    0,
-  );
+  static sampleSize(result: ProbabilityModelResult | null | undefined): number {
+    if (!result?.sampleSize) {
+      return 0;
+    }
 
-  if (total <= 0) {
-    return Object.fromEntries(
-      entries.map(([key]) => [key, 1 / entries.length]),
+    return Math.max(Math.floor(result.sampleSize), 0);
+  }
+
+  static dataQuality(
+    result: ProbabilityModelResult | null | undefined,
+  ): number {
+    return this.clamp(result?.dataQuality ?? 0, 0, 100);
+  }
+
+  static modelReliability(
+    input:
+      | ProbabilityModelResult
+      | {
+          modelReliability?: number;
+          dataQuality?: number;
+          sampleSize?: number;
+        }
+      | number
+      | null
+      | undefined,
+    dataQuality?: number,
+    sampleSize?: number,
+  ): number {
+    if (typeof input === 'number') {
+      return this.clamp(input, 0, 1);
+    }
+
+    if (!input) {
+      return 0;
+    }
+
+    const explicit =
+      'modelReliability' in input ? input.modelReliability : undefined;
+
+    if (typeof explicit === 'number' && Number.isFinite(explicit)) {
+      return this.clamp(explicit, 0, 1);
+    }
+
+    const quality =
+      this.clamp(
+        dataQuality ??
+          ('dataQuality' in input ? Number(input.dataQuality ?? 0) : 0),
+        0,
+        100,
+      ) / 100;
+
+    const samples = Math.max(
+      Math.floor(
+        sampleSize ??
+          ('sampleSize' in input ? Number(input.sampleSize ?? 0) : 0),
+      ),
+      0,
     );
+
+    const sampleReliability = 1 - Math.exp(-samples / 40);
+
+    return this.clamp(quality * 0.55 + sampleReliability * 0.45, 0, 1);
   }
 
-  return Object.fromEntries(
-    entries.map(([key, probability]) => [
-      key,
-      clampProbability(probability) / total,
-    ]),
-  );
-}
+  static clamp(value: number, minimum: number, maximum: number): number {
+    if (!Number.isFinite(value)) {
+      return minimum;
+    }
 
-export function weightedAverage(
-  values: Array<{
-    value: number;
-    weight: number;
-  }>,
-): number {
-  const validValues = values.filter(
-    (item) =>
-      Number.isFinite(item.value) &&
-      Number.isFinite(item.weight) &&
-      item.weight > 0,
-  );
-
-  if (validValues.length === 0) {
-    return 0;
+    return Math.min(Math.max(value, minimum), maximum);
   }
-
-  const weightedTotal = validValues.reduce(
-    (sum, item) => sum + item.value * item.weight,
-    0,
-  );
-
-  const totalWeight = validValues.reduce((sum, item) => sum + item.weight, 0);
-
-  if (totalWeight <= 0) {
-    return 0;
-  }
-
-  return weightedTotal / totalWeight;
-}
-
-export function roundPercentage(value: number): number {
-  return Number(clampPercentage(value).toFixed(2));
-}
-
-export function roundProbability(value: number): number {
-  return Number(clampProbability(value).toFixed(6));
 }

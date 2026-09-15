@@ -1,12 +1,23 @@
-import { FinalPrediction } from './final-prediction.interface';
-import { PredictionSourceRun } from './prediction-source-run.interface';
+import { PredictionResult } from './prediction-result.interface';
+import { PredictionRunInput } from './prediction-run.interface';
 
 export interface PredictionEngineResult {
-  prediction: FinalPrediction;
-
-  sourceRuns: PredictionSourceRun[];
-
+  eventId: string;
   generatedAt: Date;
 
-  processingTimeMs: number;
+  run: PredictionRunInput;
+
+  predictions: PredictionResult[];
+
+  marketsProcessed: number;
+  accepted: number;
+  rejected: number;
+
+  acceptedMarkets: string[];
+
+  lowRiskCount: number;
+  mediumRiskCount: number;
+  highRiskCount: number;
+
+  strongestPrediction: PredictionResult | null;
 }

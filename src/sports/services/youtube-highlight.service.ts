@@ -17,9 +17,11 @@ import { YoutubeService } from '../providers/youtube.service';
 import { YoutubeHighlightStatus } from '../interfaces/youtube-highlight.interface';
 
 import { SportsProviderRateLimitService } from './sports-provider-rate-limit.service';
+import { PriorityCompetitionService } from './priority-competition.service';
 
 interface MatchInfo {
   fixtureId: string;
+  leagueId: string;
   competitionId?: string;
   homeTeamId?: string;
   awayTeamId?: string;
@@ -36,6 +38,8 @@ export class YoutubeHighlightService {
     private readonly youtubeService: YoutubeService,
 
     private readonly sportsProviderRateLimitService: SportsProviderRateLimitService,
+
+    private readonly priorityCompetitionService: PriorityCompetitionService,
 
     @InjectModel(EspnFixture.name)
     private readonly espnFixtureModel: Model<EspnFixtureDocument>,
@@ -54,6 +58,10 @@ export class YoutubeHighlightService {
    * Flow:
    *
    * FINISHED_MATCH
+   *      ↓
+   * load ESPN fixture
+   *      ↓
+   * check priority competition
    *      ↓
    * YouTube search
    *      ↓
@@ -85,6 +93,37 @@ export class YoutubeHighlightService {
     }
 
     /*
+     * Match information comes from the fixture already stored
+     * by the ESPN scoreboard refresh.
+     */
+    const match = await this.getMatchInfo(normalizedFixtureId);
+
+    if (!match) {
+      throw new Error(
+        `ESPN fixture ${normalizedFixtureId} was not found after scoreboard collection`,
+      );
+    }
+
+    /*
+     * YouTube is only allowed to search fixtures belonging
+     * to the configured priority competitions.
+     *
+     * This filter applies only to YouTube.
+     * It does not affect the ESPN queue or any other provider.
+     */
+    const priorityCompetition = this.priorityCompetitionService.getById(
+      match.leagueId,
+    );
+
+    if (!priorityCompetition) {
+      this.logger.debug(
+        `Skipping YouTube highlight for non-priority competition ${match.leagueId}`,
+      );
+
+      return;
+    }
+
+    /*
      * FINISHED_MATCH is the only caller, so the provider quota
      * is checked immediately before the actual YouTube request.
      */
@@ -95,18 +134,6 @@ export class YoutubeHighlightService {
 
     if (remaining <= 0) {
       throw new Error('YouTube daily provider quota exhausted');
-    }
-
-    /*
-     * Match information comes from the fixture already stored
-     * by the ESPN scoreboard refresh.
-     */
-    const match = await this.getMatchInfo(normalizedFixtureId);
-
-    if (!match) {
-      throw new Error(
-        `ESPN fixture ${normalizedFixtureId} was not found after scoreboard collection`,
-      );
     }
 
     /*
@@ -321,6 +348,8 @@ export class YoutubeHighlightService {
 
     return {
       fixtureId: normalizedFixtureId,
+
+      leagueId: fixture.leagueId,
 
       competitionId,
 
