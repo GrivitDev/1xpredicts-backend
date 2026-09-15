@@ -4,6 +4,7 @@ import { Injectable, Logger } from '@nestjs/common';
 
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
+import { BulkWriteResult } from 'mongodb';
 
 import { Prediction, PredictionDocument } from '../schemas/prediction.schema';
 
@@ -13,6 +14,7 @@ import {
 } from '../schemas/prediction-run.schema';
 
 import { PredictionStatus } from '../enums/prediction-status.enum';
+import { SettlementStatus } from '../enums/settlement-status.enum';
 
 import { PredictionResult } from '../interfaces/prediction-result.interface';
 import { PredictionRunInput } from '../interfaces/prediction-run.interface';
@@ -113,7 +115,7 @@ export class PredictionSaveService {
       },
     }));
 
-    let writeResult;
+    let writeResult: BulkWriteResult;
 
     try {
       writeResult = await this.predictionModel.bulkWrite(operations, {
@@ -131,7 +133,7 @@ export class PredictionSaveService {
     }
 
     this.logger.log(
-      `Prediction bulkWrite result: event=${event.eventId} matched=${writeResult.matchedCount ?? 0} modified=${writeResult.modifiedCount ?? 0} upserted=${writeResult.upsertedCount ?? 0} inserted=${writeResult.insertedCount ?? 0}`,
+      `Prediction bulkWrite result: event=${event.eventId} matched=${writeResult.matchedCount} modified=${writeResult.modifiedCount} upserted=${writeResult.upsertedCount} inserted=${writeResult.insertedCount}`,
     );
 
     let persistedCount = await this.predictionModel.countDocuments({
@@ -141,9 +143,9 @@ export class PredictionSaveService {
     /*
      * Diagnostic fallback.
      *
-     * If bulkWrite claims success but no document exists,
-     * attempt one ordinary Mongoose create(). This is intended
-     * to expose schema/connection/model problems explicitly.
+     * If bulkWrite produces no document, perform one ordinary
+     * create() so any schema/model/connection problem becomes
+     * visible as a real Mongo/Mongoose error.
      */
     if (persistedCount === 0) {
       const first = predictions[0];
@@ -207,7 +209,7 @@ export class PredictionSaveService {
           generatedAt: first.generatedAt,
 
           settlement: {
-            status: 'PENDING',
+            status: SettlementStatus.PENDING,
 
             actualOutcome: null,
 
@@ -234,7 +236,9 @@ export class PredictionSaveService {
         });
 
         this.logger.log(
-          `Direct prediction create succeeded: event=${event.eventId} id=${String(created._id)}`,
+          `Direct prediction create succeeded: event=${event.eventId} id=${String(
+            created._id,
+          )}`,
         );
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -370,7 +374,7 @@ export class PredictionSaveService {
             modelVersion: predictions[0]?.modelVersion ?? 'raw-ensemble-v2',
 
             settlement: {
-              status: 'PENDING',
+              status: SettlementStatus.PENDING,
 
               total: predictions.length,
 
