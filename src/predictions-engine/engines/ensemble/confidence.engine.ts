@@ -46,35 +46,52 @@ export class ConfidenceEngine {
     const probabilityStrength = ConfidenceUtil.probabilityStrength(probability);
 
     /*
-     * Confidence primarily measures the strength and consistency
-     * of the evidence supporting the prediction.
+     * Confidence is intentionally different from probability.
      *
-     * Calibration is advisory and intentionally receives a smaller
-     * influence than the underlying model/data evidence.
+     * Probability answers:
+     * "How likely does the model believe this event is?"
      *
-     * When calibration history is unavailable, reliability is 0,
-     * but that must not prevent a strong new prediction from
-     * receiving an appropriate confidence rating.
+     * Confidence answers:
+     * "How strongly does the available evidence support
+     * that probability?"
+     *
+     * Therefore an extreme probability cannot automatically
+     * produce extreme confidence.
      */
     const raw =
-      probabilityStrength * 0.1 +
-      modelReliability * 0.22 +
-      dataQuality * 0.22 +
-      calibrationReliability * 0.08 +
-      sampleReliability * 0.14 +
-      safety * 0.12 +
-      agreement * 0.12;
+      probabilityStrength * 0.12 +
+      modelReliability * 0.18 +
+      dataQuality * 0.18 +
+      calibrationReliability * 0.06 +
+      sampleReliability * 0.12 +
+      safety * 0.16 +
+      agreement * 0.18;
 
     let confidence = raw * 100;
 
     /*
-     * Evidence caps protect against false high confidence when
-     * the underlying evidence is genuinely weak.
+     * Agreement is particularly important now that the
+     * prediction is produced through three different angles.
      *
-     * Calibration is deliberately excluded from these hard caps.
-     * Missing historical calibration is not itself evidence that
-     * the current prediction is weak.
+     * Strong disagreement means the final probability should
+     * not be treated as highly trustworthy even when the
+     * resulting probability remains high.
      */
+    confidence = this.applyAgreementAdjustment(confidence, agreement);
+
+    /*
+     * Probability and confidence must remain coherent.
+     *
+     * Very high confidence with a modest probability is not
+     * appropriate. Likewise, a very high probability with
+     * weak supporting evidence must not receive high confidence.
+     */
+    confidence = this.applyProbabilityCoherence(
+      confidence,
+      probability,
+      agreement,
+    );
+
     confidence = this.applyEvidenceCaps(confidence, {
       modelReliability,
       dataQuality,
@@ -84,16 +101,16 @@ export class ConfidenceEngine {
     });
 
     /*
-     * Existing calibration error can modestly reduce confidence.
+     * Calibration is advisory.
      *
-     * This only applies when calibration data actually exists.
-     * A brand-new prediction with no calibration history therefore
-     * receives no artificial confidence penalty.
+     * It can reduce confidence modestly when historical
+     * calibration data demonstrates error, but absence of
+     * calibration history is not itself negative evidence.
      */
     const calibrationError = this.clamp(input.calibrationError ?? 0, 0, 1);
 
     if (sampleSize > 0 && calibrationReliability > 0) {
-      confidence *= 1 - Math.min(calibrationError * 0.5, 0.25);
+      confidence *= 1 - Math.min(calibrationError * 0.45, 0.2);
     }
 
     confidence = ConfidenceUtil.clamp(confidence);
@@ -121,15 +138,95 @@ export class ConfidenceEngine {
 
     return {
       confidence,
+
       modelAgreement: agreement,
+
       safetyScore: this.clamp(input.safety.safetyScore, 0, 100),
+
       dataQuality: this.clamp(input.probability.dataQuality ?? 0, 0, 100),
+
       statisticalReliability: this.clamp(modelReliability * 100, 0, 100),
+
       calibrationReliability: calibrationReliability * 100,
+
       sampleReliability: sampleReliability * 100,
+
       factors,
+
       reasons,
     };
+  }
+
+  private applyAgreementAdjustment(
+    confidence: number,
+    agreement: number,
+  ): number {
+    /*
+     * Agreement >= 0.85:
+     * essentially no penalty.
+     *
+     * Agreement around 0.70:
+     * modest reduction.
+     *
+     * Agreement <= 0.50:
+     * significant reduction.
+     */
+    let multiplier: number;
+
+    if (agreement >= 0.85) {
+      multiplier = 1;
+    } else if (agreement >= 0.75) {
+      multiplier = 0.97;
+    } else if (agreement >= 0.65) {
+      multiplier = 0.91;
+    } else if (agreement >= 0.55) {
+      multiplier = 0.82;
+    } else {
+      multiplier = 0.7;
+    }
+
+    return confidence * multiplier;
+  }
+
+  private applyProbabilityCoherence(
+    confidence: number,
+    probability: number,
+    agreement: number,
+  ): number {
+    let result = confidence;
+
+    /*
+     * A probability below 70% should not normally carry
+     * very high confidence.
+     */
+    if (probability < 0.6) {
+      result = Math.min(result, 58);
+    } else if (probability < 0.7) {
+      result = Math.min(result, 68);
+    } else if (probability < 0.8) {
+      result = Math.min(result, 78);
+    }
+
+    /*
+     * Very high probabilities require strong agreement.
+     *
+     * This prevents:
+     *
+     * probability = 0.95
+     * agreement = 0.45
+     * confidence = 90+
+     *
+     * from slipping through.
+     */
+    if (probability >= 0.9 && agreement < 0.8) {
+      result = Math.min(result, 78);
+    }
+
+    if (probability >= 0.95 && agreement < 0.85) {
+      result = Math.min(result, 74);
+    }
+
+    return result;
   }
 
   private applyEvidenceCaps(
@@ -144,24 +241,36 @@ export class ConfidenceEngine {
   ): number {
     let result = confidence;
 
-    if (evidence.modelReliability < 0.5) {
+    if (evidence.modelReliability < 0.4) {
+      result = Math.min(result, 55);
+    } else if (evidence.modelReliability < 0.5) {
       result = Math.min(result, 62);
     }
 
-    if (evidence.dataQuality < 0.5) {
-      result = Math.min(result, 60);
+    if (evidence.dataQuality < 0.4) {
+      result = Math.min(result, 55);
+    } else if (evidence.dataQuality < 0.5) {
+      result = Math.min(result, 62);
     }
 
-    if (evidence.sampleReliability < 0.45) {
+    if (evidence.sampleReliability < 0.35) {
+      result = Math.min(result, 58);
+    } else if (evidence.sampleReliability < 0.45) {
       result = Math.min(result, 65);
     }
 
-    if (evidence.agreement < 0.5) {
-      result = Math.min(result, 62);
+    if (evidence.agreement < 0.4) {
+      result = Math.min(result, 50);
+    } else if (evidence.agreement < 0.5) {
+      result = Math.min(result, 58);
+    } else if (evidence.agreement < 0.6) {
+      result = Math.min(result, 65);
     }
 
-    if (evidence.safety < 0.55) {
-      result = Math.min(result, 60);
+    if (evidence.safety < 0.45) {
+      result = Math.min(result, 55);
+    } else if (evidence.safety < 0.55) {
+      result = Math.min(result, 62);
     }
 
     return result;
@@ -179,49 +288,63 @@ export class ConfidenceEngine {
   }): string[] {
     const reasons: string[] = [];
 
-    if (input.probability >= 0.8) {
-      reasons.push('High underlying probability.');
+    if (input.probability >= 0.9) {
+      reasons.push('Underlying probability is very high.');
+    } else if (input.probability >= 0.8) {
+      reasons.push('Underlying probability is high.');
+    } else if (input.probability >= 0.7) {
+      reasons.push('Underlying probability is favourable.');
     }
 
     if (input.modelReliability >= 0.75) {
-      reasons.push('Model reliability is strong.');
+      reasons.push('Primary model reliability is strong.');
+    } else if (input.modelReliability < 0.5) {
+      reasons.push('Primary model reliability limits confidence.');
     }
 
     if (input.dataQuality >= 0.75) {
       reasons.push('Prediction data quality is strong.');
+    } else if (input.dataQuality < 0.5) {
+      reasons.push('Prediction data quality limits confidence.');
+    }
+
+    if (input.sampleReliability >= 0.75) {
+      reasons.push('Historical sample size is substantial.');
+    } else if (input.sampleReliability < 0.45) {
+      reasons.push('Historical sample size is limited.');
+    }
+
+    if (input.agreement >= 0.85) {
+      reasons.push('The three prediction models are strongly aligned.');
+    } else if (input.agreement >= 0.7) {
+      reasons.push('The three prediction models show good agreement.');
+    } else if (input.agreement < 0.6) {
+      reasons.push('The three prediction models show meaningful disagreement.');
+    }
+
+    if (input.safety >= 0.75) {
+      reasons.push('Safety assessment is strong.');
+    } else if (input.safety < 0.55) {
+      reasons.push('Safety assessment limits confidence.');
     }
 
     if (input.calibrationReliability >= 0.75) {
       reasons.push('Historical calibration reliability is strong.');
-    }
-
-    if (
+    } else if (
       input.calibrationReliability > 0 &&
       input.calibrationReliability < 0.55
     ) {
       reasons.push('Calibration history is limited or still developing.');
     }
 
-    if (input.sampleReliability >= 0.75) {
-      reasons.push('Historical sample size is substantial.');
-    }
-
-    if (input.agreement >= 0.75) {
-      reasons.push('Supporting model signals are reasonably consistent.');
-    }
-
-    if (input.safety >= 0.75) {
-      reasons.push('Safety assessment is strong.');
-    }
-
-    if (!reasons.length) {
-      reasons.push('Confidence is limited by the available evidence.');
-    }
-
     if (input.confidence >= 95) {
       reasons.push(
         'Critical confidence requires continued calibration monitoring.',
       );
+    }
+
+    if (!reasons.length) {
+      reasons.push('Confidence is limited by the available evidence.');
     }
 
     return reasons;

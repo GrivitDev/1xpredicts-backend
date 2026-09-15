@@ -21,6 +21,8 @@ export class ProbabilityEngine {
         probability: 0,
         supportingProbability: 0,
         modelSignals: {},
+        modelOutputs: {},
+        modelAgreement: 0,
         sampleSize: 0,
         dataQuality: 0,
         modelReliability: 0,
@@ -29,21 +31,72 @@ export class ProbabilityEngine {
       };
     }
 
+    /*
+     * ----------------------------------------------------------
+     * REALITY MODEL
+     * ----------------------------------------------------------
+     *
+     * This is the dedicated market model already registered
+     * for the current market.
+     */
     const result = model.calculate(input);
 
-    const probability = this.clamp(result.probability, 0, 1);
+    const realityProbability = this.clamp(result.probability, 0, 1);
 
+    /*
+     * ----------------------------------------------------------
+     * THREE-ANGLE ENSEMBLE
+     * ----------------------------------------------------------
+     *
+     * 1. Safety model
+     * 2. Reality model
+     * 3. Independent model
+     *
+     * All three are estimating the SAME market selection.
+     */
     const agreement = RawModelAgreementUtil.calculate(
       input.features,
-      probability,
+      input.market,
+      input.selection,
+      realityProbability,
     );
 
+    const safetyProbability = this.clamp(
+      agreement.modelOutputs.safetyModel ?? 0.5,
+    );
+
+    const independentProbability = this.clamp(
+      agreement.modelOutputs.independentModel ?? 0.5,
+    );
+
+    /*
+     * Reality is the main market model.
+     *
+     * Safety receives the second-largest weight because the
+     * objective is reliable betting decisions rather than
+     * maximizing aggressive probability.
+     *
+     * The independent model supplies the separate challenge
+     * to the primary prediction.
+     */
+    const ensembleProbability = this.clamp(
+      realityProbability * 0.45 +
+        safetyProbability * 0.3 +
+        independentProbability * 0.25,
+    );
+
+    /*
+     * Calibration remains advisory.
+     *
+     * It adjusts the ensemble only after all three predictive
+     * angles have produced their estimate.
+     */
     const calibrationAdjustment = this.getCalibrationAdjustment(
       input.calibrationAdjustment,
     );
 
     const calibratedProbability = this.applyCalibrationAdjustment(
-      probability,
+      ensembleProbability,
       calibrationAdjustment,
     );
 
@@ -52,7 +105,7 @@ export class ProbabilityEngine {
 
       probability: calibratedProbability,
 
-      supportingProbability: probability,
+      supportingProbability: ensembleProbability,
 
       modelAgreement: agreement.agreement,
 
@@ -60,10 +113,18 @@ export class ProbabilityEngine {
 
       modelOutputs: {
         ...(result.modelOutputs ?? {}),
-        rawProbability: probability,
+
+        safetyModel: agreement.modelOutputs.safetyModel,
+
+        realityModel: agreement.modelOutputs.realityModel,
+
+        independentModel: agreement.modelOutputs.independentModel,
+
+        ensembleProbability,
+
         calibratedProbability,
+
         calibrationAdjustment,
-        ...agreement.modelOutputs,
       },
     };
   }
@@ -99,7 +160,7 @@ export class ProbabilityEngine {
     return this.clamp(adjusted, 0.01, 0.99);
   }
 
-  private clamp(value: number, minimum: number, maximum: number): number {
+  private clamp(value: number, minimum = 0, maximum = 1): number {
     if (!Number.isFinite(value)) {
       return minimum;
     }

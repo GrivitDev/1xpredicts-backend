@@ -75,11 +75,15 @@ export class FinalDecisionEngine {
       selection: input.selection,
 
       probability,
+
       confidence,
 
       safetyScore,
+
       modelAgreement,
+
       dataQuality,
+
       calibrationReliability,
 
       risk,
@@ -107,28 +111,33 @@ export class FinalDecisionEngine {
     const config = PREDICTION_DECISION_CONFIG;
 
     /*
-     * Calibration is advisory.
+     * ----------------------------------------------------------
+     * CALIBRATION
+     * ----------------------------------------------------------
      *
-     * A new market may legitimately have no calibration history,
-     * therefore calibration reliability must never be a publication
-     * blocker and must never reject a prediction by itself.
+     * Calibration is never a rejection condition.
      *
-     * Existing calibration still influences:
-     * - probability adjustment
+     * It can influence:
+     * - probability
      * - confidence
      * - safety
      * - risk
      * - decision score
      *
-     * The final decision therefore considers calibration, but does
-     * not require historical calibration before a prediction can exist.
+     * But it cannot prevent a new prediction from existing.
      */
 
     /*
-     * Candidate-level evidence gate.
+     * ----------------------------------------------------------
+     * CORE CANDIDATE GATE
+     * ----------------------------------------------------------
      *
-     * These checks determine whether the market has enough underlying
-     * evidence to be considered a meaningful candidate.
+     * These are the minimum standards for a prediction to be
+     * considered usable.
+     *
+     * The purpose here is NOT to select the strongest market.
+     * It is only to remove predictions that are genuinely too
+     * weak to belong in the candidate pool.
      */
     if (input.probability < config.probability.minimumCandidate) {
       return `Probability below minimum candidate threshold (${config.probability.minimumCandidate}).`;
@@ -151,63 +160,33 @@ export class FinalDecisionEngine {
     }
 
     /*
-     * Calibration is intentionally NOT checked here.
+     * ----------------------------------------------------------
+     * DECISION SCORE
+     * ----------------------------------------------------------
      *
-     * A prediction with calibrationReliability = 0 is still allowed
-     * to proceed when the underlying evidence supports it.
-     */
-
-    /*
-     * Publishable evidence gate.
+     * A candidate must still have enough combined strength.
      *
-     * These checks determine whether this particular market/selection
-     * is strong enough to be selected as a normal published prediction.
-     */
-    if (input.probability < config.probability.minimumPublishable) {
-      return `Probability below publishable threshold (${config.probability.minimumPublishable}).`;
-    }
-
-    if (input.confidence < config.confidence.minimumPublishable) {
-      return `Confidence below publishable threshold (${config.confidence.minimumPublishable}).`;
-    }
-
-    if (input.safetyScore < config.safety.minimumPublishable) {
-      return `Safety score below publishable threshold (${config.safety.minimumPublishable}).`;
-    }
-
-    if (input.modelAgreement < config.agreement.minimumPublishable) {
-      return `Model agreement below publishable threshold (${config.agreement.minimumPublishable}).`;
-    }
-
-    if (input.dataQuality < config.dataQuality.minimumPublishable) {
-      return `Data quality below publishable threshold (${config.dataQuality.minimumPublishable}).`;
-    }
-
-    /*
-     * Calibration reliability is deliberately excluded from the
-     * publishability gate.
+     * The decision score is deliberately the final combined
+     * ranking signal rather than another market-specific rule.
      *
-     * Existing calibration can improve or reduce the final score,
-     * risk classification, probability and confidence, but it cannot
-     * prevent a new prediction from being produced merely because
-     * historical calibration is unavailable or weak.
+     * The stronger publishable thresholds are NOT used as
+     * automatic rejection conditions here.
      */
-
     if (input.decisionScore < config.selection.minimumDecisionScore) {
       return `Decision score below minimum threshold (${config.selection.minimumDecisionScore}).`;
     }
 
     /*
-     * Risk is advisory for ranking/selection.
+     * ----------------------------------------------------------
+     * RISK
+     * ----------------------------------------------------------
      *
-     * The market-selection layer decides which candidates survive.
-     * We do not automatically reject a prediction merely because
-     * PredictionRiskUtil classified it as HIGH.
+     * HIGH risk does not automatically reject a prediction.
      *
-     * This prevents calibration/risk state from becoming a global
-     * prediction shutdown mechanism.
+     * Risk is information for ranking and later presentation.
+     * The market-selection layer should prefer lower-risk,
+     * higher-scoring predictions.
      */
-
     return null;
   }
 

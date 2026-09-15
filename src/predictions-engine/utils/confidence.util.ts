@@ -31,34 +31,50 @@ export class ConfidenceUtil {
     const p = this.clampProbability(probability);
 
     /*
-     * Probability strength is intentionally capped.
-     * High probability alone must not produce high confidence.
+     * Probability contributes to confidence, but it is never
+     * allowed to dominate confidence by itself.
+     *
+     * The intervals are intentionally progressive rather than
+     * making 95% probability automatically equivalent to 95%
+     * confidence.
      */
     if (p < 0.55) {
       return 0;
+    }
+
+    if (p < 0.6) {
+      return 0.25;
     }
 
     if (p < 0.65) {
       return 0.35;
     }
 
+    if (p < 0.7) {
+      return 0.45;
+    }
+
     if (p < 0.75) {
       return 0.55;
     }
 
+    if (p < 0.8) {
+      return 0.65;
+    }
+
     if (p < 0.85) {
-      return 0.72;
+      return 0.74;
     }
 
     if (p < 0.9) {
-      return 0.84;
+      return 0.82;
     }
 
     if (p < 0.95) {
-      return 0.92;
+      return 0.89;
     }
 
-    return 0.96;
+    return 0.94;
   }
 
   static sampleReliability(sampleSize: number): number {

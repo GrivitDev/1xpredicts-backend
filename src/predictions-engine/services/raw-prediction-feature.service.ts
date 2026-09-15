@@ -22,7 +22,7 @@ import {
 
 @Injectable()
 export class RawPredictionFeatureService {
-  async build(input: RawPredictionMatchInput): Promise<RawPredictionFeatures> {
+  build(input: RawPredictionMatchInput): RawPredictionFeatures {
     const fixture = input.fixture;
 
     const homeTeamId = String(fixture.homeTeamId).trim();
@@ -111,7 +111,9 @@ export class RawPredictionFeatureService {
       overallSampleSize,
 
       dataCompleteness,
+
       historicalDataQuality,
+
       overallDataQuality,
 
       generatedAt: new Date(),
@@ -126,13 +128,6 @@ export class RawPredictionFeatureService {
     teamStats: any,
     performanceProfile: any,
   ): RawTeamFeatures {
-    /*
-     * Prediction calculations are based on historical
-     * fixtures. Stored sports statistics are used only
-     * where they represent historical descriptive data.
-     *
-     * They are not treated as prediction probabilities.
-     */
     const sorted = [...historical].sort(
       (a, b) => b.fixtureDate.getTime() - a.fixtureDate.getTime(),
     );
@@ -149,17 +144,17 @@ export class RawPredictionFeatureService {
 
     const venue = this.calculateVenue(venueFixtures, teamId);
 
-    const firstHalf = this.calculateHalf(sorted, teamId, true);
-
-    const secondHalf = this.calculateHalf(sorted, teamId, false);
-
-    const scoredFirstRate = this.calculateScoredFirstRate(sorted, teamId);
-
     /*
-     * Stored descriptive statistics can fill genuine
-     * historical data gaps, but never overwrite a
-     * sufficiently populated fixture-derived sample.
+     * Half-time and first-score data are left unavailable
+     * until the historical ESPN data actually provides those
+     * fields. No values are fabricated here.
      */
+    const firstHalf = this.calculateHalf();
+
+    const secondHalf = this.calculateHalf();
+
+    const scoredFirstRate = this.calculateScoredFirstRate();
+
     const completedSample = sorted.length;
 
     const fallbackStats = this.getHistoricalFallbackStats(
@@ -175,25 +170,33 @@ export class RawPredictionFeatureService {
 
     return {
       teamId,
+
       teamName,
 
       sampleSize: mergedOverall.sampleSize,
 
       wins: mergedOverall.wins,
+
       draws: mergedOverall.draws,
+
       losses: mergedOverall.losses,
 
       points: mergedOverall.points,
+
       pointsPerMatch: mergedOverall.pointsPerMatch,
 
       goalsScored: mergedOverall.goalsScored,
+
       goalsConceded: mergedOverall.goalsConceded,
 
       averageGoalsScored: mergedOverall.averageGoalsScored,
+
       averageGoalsConceded: mergedOverall.averageGoalsConceded,
 
       winRate: mergedOverall.winRate,
+
       drawRate: mergedOverall.drawRate,
+
       lossRate: mergedOverall.lossRate,
 
       bttsRate: mergedOverall.bttsRate,
@@ -203,13 +206,19 @@ export class RawPredictionFeatureService {
       failedToScoreRate: mergedOverall.failedToScoreRate,
 
       over05Rate: mergedOverall.over05Rate,
+
       over15Rate: mergedOverall.over15Rate,
+
       over25Rate: mergedOverall.over25Rate,
+
       over35Rate: mergedOverall.over35Rate,
+
       over45Rate: mergedOverall.over45Rate,
+
       over55Rate: mergedOverall.over55Rate,
 
       firstHalf,
+
       secondHalf,
 
       scoredFirstRate,
@@ -289,14 +298,31 @@ export class RawPredictionFeatureService {
         failedToScore++;
       }
 
-      const total = match.totalGoals;
+      const total = Math.max(match.totalGoals, 0);
 
-      if (total > 0) over05++;
-      if (total > 1) over15++;
-      if (total > 2) over25++;
-      if (total > 3) over35++;
-      if (total > 4) over45++;
-      if (total > 5) over55++;
+      if (total > 0) {
+        over05++;
+      }
+
+      if (total > 1) {
+        over15++;
+      }
+
+      if (total > 2) {
+        over25++;
+      }
+
+      if (total > 3) {
+        over35++;
+      }
+
+      if (total > 4) {
+        over45++;
+      }
+
+      if (total > 5) {
+        over55++;
+      }
     }
 
     const points = wins * 3 + draws;
@@ -315,6 +341,7 @@ export class RawPredictionFeatureService {
       pointsPerMatch: this.safeDivide(points, sampleSize),
 
       goalsScored,
+
       goalsConceded,
 
       averageGoalsScored: this.safeDivide(goalsScored, sampleSize),
@@ -361,28 +388,39 @@ export class RawPredictionFeatureService {
       losses: base.losses,
 
       points: base.points,
+
       pointsPerMatch: base.pointsPerMatch,
 
       goalsScored: base.goalsScored,
+
       goalsConceded: base.goalsConceded,
 
       averageGoalsScored: base.averageGoalsScored,
+
       averageGoalsConceded: base.averageGoalsConceded,
 
       winRate: base.winRate,
+
       drawRate: base.drawRate,
+
       lossRate: base.lossRate,
 
       bttsRate: base.bttsRate,
 
       cleanSheetRate: base.cleanSheetRate,
+
       failedToScoreRate: base.failedToScoreRate,
 
       over05Rate: base.over05Rate,
+
       over15Rate: base.over15Rate,
+
       over25Rate: base.over25Rate,
+
       over35Rate: base.over35Rate,
+
       over45Rate: base.over45Rate,
+
       over55Rate: base.over55Rate,
     };
   }
@@ -397,51 +435,50 @@ export class RawPredictionFeatureService {
       sampleSize: base.sampleSize,
 
       wins: base.wins,
+
       draws: base.draws,
+
       losses: base.losses,
 
       points: base.points,
+
       pointsPerMatch: base.pointsPerMatch,
 
       goalsScored: base.goalsScored,
+
       goalsConceded: base.goalsConceded,
 
       averageGoalsScored: base.averageGoalsScored,
+
       averageGoalsConceded: base.averageGoalsConceded,
 
       winRate: base.winRate,
+
       drawRate: base.drawRate,
+
       lossRate: base.lossRate,
 
       bttsRate: base.bttsRate,
 
       cleanSheetRate: base.cleanSheetRate,
+
       failedToScoreRate: base.failedToScoreRate,
 
       over05Rate: base.over05Rate,
+
       over15Rate: base.over15Rate,
+
       over25Rate: base.over25Rate,
+
       over35Rate: base.over35Rate,
+
       over45Rate: base.over45Rate,
+
       over55Rate: base.over55Rate,
     };
   }
 
-  private calculateHalf(
-    matches: RawHistoricalMatchFeatures[],
-    teamId: string,
-    firstHalf: boolean,
-  ): RawTeamHalfFeatures {
-    /*
-     * The fixture schema currently does not expose
-     * guaranteed half-time scores in the historical
-     * feature contract used here.
-     *
-     * Therefore this layer does not invent half-time
-     * information. The probability model can use the
-     * resulting full-match fallback when timing data
-     * is unavailable.
-     */
+  private calculateHalf(): RawTeamHalfFeatures {
     return {
       sampleSize: 0,
 
@@ -453,17 +490,7 @@ export class RawPredictionFeatureService {
     };
   }
 
-  private calculateScoredFirstRate(
-    matches: RawHistoricalMatchFeatures[],
-    teamId: string,
-  ): number {
-    /*
-     * No scoring-event sequence is available in the
-     * current ESPN fixture dataset.
-     *
-     * Returning zero prevents fabricated first-score
-     * information from entering the model.
-     */
+  private calculateScoredFirstRate(): number {
     return 0;
   }
 
@@ -488,28 +515,39 @@ export class RawPredictionFeatureService {
       return null;
     }
 
+    const standingRecord = standing as Record<string, unknown>;
+
     return {
       teamId,
 
-      rank: this.toNumber(standing.rank),
+      rank: this.toNumber(standingRecord['rank']),
 
-      points: this.toNumber(standing.points),
+      points: this.toNumber(standingRecord['points']),
 
-      played: this.toNumber(standing.played),
+      played: this.toNumber(standingRecord['played']),
 
-      wins: this.toNumber(standing.wins),
+      wins: this.toNumber(standingRecord['wins']),
 
-      draws: this.toNumber(standing.draws),
+      draws: this.toNumber(standingRecord['draws']),
 
-      losses: this.toNumber(standing.losses),
+      losses: this.toNumber(standingRecord['losses']),
 
-      goalsFor: this.toNumber(standing.goalsFor ?? standing.gf),
+      goalsFor: this.toNumber(
+        standingRecord['goalsFor'] ?? standingRecord['gf'],
+      ),
 
-      goalsAgainst: this.toNumber(standing.goalsAgainst ?? standing.ga),
+      goalsAgainst: this.toNumber(
+        standingRecord['goalsAgainst'] ?? standingRecord['ga'],
+      ),
 
-      goalDifference: this.toNumber(standing.goalDifference ?? standing.gd),
+      goalDifference: this.toNumber(
+        standingRecord['goalDifference'] ?? standingRecord['gd'],
+      ),
 
-      form: typeof standing.form === 'string' ? standing.form : null,
+      form:
+        typeof standingRecord['form'] === 'string'
+          ? String(standingRecord['form'])
+          : null,
     };
   }
 
@@ -521,24 +559,29 @@ export class RawPredictionFeatureService {
       return null;
     }
 
-    const teamA = String(
-      headToHead.teamAId ?? headToHead.homeTeamId ?? '',
-    ).trim();
+    const record = headToHead as Record<string, unknown>;
+
+    const teamAValue = record['teamAId'] ?? record['homeTeamId'];
+
+    const teamA =
+      typeof teamAValue === 'string' || typeof teamAValue === 'number'
+        ? String(teamAValue).trim()
+        : '';
 
     const homeIsTeamA = teamA === homeTeamId;
 
     const homeWins = homeIsTeamA
-      ? this.toNumber(headToHead.teamAWins ?? headToHead.homeWins)
-      : this.toNumber(headToHead.teamBWins ?? headToHead.awayWins);
+      ? this.toNumber(record['teamAWins'] ?? record['homeWins'])
+      : this.toNumber(record['teamBWins'] ?? record['awayWins']);
 
     const awayWins = homeIsTeamA
-      ? this.toNumber(headToHead.teamBWins ?? headToHead.awayWins)
-      : this.toNumber(headToHead.teamAWins ?? headToHead.homeWins);
+      ? this.toNumber(record['teamBWins'] ?? record['awayWins'])
+      : this.toNumber(record['teamAWins'] ?? record['homeWins']);
 
-    const draws = this.toNumber(headToHead.draws);
+    const draws = this.toNumber(record['draws']);
 
     const sampleSize = this.toNumber(
-      headToHead.sampleSize ?? headToHead.totalMeetings,
+      record['sampleSize'] ?? record['totalMeetings'],
     );
 
     return {
@@ -552,106 +595,133 @@ export class RawPredictionFeatureService {
 
       averageGoalsForHome: this.toNumber(
         homeIsTeamA
-          ? (headToHead.averageGoalsTeamA ?? headToHead.averageGoalsHome)
-          : (headToHead.averageGoalsTeamB ?? headToHead.averageGoalsAway),
+          ? (record['averageGoalsTeamA'] ?? record['averageGoalsHome'])
+          : (record['averageGoalsTeamB'] ?? record['averageGoalsAway']),
       ),
 
       averageGoalsForAway: this.toNumber(
         homeIsTeamA
-          ? (headToHead.averageGoalsTeamB ?? headToHead.averageGoalsAway)
-          : (headToHead.averageGoalsTeamA ?? headToHead.averageGoalsHome),
+          ? (record['averageGoalsTeamB'] ?? record['averageGoalsAway'])
+          : (record['averageGoalsTeamA'] ?? record['averageGoalsHome']),
       ),
 
       averageGoalsForTeam: this.toNumber(
         homeIsTeamA
-          ? (headToHead.averageGoalsTeamA ?? headToHead.averageGoalsHome)
-          : (headToHead.averageGoalsTeamB ?? headToHead.averageGoalsAway),
+          ? (record['averageGoalsTeamA'] ?? record['averageGoalsHome'])
+          : (record['averageGoalsTeamB'] ?? record['averageGoalsAway']),
       ),
 
-      averageTotalGoals: this.toNumber(headToHead.averageTotalGoals),
+      averageTotalGoals: this.toNumber(record['averageTotalGoals']),
 
-      bttsRate: this.readRate(headToHead.bttsRate),
+      bttsRate: this.readRate(record['bttsRate']),
 
       cleanSheetHomeRate: this.readRate(
         homeIsTeamA
-          ? (headToHead.cleanSheetTeamARate ?? headToHead.cleanSheetHomeRate)
-          : (headToHead.cleanSheetTeamBRate ?? headToHead.cleanSheetAwayRate),
+          ? (record['cleanSheetTeamARate'] ?? record['cleanSheetHomeRate'])
+          : (record['cleanSheetTeamBRate'] ?? record['cleanSheetAwayRate']),
       ),
 
       cleanSheetAwayRate: this.readRate(
         homeIsTeamA
-          ? (headToHead.cleanSheetTeamBRate ?? headToHead.cleanSheetAwayRate)
-          : (headToHead.cleanSheetTeamARate ?? headToHead.cleanSheetHomeRate),
+          ? (record['cleanSheetTeamBRate'] ?? record['cleanSheetAwayRate'])
+          : (record['cleanSheetTeamARate'] ?? record['cleanSheetHomeRate']),
       ),
 
       failedToScoreHomeRate: this.readRate(
         homeIsTeamA
-          ? headToHead.failedToScoreTeamARate
-          : headToHead.failedToScoreTeamBRate,
+          ? record['failedToScoreTeamARate']
+          : record['failedToScoreTeamBRate'],
       ),
 
       failedToScoreAwayRate: this.readRate(
         homeIsTeamA
-          ? headToHead.failedToScoreTeamBRate
-          : headToHead.failedToScoreTeamARate,
+          ? record['failedToScoreTeamBRate']
+          : record['failedToScoreTeamARate'],
       ),
 
-      over05Rate: this.readRate(headToHead.over05Rate),
+      over05Rate: this.readRate(record['over05Rate']),
 
-      over15Rate: this.readRate(headToHead.over15Rate),
+      over15Rate: this.readRate(record['over15Rate']),
 
-      over25Rate: this.readRate(headToHead.over25Rate),
+      over25Rate: this.readRate(record['over25Rate']),
 
-      over35Rate: this.readRate(headToHead.over35Rate),
+      over35Rate: this.readRate(record['over35Rate']),
 
-      over45Rate: this.readRate(headToHead.over45Rate),
+      over45Rate: this.readRate(record['over45Rate']),
 
-      over55Rate: this.readRate(headToHead.over55Rate),
+      over55Rate: this.readRate(record['over55Rate']),
 
       homeScoredFirstRate: this.readRate(
         homeIsTeamA
-          ? headToHead.teamAScoredFirstRate
-          : headToHead.teamBScoredFirstRate,
+          ? record['teamAScoredFirstRate']
+          : record['teamBScoredFirstRate'],
       ),
 
       awayScoredFirstRate: this.readRate(
         homeIsTeamA
-          ? headToHead.teamBScoredFirstRate
-          : headToHead.teamAScoredFirstRate,
+          ? record['teamBScoredFirstRate']
+          : record['teamAScoredFirstRate'],
       ),
 
       dataReliability: this.clamp(
-        this.toNumber(headToHead.dataReliability),
+        this.toNumber(record['dataReliability']),
         0,
         1,
       ),
     };
   }
 
-  private toHistoricalMatches(fixtures: any[]): RawHistoricalMatchFeatures[] {
+  private toHistoricalMatches(
+    fixtures: readonly unknown[],
+  ): RawHistoricalMatchFeatures[] {
     return fixtures
-      .filter(
-        (fixture) =>
-          fixture?.completed === true &&
-          fixture?.fixtureDate &&
-          fixture?.homeTeamId &&
-          fixture?.awayTeamId,
-      )
+      .filter((fixture: unknown): fixture is Record<string, unknown> => {
+        if (typeof fixture !== 'object' || fixture === null) {
+          return false;
+        }
+
+        const candidate = fixture as Record<string, unknown>;
+
+        return (
+          candidate['completed'] === true &&
+          Boolean(candidate['fixtureDate']) &&
+          Boolean(candidate['homeTeamId']) &&
+          Boolean(candidate['awayTeamId'])
+        );
+      })
       .map((fixture) => {
         const homeGoals = this.extractScore(fixture, true);
 
         const awayGoals = this.extractScore(fixture, false);
 
+        /*
+         * Missing scores are NOT converted to 0.
+         *
+         * A historical fixture is only usable for
+         * prediction statistics when both scores are
+         * genuinely available.
+         */
+        if (homeGoals === null || awayGoals === null) {
+          return null;
+        }
+
+        const fixtureDate = new Date(String(fixture.fixtureDate));
+
+        if (!Number.isFinite(fixtureDate.getTime())) {
+          return null;
+        }
+
         return {
           eventId: String(fixture.eventId),
 
-          fixtureDate: new Date(fixture.fixtureDate),
+          fixtureDate,
 
           homeTeamId: String(fixture.homeTeamId),
 
           awayTeamId: String(fixture.awayTeamId),
 
           homeGoals,
+
           awayGoals,
 
           totalGoals: homeGoals + awayGoals,
@@ -659,100 +729,236 @@ export class RawPredictionFeatureService {
           completed: true,
         };
       })
-      .filter((fixture) => Number.isFinite(fixture.fixtureDate.getTime()));
+      .filter(
+        (fixture): fixture is RawHistoricalMatchFeatures => fixture !== null,
+      );
   }
 
-  private extractScore(fixture: any, home: boolean): number {
-    const direct = home ? fixture.homeScore : fixture.awayScore;
+  private extractScore(fixture: unknown, home: boolean): number | null {
+    const fixtureRecord = fixture as Record<string, unknown>;
+    const direct = home ? fixtureRecord.homeScore : fixtureRecord.awayScore;
 
-    if (typeof direct === 'number' && Number.isFinite(direct)) {
-      return Math.max(Math.round(direct), 0);
+    const directScore = this.readScoreValue(direct);
+
+    if (directScore !== null) {
+      return directScore;
     }
 
     const nested = home
-      ? (fixture.home?.score ?? fixture.scores?.home)
-      : (fixture.away?.score ?? fixture.scores?.away);
+      ? (this.readNestedScore(fixtureRecord.home) ??
+        this.readNestedScore(fixtureRecord.scores, 'home'))
+      : (this.readNestedScore(fixtureRecord.away) ??
+        this.readNestedScore(fixtureRecord.scores, 'away'));
 
-    if (typeof nested === 'number' && Number.isFinite(nested)) {
-      return Math.max(Math.round(nested), 0);
+    const nestedScore = this.readScoreValue(nested);
+
+    if (nestedScore !== null) {
+      return nestedScore;
     }
 
-    return 0;
+    const teamScore = home
+      ? this.readNestedScore(fixtureRecord.homeTeam)
+      : this.readNestedScore(fixtureRecord.awayTeam);
+
+    const teamScoreValue = this.readScoreValue(teamScore);
+
+    if (teamScoreValue !== null) {
+      return teamScoreValue;
+    }
+
+    return null;
+  }
+
+  private readNestedScore(value: unknown, key = 'score'): unknown {
+    if (typeof value !== 'object' || value === null) {
+      return undefined;
+    }
+
+    return (value as Record<string, unknown>)[key];
+  }
+
+  private readScoreValue(value: unknown): number | null {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return Math.max(Math.round(value), 0);
+    }
+
+    if (typeof value === 'string') {
+      const parsed = Number(value);
+
+      if (Number.isFinite(parsed)) {
+        return Math.max(Math.round(parsed), 0);
+      }
+    }
+
+    return null;
   }
 
   private getHistoricalFallbackStats(
-    teamStats: any,
-    performanceProfile: any,
+    teamStats: unknown,
+    performanceProfile: unknown,
   ): Partial<RawTeamFeatures> {
-    const source = teamStats ?? performanceProfile;
+    type HistoricalFallbackSource = Record<string, unknown> & {
+      overall?: Record<string, unknown>;
+    };
 
-    if (!source) {
+    const sources = [teamStats, performanceProfile].filter(
+      (source): source is HistoricalFallbackSource =>
+        typeof source === 'object' && source !== null,
+    );
+
+    if (!sources.length) {
       return {};
     }
 
+    /*
+     * TeamCompetitionStats takes precedence for fields that
+     * exist there. PerformanceProfile fills fields that the
+     * first source does not provide.
+     */
+    const source = sources[0] ?? {};
+
+    const secondary = sources[1] ?? {};
+
     return {
-      sampleSize: this.toNumber(source.sampleSize ?? source.matchesPlayed),
-
-      wins: this.toNumber(source.wins ?? source.overall?.wins),
-
-      draws: this.toNumber(source.draws ?? source.overall?.draws),
-
-      losses: this.toNumber(source.losses ?? source.overall?.losses),
-
-      goalsScored: this.toNumber(
-        source.goalsScored ?? source.overall?.goalsScored,
+      sampleSize: this.firstNumber(
+        source.sampleSize,
+        source.matchesPlayed,
+        secondary.sampleSize,
+        secondary.matchesPlayed,
       ),
 
-      goalsConceded: this.toNumber(
-        source.goalsConceded ?? source.overall?.goalsConceded,
+      wins: this.firstNumber(
+        source.wins,
+        source.overall?.wins,
+        secondary.wins,
+        secondary.overall?.wins,
       ),
 
-      averageGoalsScored: this.toNumber(
-        source.averageGoalsScored ?? source.overall?.averageGoalsScored,
+      draws: this.firstNumber(
+        source.draws,
+        source.overall?.draws,
+        secondary.draws,
+        secondary.overall?.draws,
       ),
 
-      averageGoalsConceded: this.toNumber(
-        source.averageGoalsConceded ?? source.overall?.averageGoalsConceded,
+      losses: this.firstNumber(
+        source.losses,
+        source.overall?.losses,
+        secondary.losses,
+        secondary.overall?.losses,
       ),
 
-      winRate: this.readRate(source.winRate ?? source.overall?.winRate),
-
-      drawRate: this.readRate(source.drawRate ?? source.overall?.drawRate),
-
-      lossRate: this.readRate(source.lossRate ?? source.overall?.lossRate),
-
-      bttsRate: this.readRate(source.bttsRate ?? source.overall?.bttsRate),
-
-      cleanSheetRate: this.readRate(
-        source.cleanSheetRate ?? source.overall?.cleanSheetRate,
+      goalsScored: this.firstNumber(
+        source.goalsScored,
+        source.overall?.goalsScored,
+        secondary.goalsScored,
+        secondary.overall?.goalsScored,
       ),
 
-      failedToScoreRate: this.readRate(
-        source.failedToScoreRate ?? source.overall?.failedToScoreRate,
+      goalsConceded: this.firstNumber(
+        source.goalsConceded,
+        source.overall?.goalsConceded,
+        secondary.goalsConceded,
+        secondary.overall?.goalsConceded,
       ),
 
-      over05Rate: this.readRate(
-        source.over05Rate ?? source.overall?.over05Rate,
+      averageGoalsScored: this.firstNumber(
+        source.averageGoalsScored,
+        source.overall?.averageGoalsScored,
+        secondary.averageGoalsScored,
+        secondary.overall?.averageGoalsScored,
       ),
 
-      over15Rate: this.readRate(
-        source.over15Rate ?? source.overall?.over15Rate,
+      averageGoalsConceded: this.firstNumber(
+        source.averageGoalsConceded,
+        source.overall?.averageGoalsConceded,
+        secondary.averageGoalsConceded,
+        secondary.overall?.averageGoalsConceded,
       ),
 
-      over25Rate: this.readRate(
-        source.over25Rate ?? source.overall?.over25Rate,
+      winRate: this.firstRate(
+        source.winRate,
+        source.overall?.winRate,
+        secondary.winRate,
+        secondary.overall?.winRate,
       ),
 
-      over35Rate: this.readRate(
-        source.over35Rate ?? source.overall?.over35Rate,
+      drawRate: this.firstRate(
+        source.drawRate,
+        source.overall?.drawRate,
+        secondary.drawRate,
+        secondary.overall?.drawRate,
       ),
 
-      over45Rate: this.readRate(
-        source.over45Rate ?? source.overall?.over45Rate,
+      lossRate: this.firstRate(
+        source.lossRate,
+        source.overall?.lossRate,
+        secondary.lossRate,
+        secondary.overall?.lossRate,
       ),
 
-      over55Rate: this.readRate(
-        source.over55Rate ?? source.overall?.over55Rate,
+      bttsRate: this.firstRate(
+        source.bttsRate,
+        source.overall?.bttsRate,
+        secondary.bttsRate,
+        secondary.overall?.bttsRate,
+      ),
+
+      cleanSheetRate: this.firstRate(
+        source.cleanSheetRate,
+        source.overall?.cleanSheetRate,
+        secondary.cleanSheetRate,
+        secondary.overall?.cleanSheetRate,
+      ),
+
+      failedToScoreRate: this.firstRate(
+        source.failedToScoreRate,
+        source.overall?.failedToScoreRate,
+        secondary.failedToScoreRate,
+        secondary.overall?.failedToScoreRate,
+      ),
+
+      over05Rate: this.firstRate(
+        source.over05Rate,
+        source.overall?.over05Rate,
+        secondary.over05Rate,
+        secondary.overall?.over05Rate,
+      ),
+
+      over15Rate: this.firstRate(
+        source.over15Rate,
+        source.overall?.over15Rate,
+        secondary.over15Rate,
+        secondary.overall?.over15Rate,
+      ),
+
+      over25Rate: this.firstRate(
+        source.over25Rate,
+        source.overall?.over25Rate,
+        secondary.over25Rate,
+        secondary.overall?.over25Rate,
+      ),
+
+      over35Rate: this.firstRate(
+        source.over35Rate,
+        source.overall?.over35Rate,
+        secondary.over35Rate,
+        secondary.overall?.over35Rate,
+      ),
+
+      over45Rate: this.firstRate(
+        source.over45Rate,
+        source.overall?.over45Rate,
+        secondary.over45Rate,
+        secondary.over45Rate,
+        secondary.over45Rate,
+      ),
+
+      over55Rate: this.firstRate(
+        source.over55Rate,
+        source.overall?.over55Rate,
+        secondary.over55Rate,
+        secondary.overall?.over55Rate,
       ),
     };
   }
@@ -766,114 +972,94 @@ export class RawPredictionFeatureService {
       return calculated;
     }
 
+    const useCalculated = completedSample > 0;
+
     return {
       ...calculated,
 
-      sampleSize:
-        completedSample > 0
-          ? calculated.sampleSize
-          : this.toNumber(fallback.sampleSize),
+      sampleSize: useCalculated
+        ? calculated.sampleSize
+        : this.toNumber(fallback.sampleSize),
 
-      wins:
-        completedSample > 0 ? calculated.wins : this.toNumber(fallback.wins),
+      wins: useCalculated ? calculated.wins : this.toNumber(fallback.wins),
 
-      draws:
-        completedSample > 0 ? calculated.draws : this.toNumber(fallback.draws),
+      draws: useCalculated ? calculated.draws : this.toNumber(fallback.draws),
 
-      losses:
-        completedSample > 0
-          ? calculated.losses
-          : this.toNumber(fallback.losses),
+      losses: useCalculated
+        ? calculated.losses
+        : this.toNumber(fallback.losses),
 
-      goalsScored:
-        completedSample > 0
-          ? calculated.goalsScored
-          : this.toNumber(fallback.goalsScored),
+      goalsScored: useCalculated
+        ? calculated.goalsScored
+        : this.toNumber(fallback.goalsScored),
 
-      goalsConceded:
-        completedSample > 0
-          ? calculated.goalsConceded
-          : this.toNumber(fallback.goalsConceded),
+      goalsConceded: useCalculated
+        ? calculated.goalsConceded
+        : this.toNumber(fallback.goalsConceded),
 
-      averageGoalsScored:
-        completedSample > 0
-          ? calculated.averageGoalsScored
-          : this.toNumber(fallback.averageGoalsScored),
+      averageGoalsScored: useCalculated
+        ? calculated.averageGoalsScored
+        : this.toNumber(fallback.averageGoalsScored),
 
-      averageGoalsConceded:
-        completedSample > 0
-          ? calculated.averageGoalsConceded
-          : this.toNumber(fallback.averageGoalsConceded),
+      averageGoalsConceded: useCalculated
+        ? calculated.averageGoalsConceded
+        : this.toNumber(fallback.averageGoalsConceded),
 
-      winRate:
-        completedSample > 0
-          ? calculated.winRate
-          : this.readRate(fallback.winRate),
+      winRate: useCalculated
+        ? calculated.winRate
+        : this.readRate(fallback.winRate),
 
-      drawRate:
-        completedSample > 0
-          ? calculated.drawRate
-          : this.readRate(fallback.drawRate),
+      drawRate: useCalculated
+        ? calculated.drawRate
+        : this.readRate(fallback.drawRate),
 
-      lossRate:
-        completedSample > 0
-          ? calculated.lossRate
-          : this.readRate(fallback.lossRate),
+      lossRate: useCalculated
+        ? calculated.lossRate
+        : this.readRate(fallback.lossRate),
 
-      bttsRate:
-        completedSample > 0
-          ? calculated.bttsRate
-          : this.readRate(fallback.bttsRate),
+      bttsRate: useCalculated
+        ? calculated.bttsRate
+        : this.readRate(fallback.bttsRate),
 
-      cleanSheetRate:
-        completedSample > 0
-          ? calculated.cleanSheetRate
-          : this.readRate(fallback.cleanSheetRate),
+      cleanSheetRate: useCalculated
+        ? calculated.cleanSheetRate
+        : this.readRate(fallback.cleanSheetRate),
 
-      failedToScoreRate:
-        completedSample > 0
-          ? calculated.failedToScoreRate
-          : this.readRate(fallback.failedToScoreRate),
+      failedToScoreRate: useCalculated
+        ? calculated.failedToScoreRate
+        : this.readRate(fallback.failedToScoreRate),
 
-      over05Rate:
-        completedSample > 0
-          ? calculated.over05Rate
-          : this.readRate(fallback.over05Rate),
+      over05Rate: useCalculated
+        ? calculated.over05Rate
+        : this.readRate(fallback.over05Rate),
 
-      over15Rate:
-        completedSample > 0
-          ? calculated.over15Rate
-          : this.readRate(fallback.over15Rate),
+      over15Rate: useCalculated
+        ? calculated.over15Rate
+        : this.readRate(fallback.over15Rate),
 
-      over25Rate:
-        completedSample > 0
-          ? calculated.over25Rate
-          : this.readRate(fallback.over25Rate),
+      over25Rate: useCalculated
+        ? calculated.over25Rate
+        : this.readRate(fallback.over25Rate),
 
-      over35Rate:
-        completedSample > 0
-          ? calculated.over35Rate
-          : this.readRate(fallback.over35Rate),
+      over35Rate: useCalculated
+        ? calculated.over35Rate
+        : this.readRate(fallback.over35Rate),
 
-      over45Rate:
-        completedSample > 0
-          ? calculated.over45Rate
-          : this.readRate(fallback.over45Rate),
+      over45Rate: useCalculated
+        ? calculated.over45Rate
+        : this.readRate(fallback.over45Rate),
 
-      over55Rate:
-        completedSample > 0
-          ? calculated.over55Rate
-          : this.readRate(fallback.over55Rate),
+      over55Rate: useCalculated
+        ? calculated.over55Rate
+        : this.readRate(fallback.over55Rate),
 
-      points:
-        completedSample > 0
-          ? calculated.points
-          : this.toNumber(fallback.points),
+      points: useCalculated
+        ? calculated.points
+        : this.toNumber(fallback.points),
 
-      pointsPerMatch:
-        completedSample > 0
-          ? calculated.pointsPerMatch
-          : this.toNumber(fallback.pointsPerMatch),
+      pointsPerMatch: useCalculated
+        ? calculated.pointsPerMatch
+        : this.toNumber(fallback.pointsPerMatch),
     };
   }
 
@@ -883,7 +1069,12 @@ export class RawPredictionFeatureService {
     standings: RawStandingFeatures,
     h2h: RawHeadToHeadFeatures | null,
   ): number {
-    const checks = [
+    /*
+     * Core evidence carries the majority of the completeness
+     * score. H2H is supplementary and should not damage the
+     * overall score simply because no historical meeting exists.
+     */
+    const coreChecks = [
       home.sampleSize > 0,
       away.sampleSize > 0,
 
@@ -895,13 +1086,15 @@ export class RawPredictionFeatureService {
 
       standings.home !== null,
       standings.away !== null,
-
-      h2h?.available === true,
     ];
 
-    const available = checks.filter(Boolean).length;
+    const coreAvailable = coreChecks.filter(Boolean).length;
 
-    return (available / checks.length) * 100;
+    const coreCompleteness = (coreAvailable / coreChecks.length) * 100;
+
+    const h2hSupplement = h2h?.available === true ? 5 : 0;
+
+    return this.clamp(coreCompleteness * 0.95 + h2hSupplement, 0, 100);
   }
 
   private calculateHistoricalDataQuality(
@@ -910,26 +1103,29 @@ export class RawPredictionFeatureService {
     home: RawTeamFeatures,
     away: RawTeamFeatures,
   ): number {
-    const homeSample = Math.min(homeHistoricalSample / 30, 1);
+    const homeSample = Math.min(Math.max(homeHistoricalSample, 0) / 30, 1);
 
-    const awaySample = Math.min(awayHistoricalSample / 30, 1);
+    const awaySample = Math.min(Math.max(awayHistoricalSample, 0) / 30, 1);
 
-    const teamAvailability =
-      home.dataAvailability.historicalMatches &&
-      away.dataAvailability.historicalMatches
-        ? 1
-        : 0;
+    const homeAvailability = home.dataAvailability.historicalMatches ? 1 : 0;
 
-    return this.clamp(
-      (homeSample * 0.4 + awaySample * 0.4 + teamAvailability * 0.2) * 100,
-      0,
-      100,
-    );
+    const awayAvailability = away.dataAvailability.historicalMatches ? 1 : 0;
+
+    const balancedSample = Math.min(homeSample, awaySample);
+
+    const availability = (homeAvailability + awayAvailability) / 2;
+
+    /*
+     * Balanced samples are more important than having one
+     * team with a large history and the other with almost none.
+     */
+    return this.clamp(balancedSample * 0.7 + availability * 0.3, 0, 1) * 100;
   }
 
   private emptyTeamFeatures(teamId: string, teamName: string): RawTeamFeatures {
     return {
       teamId,
+
       teamName,
 
       sampleSize: 0,
@@ -983,21 +1179,29 @@ export class RawPredictionFeatureService {
 
       recent: {
         sampleSize: 0,
+
         wins: 0,
         draws: 0,
         losses: 0,
+
         points: 0,
         pointsPerMatch: 0,
+
         goalsScored: 0,
         goalsConceded: 0,
+
         averageGoalsScored: 0,
         averageGoalsConceded: 0,
+
         winRate: 0,
         drawRate: 0,
         lossRate: 0,
+
         bttsRate: 0,
+
         cleanSheetRate: 0,
         failedToScoreRate: 0,
+
         over05Rate: 0,
         over15Rate: 0,
         over25Rate: 0,
@@ -1008,21 +1212,29 @@ export class RawPredictionFeatureService {
 
       venue: {
         sampleSize: 0,
+
         wins: 0,
         draws: 0,
         losses: 0,
+
         points: 0,
         pointsPerMatch: 0,
+
         goalsScored: 0,
         goalsConceded: 0,
+
         averageGoalsScored: 0,
         averageGoalsConceded: 0,
+
         winRate: 0,
         drawRate: 0,
         lossRate: 0,
+
         bttsRate: 0,
+
         cleanSheetRate: 0,
         failedToScoreRate: 0,
+
         over05Rate: 0,
         over15Rate: 0,
         over25Rate: 0,
@@ -1041,6 +1253,38 @@ export class RawPredictionFeatureService {
         scoredFirstData: false,
       },
     };
+  }
+
+  private firstNumber(...values: unknown[]): number {
+    for (const value of values) {
+      const number = Number(value);
+
+      if (Number.isFinite(number)) {
+        return number;
+      }
+    }
+
+    return 0;
+  }
+
+  private firstRate(...values: unknown[]): number {
+    for (const value of values) {
+      if (value === null || value === undefined) {
+        continue;
+      }
+
+      const number = Number(value);
+
+      if (!Number.isFinite(number) || number < 0) {
+        continue;
+      }
+
+      return number > 1
+        ? this.clamp(number / 100, 0, 1)
+        : this.clamp(number, 0, 1);
+    }
+
+    return 0;
   }
 
   private safeDivide(numerator: number, denominator: number): number {
@@ -1062,9 +1306,9 @@ export class RawPredictionFeatureService {
   }
 
   private readRate(value: unknown): number {
-    const number = this.toNumber(value);
+    const number = Number(value);
 
-    if (number < 0) {
+    if (!Number.isFinite(number) || number < 0) {
       return 0;
     }
 
