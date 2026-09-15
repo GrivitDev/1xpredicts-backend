@@ -68,6 +68,26 @@ import {
   ActiveCompetition,
   ActiveCompetitionSchema,
 } from 'src/sports/schemas/active-competition.schema';
+import {
+  EspnTeam,
+  EspnTeamSchema,
+} from 'src/sports/schemas/espn/espn-team.schema';
+import {
+  EspnStanding,
+  EspnStandingSchema,
+} from 'src/sports/schemas/espn/espn-standing.schema';
+import {
+  HeadToHead,
+  HeadToHeadSchema,
+} from 'src/sports/schemas/head-to-head.schema';
+import {
+  TeamCompetitionStats,
+  TeamCompetitionStatsSchema,
+} from 'src/sports/schemas/team-competition-stats.schema';
+import {
+  TeamPerformanceProfile,
+  TeamPerformanceProfileSchema,
+} from 'src/sports/schemas/team-performance-profile.schema';
 
 @Module({
   imports: [
@@ -112,6 +132,30 @@ import {
       {
         name: ActiveCompetition.name,
         schema: ActiveCompetitionSchema,
+      },
+      {
+        name: EspnTeam.name,
+        schema: EspnTeamSchema,
+      },
+
+      {
+        name: EspnStanding.name,
+        schema: EspnStandingSchema,
+      },
+
+      {
+        name: TeamCompetitionStats.name,
+        schema: TeamCompetitionStatsSchema,
+      },
+
+      {
+        name: TeamPerformanceProfile.name,
+        schema: TeamPerformanceProfileSchema,
+      },
+
+      {
+        name: HeadToHead.name,
+        schema: HeadToHeadSchema,
       },
     ]),
   ],
