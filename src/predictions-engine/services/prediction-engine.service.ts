@@ -7,13 +7,10 @@ import { PredictionSource } from '../enums/prediction-source.enum';
 import { PredictionEngineResult } from '../interfaces/prediction-engine-result.interface';
 import { PredictionResult } from '../interfaces/prediction-result.interface';
 import { PredictionRunInput } from '../interfaces/prediction-run.interface';
-import { EnsembleResult } from '../interfaces/ensemble-result.interface';
 import { MarketEvaluation } from '../interfaces/market-evaluation.interface';
 
 import { ENABLED_PREDICTION_MARKETS } from '../config/prediction-markets.config';
 import { PREDICTION_ENGINE_CONFIG } from '../config/prediction-engine.config';
-
-import { DecisionScoreUtil } from '../utils/decision-score.util';
 
 import { RawPredictionDataService } from './raw-prediction-data.service';
 import { RawPredictionFeatureService } from './raw-prediction-feature.service';
@@ -22,8 +19,6 @@ import { MarketEvaluationService } from './market-evaluation.service';
 @Injectable()
 export class PredictionEngineService {
   private readonly logger = new Logger(PredictionEngineService.name);
-
-  private readonly minimumPredictionsPerFixture = 6;
 
   constructor(
     private readonly rawPredictionDataService: RawPredictionDataService,
@@ -55,32 +50,42 @@ export class PredictionEngineService {
 
     /*
      * ----------------------------------------------------------
-     * FIRST PASS
+     * PUBLICATION PASS
      * ----------------------------------------------------------
      *
-     * Take every normal accepted market decision.
+     * Only predictions that have explicitly passed the final
+     * decision gate are published.
      *
-     * There is intentionally NO six-prediction limit here.
+     * No fallback candidate is allowed to bypass:
      *
-     * Every genuinely publishable market should survive.
+     *   Probability
+     *   Confidence
+     *   Safety
+     *   Model agreement
+     *   Data quality
+     *   Calibration
+     *   Risk
+     *   Decision score
+     *
+     * The engine is allowed to produce fewer than six predictions.
+     * Six is not a reason to publish weak selections.
      */
     const predictions: PredictionResult[] = [];
 
     const selectedKeys = new Set<string>();
 
     for (const evaluation of evaluations) {
-      if (!evaluation.decision) {
+      const decision = evaluation.decision;
+
+      if (!decision) {
         continue;
       }
 
-      if (!evaluation.decision.accepted) {
+      if (!decision.accepted) {
         continue;
       }
 
-      const key = this.getPredictionKey(
-        evaluation.decision.market,
-        evaluation.decision.selection,
-      );
+      const key = this.getPredictionKey(decision.market, decision.selection);
 
       if (selectedKeys.has(key)) {
         continue;
@@ -88,17 +93,17 @@ export class PredictionEngineService {
 
       const prediction = this.buildPrediction(
         rawData,
-        evaluation.decision.market,
-        evaluation.decision.selection,
-        evaluation.decision.probability,
-        evaluation.decision.confidence,
-        evaluation.decision.safetyScore,
-        evaluation.decision.modelAgreement,
-        evaluation.decision.dataQuality,
-        evaluation.decision.calibrationReliability,
-        evaluation.decision.risk,
-        evaluation.decision.decisionScore,
-        evaluation.decision.source,
+        decision.market,
+        decision.selection,
+        decision.probability,
+        decision.confidence,
+        decision.safetyScore,
+        decision.modelAgreement,
+        decision.dataQuality,
+        decision.calibrationReliability,
+        decision.risk,
+        decision.decisionScore,
+        decision.source,
       );
 
       predictions.push(prediction);
@@ -107,74 +112,10 @@ export class PredictionEngineService {
     }
 
     /*
-     * ----------------------------------------------------------
-     * SECOND PASS
-     * ----------------------------------------------------------
-     *
-     * Six is a FLOOR, not a ceiling.
-     *
-     * We inspect the strongest valid candidate from every market
-     * family that did not already publish a prediction.
-     *
-     * This means:
-     *
-     *   6 strong markets  -> 6
-     *   8 strong markets  -> 8
-     *   12 strong markets -> 12
-     *
-     * We do NOT manufacture weak predictions simply to reach six.
-     *
-     * The fallback only exists to recover strong candidates that
-     * were not accepted by the normal final-decision gate.
-     */
-    const fallbackCandidates = this.getFallbackCandidates(
-      evaluations,
-      selectedKeys,
-    );
-
-    for (const candidate of fallbackCandidates) {
-      const key = this.getPredictionKey(candidate.market, candidate.selection);
-
-      if (selectedKeys.has(key)) {
-        continue;
-      }
-
-      /*
-       * Do not stop at six.
-       *
-       * Every remaining valid market candidate is allowed to be
-       * considered and published.
-       */
-      predictions.push(
-        this.buildPrediction(
-          rawData,
-          candidate.market,
-          candidate.selection,
-          candidate.probability,
-          candidate.confidence,
-          candidate.safetyResult.safetyScore,
-          candidate.modelAgreement,
-          candidate.dataQuality,
-          candidate.calibrationReliability,
-          candidate.safetyResult.risk,
-          this.calculateDecisionScore(candidate),
-          PredictionSource.ENSEMBLE,
-        ),
-      );
-
-      selectedKeys.add(key);
-    }
-
-    /*
-     * Order the final predictions by decision strength so the
-     * strongest selections appear first.
+     * Strongest publishable predictions first.
      */
     predictions.sort((a, b) => b.decisionScore - a.decisionScore);
 
-    /*
-     * This represents the number of market families for which
-     * the engine produced a final prediction.
-     */
     const accepted = predictions.length;
 
     const rejected = Math.max(markets.length - accepted, 0);
@@ -242,102 +183,16 @@ export class PredictionEngineService {
     };
 
     this.logger.log(
-      `Prediction generation completed: event=${eventId} markets=${markets.length} accepted=${accepted} rejected=${rejected} minimum=${this.minimumPredictionsPerFixture}`,
+      `Prediction generation completed: event=${eventId} markets=${markets.length} accepted=${accepted} rejected=${rejected}`,
     );
 
-    if (accepted < this.minimumPredictionsPerFixture) {
+    if (accepted === 0) {
       this.logger.warn(
-        `Prediction generation produced fewer than ${this.minimumPredictionsPerFixture} valid predictions: event=${eventId} count=${accepted}`,
+        `No publishable predictions passed the final decision gate: event=${eventId}`,
       );
     }
 
     return result;
-  }
-
-  private getFallbackCandidates(
-    evaluations: MarketEvaluation[],
-    selectedKeys: Set<string>,
-  ): EnsembleResult[] {
-    const candidates: EnsembleResult[] = [];
-
-    for (const evaluation of evaluations) {
-      /*
-       * The market evaluation contains potentially multiple
-       * candidates for the same market family.
-       *
-       * We select only the strongest valid candidate for that
-       * family so one market cannot flood the fixture with
-       * duplicate selections.
-       */
-      const available = evaluation.candidates.filter((candidate) => {
-        const key = this.getPredictionKey(
-          candidate.market,
-          candidate.selection,
-        );
-
-        if (selectedKeys.has(key)) {
-          return false;
-        }
-
-        return (
-          Number.isFinite(candidate.probability) &&
-          candidate.probability > 0 &&
-          Number.isFinite(candidate.confidence) &&
-          candidate.confidence > 0 &&
-          Number.isFinite(candidate.safetyResult.safetyScore) &&
-          candidate.safetyResult.safetyScore > 0 &&
-          Number.isFinite(candidate.modelAgreement) &&
-          candidate.modelAgreement >= 0 &&
-          Number.isFinite(candidate.dataQuality) &&
-          candidate.dataQuality >= 0 &&
-          Number.isFinite(candidate.calibrationReliability) &&
-          candidate.calibrationReliability >= 0
-        );
-      });
-
-      if (!available.length) {
-        continue;
-      }
-
-      const strongest = [...available].sort(
-        (a, b) =>
-          this.calculateDecisionScore(b) - this.calculateDecisionScore(a),
-      )[0];
-
-      if (strongest) {
-        candidates.push(strongest);
-      }
-    }
-
-    /*
-     * Strongest candidates are published first, but ALL valid
-     * market-family candidates remain eligible.
-     *
-     * Six is therefore only the minimum fixture requirement.
-     */
-    return candidates.sort(
-      (a, b) => this.calculateDecisionScore(b) - this.calculateDecisionScore(a),
-    );
-  }
-
-  private calculateDecisionScore(candidate: EnsembleResult): number {
-    return DecisionScoreUtil.calculate({
-      probability: this.clamp(candidate.probability, 0, 1),
-
-      confidence: this.clamp(candidate.confidence, 0, 98),
-
-      safetyScore: this.clamp(candidate.safetyResult.safetyScore, 0, 100),
-
-      modelAgreement: this.clamp(candidate.modelAgreement, 0, 1),
-
-      dataQuality: this.clamp(candidate.dataQuality, 0, 100),
-
-      calibrationReliability: this.clamp(
-        candidate.calibrationReliability,
-        0,
-        100,
-      ),
-    }).total;
   }
 
   private buildPrediction(
