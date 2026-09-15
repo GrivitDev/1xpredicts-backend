@@ -124,7 +124,7 @@ export const PredictionSettlementSchema =
 // ============================================================
 
 @Schema({
-  collection: 'predictions',
+  collection: 'prediction_engine_predictions',
   timestamps: true,
 })
 export class PredictionEnginePrediction {
