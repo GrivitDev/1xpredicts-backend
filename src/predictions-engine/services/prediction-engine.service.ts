@@ -53,8 +53,8 @@ export class PredictionEngineService {
      * PUBLICATION PASS
      * ----------------------------------------------------------
      *
-     * Only predictions that have explicitly passed the final
-     * decision gate are published.
+     * Only predictions that explicitly pass the final decision
+     * gate are published.
      *
      * No fallback candidate is allowed to bypass:
      *
@@ -68,7 +68,6 @@ export class PredictionEngineService {
      *   Decision score
      *
      * The engine is allowed to produce fewer than six predictions.
-     * Six is not a reason to publish weak selections.
      */
     const predictions: PredictionResult[] = [];
 
@@ -78,10 +77,15 @@ export class PredictionEngineService {
       const decision = evaluation.decision;
 
       if (!decision) {
+        this.logger.warn(
+          `Market evaluation returned no final decision: event=${eventId}`,
+        );
+
         continue;
       }
 
       if (!decision.accepted) {
+        this.logRejectedDecision(eventId, decision);
         continue;
       }
 
@@ -195,6 +199,29 @@ export class PredictionEngineService {
     return result;
   }
 
+  private logRejectedDecision(
+    eventId: string,
+    decision: NonNullable<MarketEvaluation['decision']>,
+  ): void {
+    this.logger.warn(
+      [
+        `Prediction rejected`,
+        `event=${eventId}`,
+        `market=${decision.market}`,
+        `selection=${decision.selection}`,
+        `probability=${this.formatNumber(decision.probability)}`,
+        `confidence=${this.formatNumber(decision.confidence)}`,
+        `safety=${this.formatNumber(decision.safetyScore)}`,
+        `agreement=${this.formatNumber(decision.modelAgreement)}`,
+        `dataQuality=${this.formatNumber(decision.dataQuality)}`,
+        `calibration=${this.formatNumber(decision.calibrationReliability)}`,
+        `decisionScore=${this.formatNumber(decision.decisionScore)}`,
+        `risk=${decision.risk}`,
+        `source=${decision.source}`,
+      ].join(' | '),
+    );
+  }
+
   private buildPrediction(
     rawData: Awaited<
       ReturnType<RawPredictionDataService['getMatch']>
@@ -287,6 +314,14 @@ export class PredictionEngineService {
     selection: string,
   ): string {
     return `${market}:${selection}`;
+  }
+
+  private formatNumber(value: number): string {
+    if (!Number.isFinite(value)) {
+      return 'NaN';
+    }
+
+    return value.toFixed(3);
   }
 
   private clamp(value: number, minimum: number, maximum: number): number {
