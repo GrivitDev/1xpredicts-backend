@@ -3,7 +3,10 @@ import { Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 
-import { Prediction, PredictionDocument } from '../schemas/prediction.schema';
+import {
+  PredictionEnginePrediction,
+  PredictionEnginePredictionDocument,
+} from '../schemas/prediction.schema';
 
 import {
   PredictionCalibration,
@@ -20,8 +23,8 @@ export class CalibrationService {
   private readonly logger = new Logger(CalibrationService.name);
 
   constructor(
-    @InjectModel(Prediction.name)
-    private readonly predictionModel: Model<PredictionDocument>,
+    @InjectModel(PredictionEnginePrediction.name)
+    private readonly predictionModel: Model<PredictionEnginePredictionDocument>,
 
     @InjectModel(PredictionCalibration.name)
     private readonly calibrationModel: Model<PredictionCalibrationDocument>,
