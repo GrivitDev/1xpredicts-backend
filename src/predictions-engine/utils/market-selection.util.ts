@@ -6,22 +6,57 @@ export class MarketSelectionUtil {
       return null;
     }
 
-    const eligible = candidates.filter(
-      (candidate) => candidate.eligible !== false,
-    );
+    /*
+     * ----------------------------------------------------------
+     * MARKET SELECTION
+     * ----------------------------------------------------------
+     *
+     * Every configured market must produce its strongest
+     * prediction candidate.
+     *
+     * We do NOT filter on:
+     *
+     *   eligible
+     *   probability
+     *   confidence
+     *   safety
+     *   risk
+     *   decision score
+     *
+     * Those values describe the candidate.
+     *
+     * The FinalDecisionEngine is responsible for determining
+     * whether the selected candidate is sufficiently supported
+     * by evidence.
+     */
 
-    if (!eligible.length) {
-      return null;
-    }
+    return [...candidates].sort((a, b) => {
+      /*
+       * Primary signal:
+       * agreement between the underlying models.
+       */
+      const agreementDifference =
+        Number(b.modelAgreement ?? 0) - Number(a.modelAgreement ?? 0);
 
-    return [...eligible].sort((a, b) => {
-      const decisionDifference =
-        Number(b.decisionScore ?? 0) - Number(a.decisionScore ?? 0);
-
-      if (decisionDifference !== 0) {
-        return decisionDifference;
+      if (agreementDifference !== 0) {
+        return agreementDifference;
       }
 
+      /*
+       * Secondary signal:
+       * data quality.
+       */
+      const dataQualityDifference =
+        Number(b.dataQuality ?? 0) - Number(a.dataQuality ?? 0);
+
+      if (dataQualityDifference !== 0) {
+        return dataQualityDifference;
+      }
+
+      /*
+       * Third signal:
+       * confidence in the probability estimate.
+       */
       const confidenceDifference =
         Number(b.confidence ?? 0) - Number(a.confidence ?? 0);
 
@@ -29,7 +64,24 @@ export class MarketSelectionUtil {
         return confidenceDifference;
       }
 
-      return Number(b.probability ?? 0) - Number(a.probability ?? 0);
+      /*
+       * Fourth signal:
+       * probability.
+       *
+       * This is used only after evidence quality has been compared.
+       */
+      const probabilityDifference =
+        Number(b.probability ?? 0) - Number(a.probability ?? 0);
+
+      if (probabilityDifference !== 0) {
+        return probabilityDifference;
+      }
+
+      /*
+       * Final tie-breaker:
+       * combined decision score.
+       */
+      return Number(b.decisionScore ?? 0) - Number(a.decisionScore ?? 0);
     })[0];
   }
 }

@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 
 import { ENABLED_PREDICTION_MARKETS } from '../config/prediction-markets.config';
+import { PREDICTION_ENGINE_CONFIG } from '../config/prediction-engine.config';
 
 import { MarketEvaluation } from '../interfaces/market-evaluation.interface';
 import { MarketModelInput } from '../interfaces/market-model-input.interface';
@@ -18,11 +19,9 @@ import { FinalDecisionEngine } from '../engines/final/final-decision.engine';
 import { OddsCalculationService } from '../engines/value/odds-calculation.service';
 import { ValueEngine } from '../engines/value/value.engine';
 
-import { MarketSelectionUtil } from '../utils/market-selection.util';
-
 @Injectable()
 export class MarketEvaluationService {
-  private readonly modelVersion = 'raw-ensemble-v1';
+  private readonly modelVersion = PREDICTION_ENGINE_CONFIG.modelVersion;
 
   constructor(
     private readonly calibrationService: CalibrationService,
@@ -92,8 +91,7 @@ export class MarketEvaluationService {
        *
        * There is deliberately no bookmaker price.
        *
-       * The ValueEngine therefore records our fair odds but does
-       * not claim positive market value.
+       * The ValueEngine therefore records our own fair odds.
        */
       const value = this.valueEngine.calculate(
         input,
@@ -136,6 +134,11 @@ export class MarketEvaluationService {
       candidates.push(ensemble);
     }
 
+    /*
+     * --------------------------------------------------------
+     * EVALUATE EVERY CANDIDATE
+     * --------------------------------------------------------
+     */
     const selectionCandidates: MarketCandidate[] = candidates.map(
       (candidate) => {
         const decision = this.finalDecisionEngine.decide({
@@ -186,7 +189,17 @@ export class MarketEvaluationService {
       },
     );
 
-    const selected = MarketSelectionUtil.selectBest(selectionCandidates);
+    /*
+     * --------------------------------------------------------
+     * SELECT THE MODEL'S BEST REPRESENTATION OF THIS MARKET
+     * --------------------------------------------------------
+     *
+     * Selection does not require the candidate to be "safe".
+     *
+     * We choose the candidate with the strongest overall evidence
+     * and model support.
+     */
+    const selected = this.selectBestCandidate(selectionCandidates);
 
     if (!selected) {
       return {
@@ -198,6 +211,11 @@ export class MarketEvaluationService {
       };
     }
 
+    /*
+     * --------------------------------------------------------
+     * FINAL DECISION
+     * --------------------------------------------------------
+     */
     const decision = this.finalDecisionEngine.decide({
       market: selected.market,
 
@@ -225,5 +243,49 @@ export class MarketEvaluationService {
 
       decision,
     };
+  }
+
+  private selectBestCandidate(
+    candidates: MarketCandidate[],
+  ): MarketCandidate | null {
+    if (!candidates.length) {
+      return null;
+    }
+
+    return [...candidates].sort((a, b) => {
+      /*
+       * Evidence agreement is the strongest selector.
+       */
+      if (b.modelAgreement !== a.modelAgreement) {
+        return b.modelAgreement - a.modelAgreement;
+      }
+
+      /*
+       * Data quality is the second strongest selector.
+       */
+      if (b.dataQuality !== a.dataQuality) {
+        return b.dataQuality - a.dataQuality;
+      }
+
+      /*
+       * Safety supports the selection but does not define whether
+       * the prediction is interesting or high-probability.
+       */
+      if (b.safetyScore !== a.safetyScore) {
+        return b.safetyScore - a.safetyScore;
+      }
+
+      /*
+       * Confidence describes reliability of the probability.
+       */
+      if (b.confidence !== a.confidence) {
+        return b.confidence - a.confidence;
+      }
+
+      /*
+       * Decision score is used only as the final tie-breaker.
+       */
+      return b.decisionScore - a.decisionScore;
+    })[0];
   }
 }

@@ -3,12 +3,9 @@
 import { Injectable } from '@nestjs/common';
 
 import { PredictionMarket } from '../../enums/prediction-market.enum';
-import { PredictionRisk } from '../../enums/prediction-risk.enum';
 import { PredictionSource } from '../../enums/prediction-source.enum';
 
 import { FinalDecision } from '../../interfaces/final-decision.interface';
-
-import { PREDICTION_DECISION_CONFIG } from '../../config/prediction-decision.config';
 
 import { DecisionScoreUtil } from '../../utils/decision-score.util';
 import { PredictionRiskUtil } from '../../utils/prediction-risk.util';
@@ -42,6 +39,14 @@ export class FinalDecisionEngine {
       100,
     );
 
+    /*
+     * ----------------------------------------------------------
+     * RISK
+     * ----------------------------------------------------------
+     *
+     * Risk describes the prediction. It does not decide whether
+     * the prediction is publishable.
+     */
     const risk = PredictionRiskUtil.fromScores({
       probability,
       confidence,
@@ -51,6 +56,14 @@ export class FinalDecisionEngine {
       calibrationReliability,
     });
 
+    /*
+     * ----------------------------------------------------------
+     * DECISION SCORE
+     * ----------------------------------------------------------
+     *
+     * Decision score remains useful for ranking candidates.
+     * It is NOT a publication gate.
+     */
     const score = DecisionScoreUtil.calculate({
       probability,
       confidence,
@@ -60,17 +73,73 @@ export class FinalDecisionEngine {
       calibrationReliability,
     });
 
-    const rejectionReason = this.getRejectionReason({
-      probability,
-      confidence,
-      safetyScore,
-      modelAgreement,
-      dataQuality,
-      calibrationReliability,
-      risk,
-      decisionScore: score.total,
-    });
+    /*
+     * ----------------------------------------------------------
+     * EVIDENCE SUPPORT
+     * ----------------------------------------------------------
+     *
+     * The engine is predicting an outcome, not selecting only
+     * safe outcomes.
+     *
+     * Therefore:
+     *
+     *   low probability  -> allowed
+     *   low confidence   -> allowed
+     *   high odds        -> allowed
+     *   medium risk      -> allowed
+     *   high risk        -> allowed
+     *   low score        -> allowed
+     *
+     * The actual publication gate asks whether the prediction is
+     * supported by the evidence.
+     *
+     * Model agreement is the strongest evidence signal.
+     * Data quality measures whether the evidence itself is usable.
+     * Safety provides additional supporting evidence.
+     * Calibration provides historical reliability when available.
+     */
+    const normalizedDataQuality = dataQuality / 100;
 
+    const normalizedSafety = safetyScore / 100;
+
+    /*
+     * No calibration history is treated as neutral rather than
+     * as evidence against a new prediction.
+     */
+    const normalizedCalibration =
+      calibrationReliability > 0 ? calibrationReliability / 100 : 0.5;
+
+    const evidenceSupport =
+      modelAgreement * 0.6 +
+      normalizedDataQuality * 0.2 +
+      normalizedSafety * 0.1 +
+      normalizedCalibration * 0.1;
+
+    /*
+     * ----------------------------------------------------------
+     * EVIDENCE GATE
+     * ----------------------------------------------------------
+     *
+     * This is the only publication rejection logic.
+     *
+     * The prediction is rejected when the available evidence is
+     * too weak to justify the selected outcome.
+     */
+    let rejectionReason: string | null = null;
+
+    if (modelAgreement < 0.35) {
+      rejectionReason = 'INSUFFICIENT_MODEL_AGREEMENT';
+    } else if (dataQuality < 35) {
+      rejectionReason = 'INSUFFICIENT_DATA_QUALITY';
+    } else if (evidenceSupport < 0.45) {
+      rejectionReason = 'INSUFFICIENT_EVIDENCE_SUPPORT';
+    }
+
+    /*
+     * ----------------------------------------------------------
+     * FINAL DECISION
+     * ----------------------------------------------------------
+     */
     return {
       market: input.market as PredictionMarket,
 
@@ -98,150 +167,6 @@ export class FinalDecisionEngine {
 
       rejectionReason: rejectionReason ?? undefined,
     };
-  }
-
-  private getRejectionReason(input: {
-    probability: number;
-    confidence: number;
-    safetyScore: number;
-    modelAgreement: number;
-    dataQuality: number;
-    calibrationReliability: number;
-    risk: PredictionRisk;
-    decisionScore: number;
-  }): string | null {
-    const config = PREDICTION_DECISION_CONFIG;
-
-    /*
-     * ----------------------------------------------------------
-     * CORE PREDICTION GATE
-     * ----------------------------------------------------------
-     *
-     * We do not publish every statistically possible outcome.
-     *
-     * A prediction must first reach a meaningful probability,
-     * confidence, safety, model agreement and data-quality level.
-     */
-    if (input.probability < config.probability.minimumPublishable) {
-      return `Probability below publishable threshold (${config.probability.minimumPublishable}).`;
-    }
-
-    if (input.confidence < config.confidence.minimumPublishable) {
-      return `Confidence below publishable threshold (${config.confidence.minimumPublishable}).`;
-    }
-
-    if (input.safetyScore < config.safety.minimumPublishable) {
-      return `Safety score below publishable threshold (${config.safety.minimumPublishable}).`;
-    }
-
-    if (input.modelAgreement < config.agreement.minimumPublishable) {
-      return `Model agreement below publishable threshold (${config.agreement.minimumPublishable}).`;
-    }
-
-    if (input.dataQuality < config.dataQuality.minimumPublishable) {
-      return `Data quality below publishable threshold (${config.dataQuality.minimumPublishable}).`;
-    }
-
-    /*
-     * ----------------------------------------------------------
-     * PROBABILITY / CONFIDENCE ALIGNMENT
-     * ----------------------------------------------------------
-     *
-     * Higher probability claims require stronger evidence.
-     *
-     * This is critical for preventing artificial 85-95%
-     * predictions from being presented as trustworthy when the
-     * confidence behind them is weak.
-     */
-    const minimumConfidence = this.getRequiredConfidence(input.probability);
-
-    if (input.confidence < minimumConfidence) {
-      return `Confidence (${input.confidence.toFixed(
-        2,
-      )}) does not sufficiently support the predicted probability (${(
-        input.probability * 100
-      ).toFixed(2)}%).`;
-    }
-
-    /*
-     * ----------------------------------------------------------
-     * DECISION SCORE
-     * ----------------------------------------------------------
-     *
-     * The candidate must have enough combined strength.
-     */
-    if (input.decisionScore < config.selection.minimumDecisionScore) {
-      return `Decision score below minimum threshold (${config.selection.minimumDecisionScore}).`;
-    }
-
-    /*
-     * ----------------------------------------------------------
-     * RISK
-     * ----------------------------------------------------------
-     *
-     * HIGH risk is not useful as a public prediction.
-     *
-     * It can still be calculated internally for diagnostics and
-     * ranking, but it should not survive the final publication
-     * gate.
-     */
-    if (input.risk === PredictionRisk.HIGH) {
-      return 'Prediction remains high risk after combining probability and evidence quality.';
-    }
-
-    /*
-     * ----------------------------------------------------------
-     * STRONG PROBABILITY SAFETY
-     * ----------------------------------------------------------
-     *
-     * A very high probability requires stronger supporting
-     * evidence than an ordinary prediction.
-     */
-    if (input.probability >= 0.9 && input.modelAgreement < 0.75) {
-      return 'Very high probability requires stronger model agreement.';
-    }
-
-    if (input.probability >= 0.9 && input.safetyScore < 75) {
-      return 'Very high probability requires stronger safety evidence.';
-    }
-
-    if (input.probability >= 0.8 && input.modelAgreement < 0.65) {
-      return 'High probability requires stronger model agreement.';
-    }
-
-    return null;
-  }
-
-  private getRequiredConfidence(probability: number): number {
-    if (probability >= 0.95) {
-      return 88;
-    }
-
-    if (probability >= 0.9) {
-      return 82;
-    }
-
-    if (probability >= 0.85) {
-      return 76;
-    }
-
-    if (probability >= 0.8) {
-      return 72;
-    }
-
-    if (probability >= 0.75) {
-      return 68;
-    }
-
-    if (probability >= 0.7) {
-      return 65;
-    }
-
-    if (probability >= 0.65) {
-      return 62;
-    }
-
-    return 60;
   }
 
   private clamp(value: number, minimum: number, maximum: number): number {
