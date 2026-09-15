@@ -3,7 +3,10 @@ import { MongooseModule } from '@nestjs/mongoose';
 
 import { SportsModule } from '../sports/sports.module';
 
-import { Prediction, PredictionSchema } from './schemas/prediction.schema';
+import {
+  PredictionEnginePrediction,
+  PredictionEnginePredictionSchema,
+} from './schemas/prediction.schema';
 
 import {
   PredictionQueue,
@@ -104,8 +107,8 @@ import {
      */
     MongooseModule.forFeature([
       {
-        name: Prediction.name,
-        schema: PredictionSchema,
+        name: PredictionEnginePrediction.name,
+        schema: PredictionEnginePredictionSchema,
       },
 
       {

@@ -6,7 +6,10 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { BulkWriteResult } from 'mongodb';
 
-import { Prediction, PredictionDocument } from '../schemas/prediction.schema';
+import {
+  PredictionEnginePrediction,
+  PredictionEnginePredictionDocument,
+} from '../schemas/prediction.schema';
 
 import {
   PredictionRun,
@@ -24,8 +27,8 @@ export class PredictionSaveService {
   private readonly logger = new Logger(PredictionSaveService.name);
 
   constructor(
-    @InjectModel(Prediction.name)
-    private readonly predictionModel: Model<PredictionDocument>,
+    @InjectModel(PredictionEnginePrediction.name)
+    private readonly predictionModel: Model<PredictionEnginePredictionDocument>,
 
     @InjectModel(PredictionRun.name)
     private readonly predictionRunModel: Model<PredictionRunDocument>,

@@ -8,7 +8,10 @@ import {
   EspnFixtureDocument,
 } from '../../sports/schemas/espn/espn-fixture.schema';
 
-import { Prediction, PredictionDocument } from '../schemas/prediction.schema';
+import {
+  PredictionEnginePrediction,
+  PredictionEnginePredictionDocument,
+} from '../schemas/prediction.schema';
 
 import { PredictionSettlementService } from './prediction-settlement.service';
 
@@ -24,8 +27,8 @@ export class SettlementService {
     @InjectModel(EspnFixture.name)
     private readonly fixtureModel: Model<EspnFixtureDocument>,
 
-    @InjectModel(Prediction.name)
-    private readonly predictionModel: Model<PredictionDocument>,
+    @InjectModel(PredictionEnginePrediction.name)
+    private readonly predictionModel: Model<PredictionEnginePredictionDocument>,
 
     private readonly predictionSettlementService: PredictionSettlementService,
 

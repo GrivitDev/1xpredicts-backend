@@ -1,5 +1,4 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-
 import { HydratedDocument, Schema as MongooseSchema } from 'mongoose';
 
 import { PredictionMarket } from '../enums/prediction-market.enum';
@@ -8,7 +7,12 @@ import { PredictionSource } from '../enums/prediction-source.enum';
 import { PredictionStatus } from '../enums/prediction-status.enum';
 import { SettlementStatus } from '../enums/settlement-status.enum';
 
-export type PredictionDocument = HydratedDocument<Prediction>;
+export type PredictionEnginePredictionDocument =
+  HydratedDocument<PredictionEnginePrediction>;
+
+// ============================================================
+// PREDICTION TEAM
+// ============================================================
 
 @Schema({
   _id: false,
@@ -31,6 +35,10 @@ export class PredictionTeam {
 
 export const PredictionTeamSchema =
   SchemaFactory.createForClass(PredictionTeam);
+
+// ============================================================
+// PREDICTION SETTLEMENT
+// ============================================================
 
 @Schema({
   _id: false,
@@ -111,11 +119,15 @@ export class PredictionSettlement {
 export const PredictionSettlementSchema =
   SchemaFactory.createForClass(PredictionSettlement);
 
+// ============================================================
+// PREDICTION ENGINE PREDICTION
+// ============================================================
+
 @Schema({
   collection: 'predictions',
   timestamps: true,
 })
-export class Prediction {
+export class PredictionEnginePrediction {
   @Prop({
     type: String,
     required: true,
@@ -306,9 +318,15 @@ export class Prediction {
   generatedAt!: Date;
 }
 
-export const PredictionSchema = SchemaFactory.createForClass(Prediction);
+export const PredictionEnginePredictionSchema = SchemaFactory.createForClass(
+  PredictionEnginePrediction,
+);
 
-PredictionSchema.index(
+// ============================================================
+// INDEXES
+// ============================================================
+
+PredictionEnginePredictionSchema.index(
   {
     eventId: 1,
     market: 1,
@@ -319,29 +337,29 @@ PredictionSchema.index(
   },
 );
 
-PredictionSchema.index({
+PredictionEnginePredictionSchema.index({
   eventId: 1,
   status: 1,
 });
 
-PredictionSchema.index({
+PredictionEnginePredictionSchema.index({
   market: 1,
   selection: 1,
   modelVersion: 1,
   status: 1,
 });
 
-PredictionSchema.index({
+PredictionEnginePredictionSchema.index({
   risk: 1,
   status: 1,
 });
 
-PredictionSchema.index({
+PredictionEnginePredictionSchema.index({
   confidence: -1,
   probability: -1,
 });
 
-PredictionSchema.index({
+PredictionEnginePredictionSchema.index({
   fixtureDate: 1,
   status: 1,
 });

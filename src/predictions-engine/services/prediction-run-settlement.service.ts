@@ -3,8 +3,10 @@ import { Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 
-import { Prediction, PredictionDocument } from '../schemas/prediction.schema';
-
+import {
+  PredictionEnginePrediction,
+  PredictionEnginePredictionDocument,
+} from '../schemas/prediction.schema';
 import {
   PredictionRun,
   PredictionRunDocument,
@@ -21,8 +23,8 @@ export class PredictionRunSettlementService {
     @InjectModel(PredictionRun.name)
     private readonly predictionRunModel: Model<PredictionRunDocument>,
 
-    @InjectModel(Prediction.name)
-    private readonly predictionModel: Model<PredictionDocument>,
+    @InjectModel(PredictionEnginePrediction.name)
+    private readonly predictionModel: Model<PredictionEnginePredictionDocument>,
   ) {}
 
   async rebuild(eventId: string): Promise<{

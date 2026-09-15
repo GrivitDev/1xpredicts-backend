@@ -6,7 +6,10 @@ import {
   EspnFixtureSchema,
 } from '../../sports/schemas/espn/espn-fixture.schema';
 
-import { Prediction, PredictionSchema } from '../schemas/prediction.schema';
+import {
+  PredictionEnginePrediction,
+  PredictionEnginePredictionSchema,
+} from '../schemas/prediction.schema';
 
 import {
   PredictionRun,
@@ -42,8 +45,8 @@ import { CalibrationEngine } from '../calibration/calibration.engine';
         schema: EspnFixtureSchema,
       },
       {
-        name: Prediction.name,
-        schema: PredictionSchema,
+        name: PredictionEnginePrediction.name,
+        schema: PredictionEnginePredictionSchema,
       },
       {
         name: PredictionRun.name,

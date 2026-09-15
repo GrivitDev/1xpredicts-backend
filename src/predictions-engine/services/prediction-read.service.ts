@@ -4,7 +4,10 @@ import { InjectModel } from '@nestjs/mongoose';
 
 import { Model } from 'mongoose';
 
-import { Prediction, PredictionDocument } from '../schemas/prediction.schema';
+import {
+  PredictionEnginePrediction,
+  PredictionEnginePredictionDocument,
+} from '../schemas/prediction.schema';
 
 import { PredictionStatus } from '../enums/prediction-status.enum';
 
@@ -15,13 +18,13 @@ import { PredictionListResult } from '../interfaces/prediction-list-result.inter
 @Injectable()
 export class PredictionReadService {
   constructor(
-    @InjectModel(Prediction.name)
-    private readonly predictionModel: Model<PredictionDocument>,
+    @InjectModel(PredictionEnginePrediction.name)
+    private readonly predictionModel: Model<PredictionEnginePredictionDocument>,
   ) {}
 
   async find(
     query: PredictionQuery = {},
-  ): Promise<PredictionListResult<PredictionDocument>> {
+  ): Promise<PredictionListResult<PredictionEnginePredictionDocument>> {
     const page = this.normalizePage(query.page);
 
     const limit = this.normalizeLimit(query.limit);
@@ -55,7 +58,9 @@ export class PredictionReadService {
     };
   }
 
-  async findByEvent(eventId: string): Promise<PredictionDocument[]> {
+  async findByEvent(
+    eventId: string,
+  ): Promise<PredictionEnginePredictionDocument[]> {
     const normalized = this.normalizeRequiredId(eventId);
 
     return this.predictionModel
@@ -83,7 +88,9 @@ export class PredictionReadService {
       .exec();
   }
 
-  async findUpcoming(limit = 20): Promise<PredictionDocument[]> {
+  async findUpcoming(
+    limit = 20,
+  ): Promise<PredictionEnginePredictionDocument[]> {
     const safeLimit = this.normalizeLimit(limit);
 
     return this.predictionModel
@@ -105,7 +112,7 @@ export class PredictionReadService {
       .exec();
   }
 
-  async findSettled(limit = 20): Promise<PredictionDocument[]> {
+  async findSettled(limit = 20): Promise<PredictionEnginePredictionDocument[]> {
     const safeLimit = this.normalizeLimit(limit);
 
     return this.predictionModel
