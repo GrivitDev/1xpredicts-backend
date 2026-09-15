@@ -1,4 +1,4 @@
-// src/prediction/engines/confidence.engine.ts
+// src/predictions-engine/engines/ensemble/confidence.engine.ts
 
 import { Injectable } from '@nestjs/common';
 
@@ -43,49 +43,64 @@ export class ConfidenceEngine {
 
     const safety = this.clamp(input.safety.safetyScore / 100, 0, 1);
 
-    const probabilityStrength = ConfidenceUtil.probabilityStrength(probability);
+    /*
+     * ----------------------------------------------------------
+     * PROBABILITY SIGNAL
+     * ----------------------------------------------------------
+     *
+     * Probability should materially influence confidence.
+     *
+     * 50% probability provides almost no directional support.
+     * 70% provides meaningful support.
+     * 80% provides strong support.
+     * 90% provides very strong support.
+     *
+     * This does NOT mean:
+     *
+     *   90% probability = 90 confidence.
+     *
+     * Evidence must still support the probability.
+     */
+    const probabilityStrength = this.calculateProbabilityStrength(probability);
 
     /*
      * ----------------------------------------------------------
      * EVIDENCE SCORE
      * ----------------------------------------------------------
      *
-     * Confidence is primarily an evidence measure.
+     * Evidence remains the larger component of confidence.
      *
-     * Model agreement and primary model reliability carry the
-     * strongest influence because the system must first believe
-     * its own supporting models before assigning high confidence.
+     * The system must trust the underlying evidence before
+     * assigning very high confidence.
      */
     const evidenceScore =
-      modelReliability * 0.24 +
-      agreement * 0.24 +
+      modelReliability * 0.22 +
+      agreement * 0.22 +
       dataQuality * 0.2 +
-      safety * 0.14 +
-      sampleReliability * 0.1 +
+      safety * 0.16 +
+      sampleReliability * 0.12 +
       this.calibrationSupport(calibrationReliability) * 0.08;
 
     /*
      * ----------------------------------------------------------
-     * PROBABILITY SUPPORT
+     * PROBABILITY / EVIDENCE BLEND
      * ----------------------------------------------------------
      *
-     * High probabilities deserve somewhat higher confidence,
-     * but probability is deliberately not the dominant input.
+     * Probability now contributes meaningfully to confidence,
+     * but evidence remains dominant.
+     *
+     * 70% evidence
+     * 30% probability strength
      */
-    const probabilitySupport = this.calculateProbabilitySupport(
-      probability,
-      probabilityStrength,
-    );
-
-    let confidence = evidenceScore * 82 + probabilitySupport * 18;
+    let confidence = evidenceScore * 70 + probabilityStrength * 30;
 
     /*
      * ----------------------------------------------------------
-     * AGREEMENT CONTROL
+     * AGREEMENT ADJUSTMENT
      * ----------------------------------------------------------
      *
-     * Model disagreement must materially reduce confidence,
-     * especially when probability is aggressive.
+     * Disagreement reduces confidence, particularly for
+     * aggressive probabilities.
      */
     confidence = this.applyAgreementAdjustment(
       confidence,
@@ -98,16 +113,16 @@ export class ConfidenceEngine {
      * PROBABILITY / CONFIDENCE COHERENCE
      * ----------------------------------------------------------
      *
-     * High probability requires meaningful confidence support.
+     * Prevents two bad states:
      *
-     * A 90% probability should not appear with confidence 40,
-     * while a 65% probability should not automatically receive
-     * 90+ confidence.
+     *   very high probability + very low confidence
+     *   modest probability + unrealistically high confidence
      */
     confidence = this.applyProbabilityCoherence(
       confidence,
       probability,
       agreement,
+      evidenceScore,
     );
 
     /*
@@ -115,7 +130,7 @@ export class ConfidenceEngine {
      * EVIDENCE CAPS
      * ----------------------------------------------------------
      *
-     * Weak evidence must always limit confidence.
+     * Weak evidence still prevents extreme confidence.
      */
     confidence = this.applyEvidenceCaps(confidence, {
       modelReliability,
@@ -127,25 +142,21 @@ export class ConfidenceEngine {
 
     /*
      * ----------------------------------------------------------
-     * CALIBRATION
+     * CALIBRATION ADJUSTMENT
      * ----------------------------------------------------------
      *
-     * Calibration history is advisory.
-     *
-     * Missing calibration history does not punish confidence.
-     * Existing calibration error can reduce confidence modestly.
+     * Calibration remains advisory.
      */
     const calibrationError = this.clamp(input.calibrationError ?? 0, 0, 1);
 
     if (sampleSize >= 10 && calibrationReliability > 0) {
-      confidence *= 1 - Math.min(calibrationError * 0.35, 0.2);
+      confidence *= 1 - Math.min(calibrationError * 0.3, 0.18);
     }
 
     confidence = ConfidenceUtil.clamp(confidence);
 
     const factors: Record<string, number> = {
       probabilityStrength,
-      probabilitySupport,
       modelReliability,
       dataQuality,
       calibrationReliability,
@@ -187,55 +198,27 @@ export class ConfidenceEngine {
     };
   }
 
-  private calculateProbabilitySupport(
-    probability: number,
-    probabilityStrength: number,
-  ): number {
+  private calculateProbabilityStrength(probability: number): number {
     /*
-     * Probability becomes increasingly supportive as it moves
-     * above 65%, but the effect is deliberately capped.
+     * Convert probability into a confidence-support signal.
+     *
+     * 50% -> 0
+     * 55% -> 0.10
+     * 60% -> 0.20
+     * 65% -> 0.30
+     * 70% -> 0.40
+     * 75% -> 0.50
+     * 80% -> 0.60
+     * 85% -> 0.70
+     * 90% -> 0.80
+     * 95% -> 0.90
+     *
+     * This keeps probability influential without making
+     * confidence identical to probability.
      */
-    if (probability < 0.55) {
-      return 0.15;
-    }
+    const strength = (probability - 0.5) / 0.5;
 
-    if (probability < 0.6) {
-      return 0.28;
-    }
-
-    if (probability < 0.65) {
-      return 0.42;
-    }
-
-    if (probability < 0.7) {
-      return 0.55;
-    }
-
-    if (probability < 0.75) {
-      return 0.68;
-    }
-
-    if (probability < 0.8) {
-      return 0.78;
-    }
-
-    if (probability < 0.85) {
-      return 0.86;
-    }
-
-    if (probability < 0.9) {
-      return 0.92;
-    }
-
-    if (probability < 0.95) {
-      return 0.96;
-    }
-
-    /*
-     * Do not let 95%+ probability automatically create
-     * exceptional confidence.
-     */
-    return Math.min(0.98, 0.9 + probabilityStrength * 0.08);
+    return this.clamp(strength, 0, 1);
   }
 
   private applyAgreementAdjustment(
@@ -250,24 +233,24 @@ export class ConfidenceEngine {
     } else if (agreement >= 0.75) {
       multiplier = 0.98;
     } else if (agreement >= 0.65) {
-      multiplier = 0.94;
+      multiplier = 0.95;
     } else if (agreement >= 0.55) {
-      multiplier = 0.88;
+      multiplier = 0.91;
     } else if (agreement >= 0.45) {
-      multiplier = 0.8;
+      multiplier = 0.85;
     } else {
-      multiplier = 0.7;
+      multiplier = 0.75;
     }
 
     /*
-     * Aggressive probabilities need stronger agreement.
+     * High probabilities require stronger agreement.
      */
     if (probability >= 0.85 && agreement < 0.65) {
-      multiplier *= 0.88;
+      multiplier *= 0.9;
     }
 
     if (probability >= 0.9 && agreement < 0.75) {
-      multiplier *= 0.82;
+      multiplier *= 0.9;
     }
 
     return confidence * multiplier;
@@ -277,11 +260,18 @@ export class ConfidenceEngine {
     confidence: number,
     probability: number,
     agreement: number,
+    evidenceScore: number,
   ): number {
     let result = confidence;
 
     /*
-     * Modest probabilities should not receive extreme confidence.
+     * ----------------------------------------------------------
+     * UPPER COHERENCE LIMIT
+     * ----------------------------------------------------------
+     *
+     * Moderate probabilities cannot produce exceptional
+     * confidence simply because the underlying evidence happens
+     * to be strong.
      */
     if (probability < 0.55) {
       result = Math.min(result, 55);
@@ -293,25 +283,50 @@ export class ConfidenceEngine {
       result = Math.min(result, 76);
     } else if (probability < 0.75) {
       result = Math.min(result, 82);
+    } else if (probability < 0.8) {
+      result = Math.min(result, 87);
+    } else if (probability < 0.85) {
+      result = Math.min(result, 91);
+    } else if (probability < 0.9) {
+      result = Math.min(result, 94);
     }
 
     /*
-     * High probabilities require stronger model agreement.
+     * ----------------------------------------------------------
+     * LOWER COHERENCE SUPPORT
+     * ----------------------------------------------------------
+     *
+     * A very strong probability should not collapse to an
+     * extremely low confidence number when evidence is at least
+     * moderately supportive.
+     *
+     * This is deliberately evidence-dependent.
      */
-    if (probability >= 0.8 && agreement < 0.6) {
+    if (probability >= 0.8 && evidenceScore >= 0.5) {
+      result = Math.max(result, 62);
+    }
+
+    if (probability >= 0.85 && evidenceScore >= 0.55 && agreement >= 0.55) {
+      result = Math.max(result, 68);
+    }
+
+    if (probability >= 0.9 && evidenceScore >= 0.6 && agreement >= 0.6) {
+      result = Math.max(result, 74);
+    }
+
+    if (probability >= 0.95 && evidenceScore >= 0.7 && agreement >= 0.75) {
+      result = Math.max(result, 82);
+    }
+
+    /*
+     * Very weak agreement must still limit confidence.
+     */
+    if (probability >= 0.8 && agreement < 0.45) {
+      result = Math.min(result, 65);
+    }
+
+    if (probability >= 0.9 && agreement < 0.6) {
       result = Math.min(result, 72);
-    }
-
-    if (probability >= 0.85 && agreement < 0.7) {
-      result = Math.min(result, 78);
-    }
-
-    if (probability >= 0.9 && agreement < 0.75) {
-      result = Math.min(result, 82);
-    }
-
-    if (probability >= 0.95 && agreement < 0.85) {
-      result = Math.min(result, 86);
     }
 
     return result;
@@ -329,43 +344,43 @@ export class ConfidenceEngine {
   ): number {
     let result = confidence;
 
-    if (evidence.modelReliability < 0.35) {
-      result = Math.min(result, 52);
-    } else if (evidence.modelReliability < 0.5) {
+    if (evidence.modelReliability < 0.3) {
+      result = Math.min(result, 55);
+    } else if (evidence.modelReliability < 0.4) {
       result = Math.min(result, 62);
-    } else if (evidence.modelReliability < 0.6) {
+    } else if (evidence.modelReliability < 0.5) {
       result = Math.min(result, 70);
     }
 
     if (evidence.dataQuality < 0.35) {
-      result = Math.min(result, 52);
-    } else if (evidence.dataQuality < 0.5) {
-      result = Math.min(result, 62);
-    } else if (evidence.dataQuality < 0.6) {
-      result = Math.min(result, 70);
-    }
-
-    if (evidence.sampleReliability < 0.3) {
       result = Math.min(result, 55);
-    } else if (evidence.sampleReliability < 0.45) {
+    } else if (evidence.dataQuality < 0.5) {
       result = Math.min(result, 65);
-    } else if (evidence.sampleReliability < 0.55) {
+    } else if (evidence.dataQuality < 0.6) {
       result = Math.min(result, 72);
     }
 
-    if (evidence.agreement < 0.4) {
-      result = Math.min(result, 50);
-    } else if (evidence.agreement < 0.5) {
-      result = Math.min(result, 58);
-    } else if (evidence.agreement < 0.6) {
+    if (evidence.sampleReliability < 0.25) {
+      result = Math.min(result, 55);
+    } else if (evidence.sampleReliability < 0.4) {
+      result = Math.min(result, 65);
+    } else if (evidence.sampleReliability < 0.5) {
+      result = Math.min(result, 72);
+    }
+
+    if (evidence.agreement < 0.35) {
+      result = Math.min(result, 52);
+    } else if (evidence.agreement < 0.45) {
+      result = Math.min(result, 60);
+    } else if (evidence.agreement < 0.55) {
       result = Math.min(result, 68);
     }
 
-    if (evidence.safety < 0.45) {
+    if (evidence.safety < 0.4) {
       result = Math.min(result, 55);
-    } else if (evidence.safety < 0.55) {
+    } else if (evidence.safety < 0.5) {
       result = Math.min(result, 63);
-    } else if (evidence.safety < 0.65) {
+    } else if (evidence.safety < 0.6) {
       result = Math.min(result, 72);
     }
 
@@ -455,6 +470,10 @@ export class ConfidenceEngine {
     } else if (input.confidence >= 90) {
       reasons.push(
         'Confidence is strongly supported by the available evidence.',
+      );
+    } else if (input.confidence >= 75) {
+      reasons.push(
+        'Confidence is meaningfully supported by the probability and evidence.',
       );
     }
 

@@ -9,6 +9,8 @@ export interface ValueResult {
 
   impliedProbability?: number;
 
+  fairOdds?: number;
+
   modelProbability: number;
 
   probabilityEdge?: number;

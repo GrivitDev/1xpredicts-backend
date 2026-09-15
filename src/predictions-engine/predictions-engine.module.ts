@@ -89,6 +89,7 @@ import {
   TeamPerformanceProfile,
   TeamPerformanceProfileSchema,
 } from 'src/sports/schemas/team-performance-profile.schema';
+import { OddsCalculationService } from './engines/value/odds-calculation.service';
 
 @Module({
   imports: [
@@ -191,6 +192,7 @@ import {
     CalibrationEngine,
 
     ValueEngine,
+    OddsCalculationService,
     SafetyEngine,
     ProbabilityEngine,
     MarketModelRegistry,

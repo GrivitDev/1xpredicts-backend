@@ -32,51 +32,14 @@ export const ENABLED_PREDICTION_MARKETS: PredictionMarketCandidate[] = [
   },
 
   // ============================================================
-  // DOUBLE CHANCE
+  // OVER GOALS ONLY
   // ============================================================
 
-  {
-    market: PredictionMarket.DOUBLE_CHANCE,
-    selection: 'HOME_OR_DRAW',
+  ...['1.5', '2.5', '3.5', '4.5'].map((line) => ({
+    market: PredictionMarket.OVER_UNDER,
+    selection: `OVER_${line}`,
     enabled,
-  },
-  {
-    market: PredictionMarket.DOUBLE_CHANCE,
-    selection: 'AWAY_OR_DRAW',
-    enabled,
-  },
-
-  // ============================================================
-  // DRAW NO BET
-  // ============================================================
-
-  {
-    market: PredictionMarket.DRAW_NO_BET,
-    selection: 'HOME',
-    enabled,
-  },
-  {
-    market: PredictionMarket.DRAW_NO_BET,
-    selection: 'AWAY',
-    enabled,
-  },
-
-  // ============================================================
-  // OVER / UNDER
-  // ============================================================
-
-  ...['1.5', '2.5', '3.5', '4.5'].flatMap((line) => [
-    {
-      market: PredictionMarket.OVER_UNDER,
-      selection: `OVER_${line}`,
-      enabled,
-    },
-    {
-      market: PredictionMarket.OVER_UNDER,
-      selection: `UNDER_${line}`,
-      enabled,
-    },
-  ]),
+  })),
 
   // ============================================================
   // BOTH TEAMS TO SCORE
@@ -87,48 +50,41 @@ export const ENABLED_PREDICTION_MARKETS: PredictionMarketCandidate[] = [
     selection: 'YES',
     enabled,
   },
-  {
-    market: PredictionMarket.BOTH_TEAMS_TO_SCORE,
-    selection: 'NO',
-    enabled,
-  },
 
   // ============================================================
   // GOAL RANGE
   // ============================================================
 
-  ...['0', '1-2', '3-4', '5+'].map((selection) => ({
+  {
     market: PredictionMarket.GOAL_RANGE,
-    selection,
+    selection: '3-4',
+    enabled,
+  },
+  {
+    market: PredictionMarket.GOAL_RANGE,
+    selection: '5+',
+    enabled,
+  },
+
+  // ============================================================
+  // HOME TEAM TOTAL GOALS
+  // ============================================================
+
+  ...['1.5', '2.5', '3.5'].map((line) => ({
+    market: PredictionMarket.TEAM_TOTAL_GOALS,
+    selection: `HOME_OVER_${line}`,
     enabled,
   })),
 
   // ============================================================
-  // TEAM TOTAL GOALS
+  // AWAY TEAM TOTAL GOALS
   // ============================================================
 
-  ...['0.5', '1.5', '2.5', '3.5'].flatMap((line) => [
-    {
-      market: PredictionMarket.TEAM_TOTAL_GOALS,
-      selection: `HOME_OVER_${line}`,
-      enabled,
-    },
-    {
-      market: PredictionMarket.TEAM_TOTAL_GOALS,
-      selection: `HOME_UNDER_${line}`,
-      enabled,
-    },
-    {
-      market: PredictionMarket.TEAM_TOTAL_GOALS,
-      selection: `AWAY_OVER_${line}`,
-      enabled,
-    },
-    {
-      market: PredictionMarket.TEAM_TOTAL_GOALS,
-      selection: `AWAY_UNDER_${line}`,
-      enabled,
-    },
-  ]),
+  ...['1.5', '2.5', '3.5'].map((line) => ({
+    market: PredictionMarket.TEAM_TOTAL_GOALS,
+    selection: `AWAY_OVER_${line}`,
+    enabled,
+  })),
 
   // ============================================================
   // HALF TIME RESULT
@@ -154,41 +110,27 @@ export const ENABLED_PREDICTION_MARKETS: PredictionMarketCandidate[] = [
   // FIRST HALF GOALS
   // ============================================================
 
-  ...['0.5', '1.5', '2.5', '3.5'].flatMap((line) => [
-    {
-      market: PredictionMarket.FIRST_HALF_GOALS,
-      selection: `OVER_${line}`,
-      enabled,
-    },
-    {
-      market: PredictionMarket.FIRST_HALF_GOALS,
-      selection: `UNDER_${line}`,
-      enabled,
-    },
-  ]),
+  ...['1.5', '2.5', '3.5'].map((line) => ({
+    market: PredictionMarket.FIRST_HALF_GOALS,
+    selection: `OVER_${line}`,
+    enabled,
+  })),
 
   // ============================================================
   // SECOND HALF GOALS
   // ============================================================
 
-  ...['0.5', '1.5', '2.5', '3.5'].flatMap((line) => [
-    {
-      market: PredictionMarket.SECOND_HALF_GOALS,
-      selection: `OVER_${line}`,
-      enabled,
-    },
-    {
-      market: PredictionMarket.SECOND_HALF_GOALS,
-      selection: `UNDER_${line}`,
-      enabled,
-    },
-  ]),
+  ...['1.5', '2.5', '3.5'].map((line) => ({
+    market: PredictionMarket.SECOND_HALF_GOALS,
+    selection: `OVER_${line}`,
+    enabled,
+  })),
 
   // ============================================================
   // ASIAN HANDICAP
   // ============================================================
 
-  ...['-1.5', '-1', '-0.5', '0', '0.5', '1', '1.5'].map((line) => ({
+  ...['-1.5', '-1', '-0.5', '0.5', '1', '1.5'].map((line) => ({
     market: PredictionMarket.ASIAN_HANDICAP,
     selection: `HOME_${line}`,
     enabled,
