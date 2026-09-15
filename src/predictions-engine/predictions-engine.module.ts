@@ -60,6 +60,14 @@ import { PredictionsEngineController } from './controllers/predictions-engine.co
 import { PredictionsReadController } from './controllers/predictions-read.controller';
 import { SettlementController } from './controllers/settlement.controller';
 import { PredictionQueueWorkerService } from './services/prediction-queue-worker.service';
+import {
+  EspnFixture,
+  EspnFixtureSchema,
+} from 'src/sports/schemas/espn/espn-fixture.schema';
+import {
+  ActiveCompetition,
+  ActiveCompetitionSchema,
+} from 'src/sports/schemas/active-competition.schema';
 
 @Module({
   imports: [
@@ -95,6 +103,15 @@ import { PredictionQueueWorkerService } from './services/prediction-queue-worker
       {
         name: PredictionRun.name,
         schema: PredictionRunSchema,
+      },
+      {
+        name: EspnFixture.name,
+        schema: EspnFixtureSchema,
+      },
+
+      {
+        name: ActiveCompetition.name,
+        schema: ActiveCompetitionSchema,
       },
     ]),
   ],
