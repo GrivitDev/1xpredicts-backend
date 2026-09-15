@@ -1,4 +1,4 @@
-// src/prediction/services/prediction-save.service.ts
+// src/predictions-engine/services/prediction-save.service.ts
 
 import { Injectable, Logger } from '@nestjs/common';
 
@@ -16,12 +16,6 @@ import { PredictionStatus } from '../enums/prediction-status.enum';
 
 import { PredictionResult } from '../interfaces/prediction-result.interface';
 import { PredictionRunInput } from '../interfaces/prediction-run.interface';
-
-type PredictionBulkWriteResult = {
-  matchedCount?: number;
-  modifiedCount?: number;
-  upsertedCount?: number;
-};
 
 @Injectable()
 export class PredictionSaveService {
@@ -42,16 +36,20 @@ export class PredictionSaveService {
     if (!predictions.length) {
       await this.savePredictionRun(event, []);
 
-      this.logger.warn(`No predictions to save for event=${event.eventId}`);
-
       return;
     }
+
+    this.logger.log(
+      `Prediction persistence starting: event=${event.eventId} collection=${this.predictionModel.collection.name} model=${this.predictionModel.modelName} database=${this.predictionModel.db.name} count=${predictions.length}`,
+    );
 
     const operations = predictions.map((prediction) => ({
       updateOne: {
         filter: {
           eventId: prediction.eventId,
+
           market: prediction.market,
+
           selection: prediction.selection,
         },
 
@@ -115,11 +113,11 @@ export class PredictionSaveService {
       },
     }));
 
-    let writeResult: PredictionBulkWriteResult;
+    let writeResult;
 
     try {
       writeResult = await this.predictionModel.bulkWrite(operations, {
-        ordered: false,
+        ordered: true,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -133,49 +131,139 @@ export class PredictionSaveService {
     }
 
     this.logger.log(
-      `Prediction bulkWrite completed: event=${event.eventId} operations=${operations.length} matched=${writeResult.matchedCount ?? 0} modified=${writeResult.modifiedCount ?? 0} upserted=${writeResult.upsertedCount ?? 0}`,
+      `Prediction bulkWrite result: event=${event.eventId} matched=${writeResult.matchedCount ?? 0} modified=${writeResult.modifiedCount ?? 0} upserted=${writeResult.upsertedCount ?? 0} inserted=${writeResult.insertedCount ?? 0}`,
     );
 
-    /*
-     * ----------------------------------------------------------
-     * VERIFY PERSISTENCE
-     * ----------------------------------------------------------
-     *
-     * The engine must never report a successful prediction save
-     * when MongoDB contains no corresponding prediction documents.
-     */
-    const persistedCount = await this.predictionModel.countDocuments({
+    let persistedCount = await this.predictionModel.countDocuments({
       eventId: event.eventId,
     });
 
-    if (persistedCount <= 0) {
-      const collectionName = this.predictionModel.collection.name;
+    /*
+     * Diagnostic fallback.
+     *
+     * If bulkWrite claims success but no document exists,
+     * attempt one ordinary Mongoose create(). This is intended
+     * to expose schema/connection/model problems explicitly.
+     */
+    if (persistedCount === 0) {
+      const first = predictions[0];
 
       this.logger.error(
-        `Prediction persistence verification failed: event=${event.eventId} collection=${collectionName} expected=${predictions.length} persisted=0`,
+        `Bulk prediction write produced no document. Attempting direct create for event=${event.eventId} market=${first.market} selection=${first.selection}`,
       );
 
+      try {
+        const created = await this.predictionModel.create({
+          eventId: first.eventId,
+
+          competitionId: first.competitionId,
+
+          season: first.season,
+
+          fixtureDate: first.fixtureDate,
+
+          homeTeam: {
+            id: first.homeTeamId,
+
+            name: first.homeTeamName,
+          },
+
+          awayTeam: {
+            id: first.awayTeamId,
+
+            name: first.awayTeamName,
+          },
+
+          market: first.market,
+
+          selection: first.selection,
+
+          probability: first.probability,
+
+          confidence: first.confidence,
+
+          safetyScore: first.safetyScore,
+
+          modelAgreement: first.modelAgreement,
+
+          dataQuality: first.dataQuality,
+
+          calibrationReliability: first.calibrationReliability,
+
+          risk: first.risk,
+
+          decisionScore: first.decisionScore,
+
+          source: first.source,
+
+          modelVersion: first.modelVersion,
+
+          status: first.status ?? PredictionStatus.ACTIVE,
+
+          actualOutcome: null,
+
+          settledAt: null,
+
+          generatedAt: first.generatedAt,
+
+          settlement: {
+            status: 'PENDING',
+
+            actualOutcome: null,
+
+            actualValue: null,
+
+            resultLabel: null,
+
+            finalHomeScore: null,
+
+            finalAwayScore: null,
+
+            halfTimeHomeScore: null,
+
+            halfTimeAwayScore: null,
+
+            source: 'ESPN_FIXTURE',
+
+            settlementVersion: 'settlement-v2',
+
+            settledAt: null,
+          },
+
+          metadata: {},
+        });
+
+        this.logger.log(
+          `Direct prediction create succeeded: event=${event.eventId} id=${String(created._id)}`,
+        );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+
+        this.logger.error(
+          `Direct prediction create failed: event=${event.eventId} error=${message}`,
+          error instanceof Error ? error.stack : undefined,
+        );
+
+        throw error;
+      }
+
+      persistedCount = await this.predictionModel.countDocuments({
+        eventId: event.eventId,
+      });
+    }
+
+    if (persistedCount === 0) {
       throw new Error(
-        `Prediction documents were not persisted for event ${event.eventId}. MongoDB collection=${collectionName}.`,
+        `Prediction documents were not persisted for event ${event.eventId}. collection=${this.predictionModel.collection.name} database=${this.predictionModel.db.name}`,
       );
     }
 
-    /*
-     * ----------------------------------------------------------
-     * RECONCILE
-     * ----------------------------------------------------------
-     */
     await this.reconcileEvent(event.eventId, predictions);
 
-    /*
-     * ----------------------------------------------------------
-     * SAVE RUN
-     * ----------------------------------------------------------
-     */
     await this.savePredictionRun(event, predictions);
 
     this.logger.log(
-      `Saved ${predictions.length} predictions for event=${event.eventId}; persisted=${persistedCount}`,
+      `Prediction persistence completed: event=${event.eventId} predictions=${predictions.length} persisted=${persistedCount}`,
     );
   }
 
@@ -233,10 +321,6 @@ export class PredictionSaveService {
         },
       )
       .exec();
-
-    this.logger.debug(
-      `Reconciled stale predictions: event=${eventId} cancelled=${staleIds.length}`,
-    );
   }
 
   private async savePredictionRun(
