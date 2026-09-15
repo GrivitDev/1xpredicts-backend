@@ -6,10 +6,8 @@ import { MarketModel } from '../../interfaces/market-model.interface';
 import { ResultMarketEngine } from './result-market.engine';
 import { BttsMarketEngine } from './btts-market.engine';
 import { GoalMarketEngine } from './goal-market.engine';
-import { CleanSheetMarketEngine } from './clean-sheet-market.engine';
 import { HalfMarketEngine } from './half-market.engine';
 import { HandicapMarketEngine } from './handicap-market.engine';
-import { FirstToScoreMarketEngine } from './first-to-score-market.engine';
 
 @Injectable()
 export class MarketModelRegistry {
@@ -19,19 +17,15 @@ export class MarketModelRegistry {
     private readonly resultMarketEngine: ResultMarketEngine,
     private readonly bttsMarketEngine: BttsMarketEngine,
     private readonly goalMarketEngine: GoalMarketEngine,
-    private readonly cleanSheetMarketEngine: CleanSheetMarketEngine,
     private readonly halfMarketEngine: HalfMarketEngine,
     private readonly handicapMarketEngine: HandicapMarketEngine,
-    private readonly firstToScoreMarketEngine: FirstToScoreMarketEngine,
   ) {
     this.models = [
       this.resultMarketEngine,
       this.bttsMarketEngine,
       this.goalMarketEngine,
-      this.cleanSheetMarketEngine,
       this.halfMarketEngine,
       this.handicapMarketEngine,
-      this.firstToScoreMarketEngine,
     ];
   }
 

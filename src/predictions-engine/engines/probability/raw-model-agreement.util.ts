@@ -1,3 +1,5 @@
+// src/predictions-engine/engines/probability/raw-model-agreement.util.ts
+
 import { PredictionMarket } from '../../enums/prediction-market.enum';
 import { RawPredictionFeatures } from '../../interfaces/raw-prediction-features.interface';
 
@@ -38,12 +40,6 @@ export class RawModelAgreementUtil {
       values.reduce((sum, value) => sum + Math.abs(value - mean), 0) /
       values.length;
 
-    /*
-     * Three genuinely different estimates are compared.
-     *
-     * Small disagreement => strong agreement.
-     * Large disagreement => weak agreement.
-     */
     const agreement = this.clamp(1 - meanAbsoluteDeviation * 3);
 
     return {
@@ -53,18 +49,6 @@ export class RawModelAgreementUtil {
     };
   }
 
-  /**
-   * ============================================================
-   * MODEL 1 — SAFETY MODEL
-   * ============================================================
-   *
-   * Conservative by design.
-   *
-   * It does not create a new football prediction. It asks:
-   *
-   * "How much of the reality model's probability can we safely
-   * trust given the quality and amount of evidence?"
-   */
   private static calculateSafetyModel(
     features: RawPredictionFeatures,
     probability: number,
@@ -87,35 +71,11 @@ export class RawModelAgreementUtil {
       historicalQuality * 0.2 +
       sampleReliability * 0.25;
 
-    /*
-     * Strong evidence preserves the original probability.
-     * Weak evidence pulls an extreme probability toward neutral.
-     */
     const uncertainty = (1 - evidenceStrength) * 0.6;
 
-    const safetyProbability =
-      probability * (1 - uncertainty) + 0.5 * uncertainty;
-
-    return this.clamp(safetyProbability);
+    return this.clamp(probability * (1 - uncertainty) + 0.5 * uncertainty);
   }
 
-  /**
-   * ============================================================
-   * MODEL 3 — INDEPENDENT MODEL
-   * ============================================================
-   *
-   * This model does NOT reuse the registered market engine.
-   *
-   * It derives the market probability directly from:
-   * - recent form
-   * - venue performance
-   * - overall team performance
-   * - standings
-   * - H2H where relevant
-   *
-   * Its methodology is intentionally different from the
-   * primary goal/market model.
-   */
   private static calculateIndependentModel(
     features: RawPredictionFeatures,
     market: PredictionMarket,
@@ -130,9 +90,6 @@ export class RawModelAgreementUtil {
       case PredictionMarket.BOTH_TEAMS_TO_SCORE:
         return this.calculateBttsProbability(features, selection);
 
-      case PredictionMarket.BTTS_GOALS:
-        return this.calculateBttsGoalsProbability(features, selection);
-
       case PredictionMarket.OVER_UNDER:
       case PredictionMarket.FIRST_HALF_GOALS:
       case PredictionMarket.SECOND_HALF_GOALS:
@@ -144,12 +101,6 @@ export class RawModelAgreementUtil {
       case PredictionMarket.TEAM_TOTAL_GOALS:
         return this.calculateTeamTotalProbability(features, selection);
 
-      case PredictionMarket.EXACT_GOALS:
-        return this.calculateExactGoalsProbability(features, selection);
-
-      case PredictionMarket.CLEAN_SHEET:
-        return this.calculateCleanSheetProbability(features, selection);
-
       case PredictionMarket.HALF_TIME_RESULT:
       case PredictionMarket.SECOND_HALF_RESULT:
         return this.calculatePeriodResultProbability(
@@ -157,12 +108,6 @@ export class RawModelAgreementUtil {
           market,
           selection,
         );
-
-      case PredictionMarket.HALF_TIME_FULL_TIME:
-        return this.calculateHalfTimeFullTimeProbability(features, selection);
-
-      case PredictionMarket.FIRST_TO_SCORE:
-        return this.calculateFirstToScoreProbability(features, selection);
 
       case PredictionMarket.ASIAN_HANDICAP:
       case PredictionMarket.EUROPEAN_HANDICAP:
@@ -237,14 +182,6 @@ export class RawModelAgreementUtil {
           return this.clamp(away + draw);
         }
 
-        if (
-          selection === 'HOME_OR_AWAY' ||
-          selection === 'HOME_AWAY' ||
-          selection === '12'
-        ) {
-          return this.clamp(home + away);
-        }
-
         return 0.5;
 
       case PredictionMarket.DRAW_NO_BET:
@@ -297,32 +234,6 @@ export class RawModelAgreementUtil {
     return 0.5;
   }
 
-  private static calculateBttsGoalsProbability(
-    features: RawPredictionFeatures,
-    selection: string,
-  ): number {
-    const btts = this.calculateBttsProbability(features, 'YES');
-
-    const thresholdMatch = selection.trim().match(/^(\d+)\+$/);
-
-    if (!thresholdMatch) {
-      return 0.5;
-    }
-
-    const threshold = Number(thresholdMatch[1]);
-
-    if (threshold <= 1) {
-      return btts;
-    }
-
-    const totalGoalsRate = this.calculateTotalGoalsOverRate(
-      features,
-      threshold - 1,
-    );
-
-    return this.clamp(btts * totalGoalsRate);
-  }
-
   private static calculateOverUnderProbability(
     features: RawPredictionFeatures,
     market: PredictionMarket,
@@ -341,11 +252,6 @@ export class RawModelAgreementUtil {
 
     const line = Number(match[2]);
 
-    /*
-     * For full match markets use team scoring rates.
-     * For period markets use the corresponding period data
-     * when available.
-     */
     let rate: number;
 
     if (market === PredictionMarket.FIRST_HALF_GOALS) {
@@ -440,66 +346,6 @@ export class RawModelAgreementUtil {
     return type === 'OVER' ? rate : this.clamp(1 - rate);
   }
 
-  private static calculateExactGoalsProbability(
-    features: RawPredictionFeatures,
-    selection: string,
-  ): number {
-    const scoreMatch = selection
-      .trim()
-      .toUpperCase()
-      .match(/^(\d+)[_: -](\d+)$/);
-
-    if (scoreMatch) {
-      const homeGoals = Number(scoreMatch[1]);
-
-      const awayGoals = Number(scoreMatch[2]);
-
-      return this.estimateExactScore(features, homeGoals, awayGoals);
-    }
-
-    const teamMatch = selection
-      .trim()
-      .toUpperCase()
-      .match(/^(HOME|AWAY)_(\d+)$/);
-
-    if (!teamMatch) {
-      return 0.5;
-    }
-
-    const team = teamMatch[1] === 'HOME' ? features.home : features.away;
-
-    const goals = Number(teamMatch[2]);
-
-    return this.poissonProbability(this.estimateTeamGoals(team), goals);
-  }
-
-  private static calculateCleanSheetProbability(
-    features: RawPredictionFeatures,
-    selection: string,
-  ): number {
-    if (selection === 'HOME') {
-      return this.clamp(
-        this.averageAvailable([
-          features.home.cleanSheetRate,
-          features.home.venue.cleanSheetRate,
-          1 - features.away.failedToScoreRate,
-        ]),
-      );
-    }
-
-    if (selection === 'AWAY') {
-      return this.clamp(
-        this.averageAvailable([
-          features.away.cleanSheetRate,
-          features.away.venue.cleanSheetRate,
-          1 - features.home.failedToScoreRate,
-        ]),
-      );
-    }
-
-    return 0.5;
-  }
-
   private static calculatePeriodResultProbability(
     features: RawPredictionFeatures,
     market: PredictionMarket,
@@ -559,85 +405,6 @@ export class RawModelAgreementUtil {
     return 0.5;
   }
 
-  private static calculateHalfTimeFullTimeProbability(
-    features: RawPredictionFeatures,
-    selection: string,
-  ): number {
-    const match = selection
-      .trim()
-      .toUpperCase()
-      .match(/^(HOME|DRAW|AWAY)[_-](HOME|DRAW|AWAY)$/);
-
-    if (!match) {
-      return 0.5;
-    }
-
-    const halfHome = this.calculatePeriodResultProbability(
-      features,
-      PredictionMarket.HALF_TIME_RESULT,
-      match[1],
-    );
-
-    const halfAway = this.calculatePeriodResultProbability(
-      features,
-      PredictionMarket.HALF_TIME_RESULT,
-      match[2],
-    );
-
-    const secondHome = this.calculatePeriodResultProbability(
-      features,
-      PredictionMarket.SECOND_HALF_RESULT,
-      match[2],
-    );
-
-    /*
-     * Treat the two periods as related but not fully
-     * independent. This deliberately penalizes very small
-     * probabilities rather than producing artificial certainty.
-     */
-    return this.clamp(
-      Math.sqrt(Math.max(halfHome, 0.01) * Math.max(secondHome, 0.01)) * 0.65 +
-        Math.min(halfHome, halfAway) * 0.35,
-    );
-  }
-
-  private static calculateFirstToScoreProbability(
-    features: RawPredictionFeatures,
-    selection: string,
-  ): number {
-    const home = this.getFirstScoreRate(
-      features.home.scoredFirstRate,
-      features.h2h?.homeScoredFirstRate,
-    );
-
-    const away = this.getFirstScoreRate(
-      features.away.scoredFirstRate,
-      features.h2h?.awayScoredFirstRate,
-    );
-
-    const noneBase = 1 - Math.min(home + away, 1);
-
-    const total = home + away + Math.max(noneBase, 0);
-
-    if (total <= 0) {
-      return 0.5;
-    }
-
-    if (selection === 'HOME') {
-      return this.clamp(home / total);
-    }
-
-    if (selection === 'AWAY') {
-      return this.clamp(away / total);
-    }
-
-    if (selection === 'NONE') {
-      return this.clamp(Math.max(noneBase, 0) / total);
-    }
-
-    return 0.5;
-  }
-
   private static calculateHandicapProbability(
     features: RawPredictionFeatures,
     market: PredictionMarket,
@@ -674,10 +441,6 @@ export class RawModelAgreementUtil {
       return this.sigmoid(Math.abs(margin - line) - 0.5, 1.3);
     }
 
-    /*
-     * Asian handicap in the current configuration is
-     * represented primarily by HOME_<line>.
-     */
     if (side === 'HOME') {
       return this.sigmoid(margin + line, 1.1);
     }
@@ -736,10 +499,6 @@ export class RawModelAgreementUtil {
       return null;
     }
 
-    /*
-     * Averaging the two team profiles is deliberately less
-     * aggressive than the primary score model.
-     */
     return this.clamp(this.average(values));
   }
 
@@ -779,21 +538,6 @@ export class RawModelAgreementUtil {
     return this.clamp(this.average(values));
   }
 
-  private static estimateExactScore(
-    features: RawPredictionFeatures,
-    homeGoals: number,
-    awayGoals: number,
-  ): number {
-    const homeLambda = this.estimateTeamGoals(features.home);
-
-    const awayLambda = this.estimateTeamGoals(features.away);
-
-    return (
-      this.poissonProbability(homeLambda, homeGoals) *
-      this.poissonProbability(awayLambda, awayGoals)
-    );
-  }
-
   private static estimateTeamGoals(
     team: RawPredictionFeatures['home'],
   ): number {
@@ -829,22 +573,14 @@ export class RawModelAgreementUtil {
     );
 
     if (weight <= 0) {
-      return 1.0;
+      return 1;
     }
 
-    /*
-     * Keep the independent model conservative. It should not
-     * generate extreme scoring expectations from sparse data.
-     */
     const observed = weighted / weight;
 
     const reliability = this.clamp(this.sampleReliability(team.sampleSize));
 
-    return this.clamp(
-      observed * reliability + 1.0 * (1 - reliability),
-      0.2,
-      3.0,
-    );
+    return this.clamp(observed * reliability + 1 * (1 - reliability), 0.2, 3);
   }
 
   private static calculateTeamStrength(
@@ -923,22 +659,6 @@ export class RawModelAgreementUtil {
     const awayGoals = this.estimateTeamGoals(features.away);
 
     return (homeStrength - awayStrength) * 1.5 + (homeGoals - awayGoals);
-  }
-
-  private static getFirstScoreRate(
-    ownRate: number,
-    h2hRate: number | undefined,
-  ): number {
-    const values = [
-      this.safeProbability(ownRate),
-      this.safeProbability(h2hRate),
-    ].filter((value): value is number => value !== null);
-
-    if (!values.length) {
-      return 0;
-    }
-
-    return this.clamp(this.average(values));
   }
 
   private static normalizedPointsPerMatch(value: number): number {

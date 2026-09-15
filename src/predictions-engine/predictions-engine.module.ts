@@ -45,10 +45,8 @@ import { MarketModelRegistry } from './engines/probability/market-model.registry
 import { ResultMarketEngine } from './engines/probability/result-market.engine';
 import { BttsMarketEngine } from './engines/probability/btts-market.engine';
 import { GoalMarketEngine } from './engines/probability/goal-market.engine';
-import { CleanSheetMarketEngine } from './engines/probability/clean-sheet-market.engine';
 import { HalfMarketEngine } from './engines/probability/half-market.engine';
 import { HandicapMarketEngine } from './engines/probability/handicap-market.engine';
-import { FirstToScoreMarketEngine } from './engines/probability/first-to-score-market.engine';
 
 import { EnsembleEngine } from './engines/ensemble/ensemble.engine';
 import { ConfidenceEngine } from './engines/ensemble/confidence.engine';
@@ -197,10 +195,8 @@ import {
     ResultMarketEngine,
     BttsMarketEngine,
     GoalMarketEngine,
-    CleanSheetMarketEngine,
     HalfMarketEngine,
     HandicapMarketEngine,
-    FirstToScoreMarketEngine,
 
     EnsembleEngine,
     ConfidenceEngine,

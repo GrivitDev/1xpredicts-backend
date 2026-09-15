@@ -1,11 +1,11 @@
+// src/predictions-engine/engines/probability/goal-market.engine.ts
+
 import { Injectable } from '@nestjs/common';
 
 import { PredictionMarket } from '../../enums/prediction-market.enum';
 
 import { MarketModel } from '../../interfaces/market-model.interface';
-
 import { MarketModelInput } from '../../interfaces/market-model-input.interface';
-
 import { ProbabilityModelResult } from '../../interfaces/probability-result.interface';
 
 import { RawGoalModelUtil } from './raw-goal-model.util';
@@ -17,7 +17,6 @@ export class GoalMarketEngine implements MarketModel {
       PredictionMarket.OVER_UNDER,
       PredictionMarket.GOAL_RANGE,
       PredictionMarket.TEAM_TOTAL_GOALS,
-      PredictionMarket.EXACT_GOALS,
     ].includes(market);
   }
 
@@ -43,21 +42,34 @@ export class GoalMarketEngine implements MarketModel {
     return {
       market: input.market,
       selection: input.selection,
+
       probability,
+
       supportingProbability: probability,
+
       sampleSize,
+
       dataQuality,
+
       modelReliability,
+
       modelName: 'raw-goal-model',
+
       modelVersion: 'raw-goal-v2',
+
       modelOutputs: {
         expectedHomeGoals: model.expectedHomeGoals,
+
         expectedAwayGoals: model.expectedAwayGoals,
+
         expectedTotalGoals: model.expectedTotalGoals,
       },
+
       modelSignals: {
         expectedHomeGoals: model.expectedHomeGoals,
+
         expectedAwayGoals: model.expectedAwayGoals,
+
         expectedTotalGoals: model.expectedTotalGoals,
       },
     };
@@ -78,9 +90,6 @@ export class GoalMarketEngine implements MarketModel {
       case PredictionMarket.TEAM_TOTAL_GOALS:
         return this.resolveTeamTotal(selection, model);
 
-      case PredictionMarket.EXACT_GOALS:
-        return this.resolveExactGoals(selection, model);
-
       default:
         return 0;
     }
@@ -96,6 +105,7 @@ export class GoalMarketEngine implements MarketModel {
     }
 
     const side = match[1];
+
     const line = Number(match[2]);
 
     if (!Number.isFinite(line) || line < 0) {
@@ -109,21 +119,6 @@ export class GoalMarketEngine implements MarketModel {
 
   private resolveGoalRange(selection: string, probabilities: number[]): number {
     const normalized = selection.trim().toUpperCase().replace(/\s+/g, '');
-
-    /*
-     * Supports the configured forms:
-     *
-     * 0
-     * 1-2
-     * 3-4
-     * 5+
-     *
-     * Also supports optional explicit prefixes such as:
-     *
-     * GOALS_0
-     * TOTAL_GOALS_1-2
-     * GOALS_5+
-     */
 
     const prefixed = normalized.match(
       /^(?:GOALS?|TOTAL_GOALS?|TOTALGOALS?)[_: -]?(.+)$/,
@@ -158,6 +153,7 @@ export class GoalMarketEngine implements MarketModel {
     }
 
     const minimum = Number(rangeMatch[1]);
+
     const maximum = Number(rangeMatch[2]);
 
     if (
@@ -194,7 +190,9 @@ export class GoalMarketEngine implements MarketModel {
     }
 
     const team = match[1];
+
     const side = match[2];
+
     const line = Number(match[3]);
 
     if (!Number.isFinite(line) || line < 0) {
@@ -209,73 +207,6 @@ export class GoalMarketEngine implements MarketModel {
     return side === 'OVER'
       ? this.probabilityOver(probabilities, line)
       : this.probabilityUnder(probabilities, line);
-  }
-
-  private resolveExactGoals(
-    selection: string,
-    model: ReturnType<typeof RawGoalModelUtil.calculate>,
-  ): number {
-    const normalized = selection.trim().toUpperCase();
-
-    /*
-     * Configured forms:
-     *
-     * HOME_0
-     * HOME_1
-     * ...
-     * HOME_6
-     *
-     * AWAY_0
-     * AWAY_1
-     * ...
-     * AWAY_6
-     */
-
-    const teamMatch = normalized.match(/^(HOME|AWAY)[_: -]?(\d+)$/);
-
-    if (teamMatch) {
-      const team = teamMatch[1];
-      const goals = Number(teamMatch[2]);
-
-      if (!Number.isFinite(goals) || goals < 0) {
-        return 0;
-      }
-
-      return this.probabilityExactly(
-        team === 'HOME'
-          ? model.homeGoalProbabilities
-          : model.awayGoalProbabilities,
-        goals,
-      );
-    }
-
-    /*
-     * Also support exact score selections such as:
-     *
-     * 2-1
-     * 0:0
-     */
-    const scoreMatch = normalized.match(/^(\d+)[-:](\d+)$/);
-
-    if (!scoreMatch) {
-      return 0;
-    }
-
-    const homeGoals = Number(scoreMatch[1]);
-    const awayGoals = Number(scoreMatch[2]);
-
-    if (
-      !Number.isFinite(homeGoals) ||
-      !Number.isFinite(awayGoals) ||
-      homeGoals < 0 ||
-      awayGoals < 0 ||
-      homeGoals >= model.matrix.length ||
-      awayGoals >= model.matrix[homeGoals].length
-    ) {
-      return 0;
-    }
-
-    return this.clamp(model.matrix[homeGoals]?.[awayGoals] ?? 0);
   }
 
   private probabilityOver(probabilities: number[], line: number): number {
