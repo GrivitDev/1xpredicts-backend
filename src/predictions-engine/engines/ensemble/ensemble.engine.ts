@@ -49,30 +49,26 @@ export class EnsembleEngine {
 
     /*
      * ----------------------------------------------------------
-     * PROBABILITY / CONFIDENCE ALIGNMENT
+     * CONFIDENCE
      * ----------------------------------------------------------
      *
-     * A high probability must have enough supporting evidence.
+     * Confidence is already calculated from probability and
+     * evidence by ConfidenceEngine.
      *
-     * This prevents outputs such as:
+     * Do not perform another probability-based penalty here.
      *
-     *   probability = 92%
-     *   confidence  = 48
+     * This allows:
      *
-     * from being treated as a strong prediction.
+     *   low probability + strong evidence
+     *
+     * to retain an honest confidence level.
      */
-    const supportFactor = this.calculateSupportFactor({
-      probability,
+    const alignedConfidence = this.calculateEvidenceAlignedConfidence(
+      baseConfidence,
       modelAgreement,
       safetyScore,
       dataQuality,
       calibrationReliability,
-    });
-
-    const alignedConfidence = this.calculateAlignedConfidence(
-      baseConfidence,
-      probability,
-      supportFactor,
     );
 
     return {
@@ -96,98 +92,39 @@ export class EnsembleEngine {
     };
   }
 
-  private calculateSupportFactor(input: {
-    probability: number;
-    modelAgreement: number;
-    safetyScore: number;
-    dataQuality: number;
-    calibrationReliability: number;
-  }): number {
-    /*
-     * Calibration is intentionally given the smallest weight.
-     * New markets must still be usable before sufficient historical
-     * calibration data exists.
-     */
-    const factor =
-      input.modelAgreement * 0.35 +
-      (input.safetyScore / 100) * 0.25 +
-      (input.dataQuality / 100) * 0.25 +
-      this.calibrationSupport(input.calibrationReliability) * 0.15;
+  private calculateEvidenceAlignedConfidence(
+    confidence: number,
+    modelAgreement: number,
+    safetyScore: number,
+    dataQuality: number,
+    calibrationReliability: number,
+  ): number {
+    const support =
+      modelAgreement * 0.45 +
+      (safetyScore / 100) * 0.2 +
+      (dataQuality / 100) * 0.25 +
+      this.calibrationSupport(calibrationReliability) * 0.1;
 
-    return PredictionMathUtil.clamp(factor, 0, 1);
+    /*
+     * No additional probability gate.
+     *
+     * Confidence is only modestly adjusted when the supporting
+     * evidence itself is weak.
+     */
+    if (support >= 0.65) {
+      return confidence;
+    }
+
+    const supportRatio = PredictionMathUtil.clamp(support / 0.65, 0, 1);
+
+    return confidence * (0.7 + supportRatio * 0.3);
   }
 
   private calibrationSupport(reliability: number): number {
-    /*
-     * No calibration history should be neutral rather than
-     * severely penalizing a new market.
-     */
     if (reliability <= 0) {
-      return 0.7;
-    }
-
-    return PredictionMathUtil.clamp(reliability / 100, 0, 1);
-  }
-
-  private calculateAlignedConfidence(
-    baseConfidence: number,
-    probability: number,
-    supportFactor: number,
-  ): number {
-    /*
-     * A prediction around 50-65% does not need extreme evidence
-     * alignment because it is naturally less aggressive.
-     *
-     * As probability becomes more extreme, stronger support is
-     * required.
-     */
-    const requiredSupport = this.calculateRequiredSupport(probability);
-
-    if (supportFactor >= requiredSupport) {
-      return baseConfidence;
-    }
-
-    /*
-     * Unsupported probability is compressed toward a more honest
-     * confidence level.
-     */
-    const supportRatio =
-      requiredSupport > 0 ? supportFactor / requiredSupport : 1;
-
-    const adjustedConfidence = baseConfidence * (0.55 + supportRatio * 0.45);
-
-    return ConfidenceUtil.clamp(adjustedConfidence);
-  }
-
-  private calculateRequiredSupport(probability: number): number {
-    if (probability < 0.65) {
-      return 0.45;
-    }
-
-    if (probability < 0.7) {
       return 0.5;
     }
 
-    if (probability < 0.75) {
-      return 0.58;
-    }
-
-    if (probability < 0.8) {
-      return 0.65;
-    }
-
-    if (probability < 0.85) {
-      return 0.72;
-    }
-
-    if (probability < 0.9) {
-      return 0.8;
-    }
-
-    if (probability < 0.95) {
-      return 0.87;
-    }
-
-    return 0.92;
+    return PredictionMathUtil.clamp(reliability / 100, 0, 1);
   }
 }

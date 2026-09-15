@@ -3,6 +3,8 @@ import { Injectable } from '@nestjs/common';
 import { ENABLED_PREDICTION_MARKETS } from '../config/prediction-markets.config';
 import { PREDICTION_ENGINE_CONFIG } from '../config/prediction-engine.config';
 
+import { PredictionMarket } from '../enums/prediction-market.enum';
+
 import { MarketEvaluation } from '../interfaces/market-evaluation.interface';
 import { MarketModelInput } from '../interfaces/market-model-input.interface';
 import { RawPredictionFeatures } from '../interfaces/raw-prediction-features.interface';
@@ -18,6 +20,8 @@ import { EnsembleEngine } from '../engines/ensemble/ensemble.engine';
 import { FinalDecisionEngine } from '../engines/final/final-decision.engine';
 import { OddsCalculationService } from '../engines/value/odds-calculation.service';
 import { ValueEngine } from '../engines/value/value.engine';
+
+import { MarketSelectionUtil } from '../utils/market-selection.util';
 
 @Injectable()
 export class MarketEvaluationService {
@@ -77,30 +81,6 @@ export class MarketEvaluationService {
         continue;
       }
 
-      /*
-       * --------------------------------------------------------
-       * OUR FAIR PRICE
-       * --------------------------------------------------------
-       */
-      const odds = this.oddsCalculationService.calculate(probability);
-
-      /*
-       * --------------------------------------------------------
-       * VALUE ENGINE
-       * --------------------------------------------------------
-       *
-       * There is deliberately no bookmaker price.
-       *
-       * The ValueEngine therefore records our own fair odds.
-       */
-      const value = this.valueEngine.calculate(
-        input,
-        probability.probability,
-        odds.fairOdds,
-      );
-
-      valueResults.push(value);
-
       const safety = this.safetyEngine.calculate({
         market: input.market,
 
@@ -132,21 +112,66 @@ export class MarketEvaluationService {
       });
 
       candidates.push(ensemble);
+
+      /*
+       * Ordinary markets can be priced immediately.
+       *
+       * MATCH_RESULT is priced only after HOME/DRAW/AWAY are
+       * normalized together.
+       */
+      if (market !== PredictionMarket.MATCH_RESULT) {
+        const odds = this.oddsCalculationService.calculate(probability);
+
+        const value = this.valueEngine.calculate(
+          input,
+          probability.probability,
+          odds.fairOdds,
+        );
+
+        valueResults.push(value);
+      }
     }
 
     /*
      * --------------------------------------------------------
-     * EVALUATE EVERY CANDIDATE
+     * MATCH RESULT / 1X2
+     * --------------------------------------------------------
+     */
+    const isMatchResult = market === PredictionMarket.MATCH_RESULT;
+
+    const matchResultCandidates = isMatchResult
+      ? this.getMatchResultCandidates(candidates)
+      : [];
+
+    const matchResultProbabilities = isMatchResult
+      ? this.normalizeMatchResultProbabilities(matchResultCandidates)
+      : null;
+
+    const matchResultEvidence = isMatchResult
+      ? this.calculateMatchResultEvidence(matchResultCandidates)
+      : null;
+
+    /*
+     * --------------------------------------------------------
+     * BUILD DECISION CANDIDATES
      * --------------------------------------------------------
      */
     const selectionCandidates: MarketCandidate[] = candidates.map(
       (candidate) => {
+        const normalizedProbability =
+          isMatchResult && matchResultProbabilities
+            ? this.getMatchResultSelectionProbability(
+                candidate.selection,
+                matchResultProbabilities,
+              )
+            : candidate.probability;
+
         const decision = this.finalDecisionEngine.decide({
           market: candidate.market,
 
           selection: candidate.selection,
 
-          probability: candidate.probability,
+          probability: normalizedProbability,
 
           confidence: candidate.confidence,
 
@@ -157,6 +182,14 @@ export class MarketEvaluationService {
           dataQuality: candidate.dataQuality,
 
           calibrationReliability: candidate.calibrationReliability,
+
+          ...(isMatchResult && matchResultProbabilities && matchResultEvidence
+            ? {
+                matchResultProbabilities,
+
+                matchResultEvidence,
+              }
+            : {}),
         });
 
         return {
@@ -191,15 +224,10 @@ export class MarketEvaluationService {
 
     /*
      * --------------------------------------------------------
-     * SELECT THE MODEL'S BEST REPRESENTATION OF THIS MARKET
+     * SELECT ONE REPRESENTATION OF THE MARKET
      * --------------------------------------------------------
-     *
-     * Selection does not require the candidate to be "safe".
-     *
-     * We choose the candidate with the strongest overall evidence
-     * and model support.
      */
-    const selected = this.selectBestCandidate(selectionCandidates);
+    const selected = MarketSelectionUtil.selectBest(selectionCandidates);
 
     if (!selected) {
       return {
@@ -216,7 +244,7 @@ export class MarketEvaluationService {
      * FINAL DECISION
      * --------------------------------------------------------
      */
-    const decision = this.finalDecisionEngine.decide({
+    const finalDecision = this.finalDecisionEngine.decide({
       market: selected.market,
 
       selection: selected.selection,
@@ -232,7 +260,80 @@ export class MarketEvaluationService {
       dataQuality: selected.dataQuality,
 
       calibrationReliability: selected.calibrationReliability,
+
+      ...(isMatchResult && matchResultProbabilities && matchResultEvidence
+        ? {
+            matchResultProbabilities,
+
+            matchResultEvidence,
+          }
+        : {}),
     });
+
+    /*
+     * --------------------------------------------------------
+     * FAIR ODDS
+     * --------------------------------------------------------
+     */
+    let fairOdds: number | undefined;
+
+    if (isMatchResult && matchResultProbabilities) {
+      const selectedProbability = this.getMatchResultSelectionProbability(
+        selected.selection,
+        matchResultProbabilities,
+      );
+
+      if (selectedProbability > 0) {
+        fairOdds = this.round(1 / selectedProbability, 4);
+      }
+
+      /*
+       * Store fair odds for all three 1X2 outcomes.
+       *
+       * The selected prediction itself uses the odds belonging
+       * to its selected outcome.
+       */
+      for (const candidate of matchResultCandidates) {
+        const candidateProbability = this.getMatchResultSelectionProbability(
+          candidate.selection,
+          matchResultProbabilities,
+        );
+
+        if (candidateProbability <= 0) {
+          continue;
+        }
+
+        valueResults.push({
+          market: PredictionMarket.MATCH_RESULT,
+
+          selection: candidate.selection,
+
+          fairOdds: this.round(1 / candidateProbability, 4),
+
+          modelProbability: candidateProbability,
+
+          probabilityEdge: 0,
+
+          valueScore: 0,
+
+          hasValue: false,
+        });
+      }
+    } else {
+      const selectedProbabilityResult = candidates.find(
+        (candidate) =>
+          candidate.market === selected.market &&
+          candidate.selection === selected.selection,
+      )?.probabilityResult;
+
+      if (selectedProbabilityResult) {
+        const odds = this.oddsCalculationService.calculate(
+          selectedProbabilityResult,
+        );
+
+        fairOdds = odds.fairOdds ?? undefined;
+      }
+    }
 
     return {
       market,
@@ -241,51 +342,148 @@ export class MarketEvaluationService {
 
       valueResults,
 
-      decision,
+      decision: finalDecision,
+
+      ...(isMatchResult && matchResultProbabilities
+        ? {
+            matchResultProbabilities,
+
+            matchResultConfidence: finalDecision.confidence,
+          }
+        : {}),
+
+      fairOdds,
     };
   }
 
-  private selectBestCandidate(
-    candidates: MarketCandidate[],
-  ): MarketCandidate | null {
-    if (!candidates.length) {
-      return null;
+  private getMatchResultCandidates(
+    candidates: EnsembleResult[],
+  ): EnsembleResult[] {
+    return candidates.filter(
+      (candidate) =>
+        candidate.market === PredictionMarket.MATCH_RESULT &&
+        ['HOME', 'DRAW', 'AWAY'].includes(candidate.selection),
+    );
+  }
+
+  private normalizeMatchResultProbabilities(candidates: EnsembleResult[]): {
+    home: number;
+    draw: number;
+    away: number;
+  } {
+    const home =
+      candidates.find((candidate) => candidate.selection === 'HOME')
+        ?.probability ?? 0;
+
+    const draw =
+      candidates.find((candidate) => candidate.selection === 'DRAW')
+        ?.probability ?? 0;
+
+    const away =
+      candidates.find((candidate) => candidate.selection === 'AWAY')
+        ?.probability ?? 0;
+
+    const total = home + draw + away;
+
+    if (total <= 0) {
+      return {
+        home: 1 / 3,
+        draw: 1 / 3,
+        away: 1 / 3,
+      };
     }
 
-    return [...candidates].sort((a, b) => {
-      /*
-       * Evidence agreement is the strongest selector.
-       */
-      if (b.modelAgreement !== a.modelAgreement) {
-        return b.modelAgreement - a.modelAgreement;
-      }
+    return {
+      home: home / total,
 
-      /*
-       * Data quality is the second strongest selector.
-       */
-      if (b.dataQuality !== a.dataQuality) {
-        return b.dataQuality - a.dataQuality;
-      }
+      draw: draw / total,
 
-      /*
-       * Safety supports the selection but does not define whether
-       * the prediction is interesting or high-probability.
-       */
-      if (b.safetyScore !== a.safetyScore) {
-        return b.safetyScore - a.safetyScore;
-      }
+      away: away / total,
+    };
+  }
 
-      /*
-       * Confidence describes reliability of the probability.
-       */
-      if (b.confidence !== a.confidence) {
-        return b.confidence - a.confidence;
-      }
+  private getMatchResultSelectionProbability(
+    selection: string,
+    probabilities: {
+      home: number;
+      draw: number;
+      away: number;
+    },
+  ): number {
+    switch (selection.trim().toUpperCase()) {
+      case 'HOME':
+        return probabilities.home;
 
-      /*
-       * Decision score is used only as the final tie-breaker.
-       */
-      return b.decisionScore - a.decisionScore;
-    })[0];
+      case 'DRAW':
+        return probabilities.draw;
+
+      case 'AWAY':
+        return probabilities.away;
+
+      default:
+        return 0;
+    }
+  }
+
+  private calculateMatchResultEvidence(candidates: EnsembleResult[]): {
+    modelAgreement: number;
+    dataQuality: number;
+    safetyScore: number;
+    calibrationReliability: number;
+  } {
+    if (!candidates.length) {
+      return {
+        modelAgreement: 0,
+        dataQuality: 0,
+        safetyScore: 0,
+        calibrationReliability: 0,
+      };
+    }
+
+    return {
+      modelAgreement:
+        candidates.reduce(
+          (sum, candidate) => sum + this.clamp(candidate.modelAgreement, 0, 1),
+          0,
+        ) / candidates.length,
+
+      dataQuality:
+        candidates.reduce(
+          (sum, candidate) => sum + this.clamp(candidate.dataQuality, 0, 100),
+          0,
+        ) / candidates.length,
+
+      safetyScore:
+        candidates.reduce(
+          (sum, candidate) =>
+            sum + this.clamp(candidate.safetyResult.safetyScore, 0, 100),
+          0,
+        ) / candidates.length,
+
+      calibrationReliability:
+        candidates.reduce(
+          (sum, candidate) =>
+            sum + this.clamp(candidate.calibrationReliability, 0, 100),
+          0,
+        ) / candidates.length,
+    };
+  }
+
+  private round(value: number, decimals: number): number {
+    if (!Number.isFinite(value)) {
+      return 0;
+    }
+
+    const factor = Math.pow(10, decimals);
+
+    return Math.round(value * factor) / factor;
+  }
+
+  private clamp(value: number, minimum: number, maximum: number): number {
+    if (!Number.isFinite(value)) {
+      return minimum;
+    }
+
+    return Math.min(Math.max(value, minimum), maximum);
   }
 }

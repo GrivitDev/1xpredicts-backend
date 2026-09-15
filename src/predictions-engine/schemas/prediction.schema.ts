@@ -37,6 +37,43 @@ export const PredictionTeamSchema =
   SchemaFactory.createForClass(PredictionTeam);
 
 // ============================================================
+// MATCH RESULT PROBABILITIES
+// ============================================================
+
+@Schema({
+  _id: false,
+})
+export class MatchResultProbabilities {
+  @Prop({
+    type: Number,
+    required: true,
+    min: 0,
+    max: 1,
+  })
+  home!: number;
+
+  @Prop({
+    type: Number,
+    required: true,
+    min: 0,
+    max: 1,
+  })
+  draw!: number;
+
+  @Prop({
+    type: Number,
+    required: true,
+    min: 0,
+    max: 1,
+  })
+  away!: number;
+}
+
+export const MatchResultProbabilitiesSchema = SchemaFactory.createForClass(
+  MatchResultProbabilities,
+);
+
+// ============================================================
 // PREDICTION SETTLEMENT
 // ============================================================
 
@@ -193,6 +230,20 @@ export class PredictionEnginePrediction {
     max: 1,
   })
   probability!: number;
+
+  @Prop({
+    type: MatchResultProbabilitiesSchema,
+    default: null,
+  })
+  matchResultProbabilities!: MatchResultProbabilities | null;
+
+  @Prop({
+    type: Number,
+    default: null,
+    min: 1,
+    max: 1000,
+  })
+  fairOdds!: number | null;
 
   @Prop({
     type: Number,

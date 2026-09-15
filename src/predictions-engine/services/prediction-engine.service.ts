@@ -22,7 +22,9 @@ export class PredictionEngineService {
 
   constructor(
     private readonly rawPredictionDataService: RawPredictionDataService,
+
     private readonly rawPredictionFeatureService: RawPredictionFeatureService,
+
     private readonly marketEvaluationService: MarketEvaluationService,
   ) {}
 
@@ -53,21 +55,10 @@ export class PredictionEngineService {
      * PUBLICATION PASS
      * ----------------------------------------------------------
      *
-     * Only predictions that explicitly pass the final decision
-     * gate are published.
+     * Every enabled market gets the strongest candidate produced
+     * by the market evaluator.
      *
-     * No fallback candidate is allowed to bypass:
-     *
-     *   Probability
-     *   Confidence
-     *   Safety
-     *   Model agreement
-     *   Data quality
-     *   Calibration
-     *   Risk
-     *   Decision score
-     *
-     * The engine is allowed to produce fewer than six predictions.
+     * Only evidence-supported predictions are published.
      */
     const predictions: PredictionResult[] = [];
 
@@ -78,7 +69,7 @@ export class PredictionEngineService {
 
       if (!decision) {
         this.logger.warn(
-          `Market evaluation returned no final decision: event=${eventId}`,
+          `Market evaluation returned no final decision: event=${eventId} market=${evaluation.market}`,
         );
 
         continue;
@@ -86,6 +77,7 @@ export class PredictionEngineService {
 
       if (!decision.accepted) {
         this.logRejectedDecision(eventId, decision);
+
         continue;
       }
 
@@ -108,6 +100,8 @@ export class PredictionEngineService {
         decision.risk,
         decision.decisionScore,
         decision.source,
+        evaluation.matchResultProbabilities,
+        evaluation.fairOdds,
       );
 
       predictions.push(prediction);
@@ -135,13 +129,39 @@ export class PredictionEngineService {
 
       homeTeam: {
         id: String(rawData.fixture.homeTeamId),
+
         name: rawData.homeTeam?.name ?? String(rawData.fixture.homeTeamId),
       },
 
       awayTeam: {
         id: String(rawData.fixture.awayTeamId),
+
         name: rawData.awayTeam?.name ?? String(rawData.fixture.awayTeamId),
       },
+
+      predictions: predictions.map((prediction) => ({
+        market: prediction.market,
+
+        selection: prediction.selection,
+
+        probability: prediction.probability,
+
+        confidence: prediction.confidence,
+
+        fairOdds: prediction.fairOdds,
+
+        predictionId: this.getPredictionKey(
+          prediction.market,
+          prediction.selection,
+        ),
+
+        ...(prediction.market === PredictionMarket.MATCH_RESULT &&
+        prediction.matchResultProbabilities
+          ? {
+              matchResultProbabilities: prediction.matchResultProbabilities,
+            }
+          : {}),
+      })),
     };
 
     const strongestPrediction = this.getStrongestPrediction(predictions);
@@ -187,12 +207,18 @@ export class PredictionEngineService {
     };
 
     this.logger.log(
-      `Prediction generation completed: event=${eventId} markets=${markets.length} accepted=${accepted} rejected=${rejected}`,
+      [
+        `Prediction generation completed`,
+        `event=${eventId}`,
+        `markets=${markets.length}`,
+        `accepted=${accepted}`,
+        `rejected=${rejected}`,
+      ].join(' '),
     );
 
     if (accepted === 0) {
       this.logger.warn(
-        `No publishable predictions passed the final decision gate: event=${eventId}`,
+        `No publishable predictions passed the evidence gate: event=${eventId}`,
       );
     }
 
@@ -218,6 +244,7 @@ export class PredictionEngineService {
         `decisionScore=${this.formatNumber(decision.decisionScore)}`,
         `risk=${decision.risk}`,
         `source=${decision.source}`,
+        `reason=${decision.rejectionReason ?? 'UNKNOWN'}`,
       ].join(' | '),
     );
   }
@@ -228,17 +255,36 @@ export class PredictionEngineService {
     > extends infer T
       ? NonNullable<T>
       : never,
+
     market: PredictionMarket,
+
     selection: string,
+
     probability: number,
+
     confidence: number,
+
     safetyScore: number,
+
     modelAgreement: number,
+
     dataQuality: number,
+
     calibrationReliability: number,
+
     risk: PredictionRisk,
+
     decisionScore: number,
+
     source: PredictionSource,
+
+    matchResultProbabilities?: {
+      home: number;
+      draw: number;
+      away: number;
+    },
+
+    fairOdds?: number,
   ): PredictionResult {
     return {
       eventId: rawData.fixture.eventId,
@@ -264,6 +310,23 @@ export class PredictionEngineService {
       selection,
 
       probability: this.clamp(probability, 0, 1),
+
+      ...(market === PredictionMarket.MATCH_RESULT && matchResultProbabilities
+        ? {
+            matchResultProbabilities: {
+              home: this.clamp(matchResultProbabilities.home, 0, 1),
+
+              draw: this.clamp(matchResultProbabilities.draw, 0, 1),
+
+              away: this.clamp(matchResultProbabilities.away, 0, 1),
+            },
+          }
+        : {}),
+
+      fairOdds:
+        typeof fairOdds === 'number' && Number.isFinite(fairOdds)
+          ? fairOdds
+          : undefined,
 
       confidence: this.clamp(confidence, 0, 98),
 

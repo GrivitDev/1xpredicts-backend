@@ -1,3 +1,5 @@
+// src/predictions-engine/engines/probability/markets/result.market-engine.ts
+
 import { Injectable } from '@nestjs/common';
 
 import { PredictionMarket } from '../../enums/prediction-market.enum';
@@ -10,20 +12,21 @@ import { RawGoalModelUtil } from './raw-goal-model.util';
 @Injectable()
 export class ResultMarketEngine implements MarketModel {
   supports(market: PredictionMarket): boolean {
-    return [
-      PredictionMarket.MATCH_RESULT,
-      PredictionMarket.DOUBLE_CHANCE,
-      PredictionMarket.DRAW_NO_BET,
-    ].includes(market);
+    return market === PredictionMarket.MATCH_RESULT;
   }
 
   calculate(input: MarketModelInput): ProbabilityModelResult {
     const goalModel = RawGoalModelUtil.calculate(input.features);
 
-    const probability = this.calculateProbability(
-      input.market,
+    const probabilities = this.normalizeResultProbabilities({
+      home: goalModel.homeWin,
+      draw: goalModel.draw,
+      away: goalModel.awayWin,
+    });
+
+    const probability = this.getResultProbability(
       input.selection,
-      goalModel,
+      probabilities,
     );
 
     const sampleSize = Math.max(input.features.overallSampleSize ?? 0, 0);
@@ -36,121 +39,96 @@ export class ResultMarketEngine implements MarketModel {
     const modelReliability = this.calculateReliability(sampleSize, dataQuality);
 
     return {
-      market: input.market,
+      market: PredictionMarket.MATCH_RESULT,
+
       selection: input.selection,
+
       probability,
+
       supportingProbability: probability,
+
       sampleSize,
+
       dataQuality,
+
       modelReliability,
+
       modelName: 'raw-result-model',
-      modelVersion: 'raw-result-v2',
+
+      modelVersion: 'raw-result-v3',
+
       modelOutputs: {
-        homeWin: goalModel.homeWin,
-        draw: goalModel.draw,
-        awayWin: goalModel.awayWin,
+        homeWin: probabilities.home,
+        draw: probabilities.draw,
+        awayWin: probabilities.away,
       },
+
       modelSignals: {
-        homeWin: goalModel.homeWin,
-        draw: goalModel.draw,
-        awayWin: goalModel.awayWin,
+        homeWin: probabilities.home,
+        draw: probabilities.draw,
+        awayWin: probabilities.away,
       },
     };
   }
 
-  private calculateProbability(
-    market: PredictionMarket,
-    selection: string,
-    model: ReturnType<typeof RawGoalModelUtil.calculate>,
-  ): number {
-    switch (market) {
-      case PredictionMarket.MATCH_RESULT:
-        return this.getResultProbability(selection, model);
-
-      case PredictionMarket.DOUBLE_CHANCE:
-        return this.getDoubleChanceProbability(selection, model);
-
-      case PredictionMarket.DRAW_NO_BET:
-        return this.getDrawNoBetProbability(selection, model);
-
-      default:
-        return 0;
-    }
-  }
-
   private getResultProbability(
     selection: string,
-    model: ReturnType<typeof RawGoalModelUtil.calculate>,
+    probabilities: {
+      home: number;
+      draw: number;
+      away: number;
+    },
   ): number {
     switch (selection.trim().toUpperCase()) {
       case 'HOME':
       case '1':
       case 'HOME_WIN':
-        return model.homeWin;
+        return probabilities.home;
 
       case 'DRAW':
       case 'X':
-        return model.draw;
+        return probabilities.draw;
 
       case 'AWAY':
       case '2':
       case 'AWAY_WIN':
-        return model.awayWin;
+        return probabilities.away;
 
       default:
         return 0;
     }
   }
 
-  private getDoubleChanceProbability(
-    selection: string,
-    model: ReturnType<typeof RawGoalModelUtil.calculate>,
-  ): number {
-    switch (selection.trim().toUpperCase()) {
-      case 'HOME_OR_DRAW':
-      case 'HOME_DRAW':
-      case '1X':
-        return this.clamp(model.homeWin + model.draw);
+  private normalizeResultProbabilities(input: {
+    home: number;
+    draw: number;
+    away: number;
+  }): {
+    home: number;
+    draw: number;
+    away: number;
+  } {
+    const home = this.clamp(input.home, 0, 1);
 
-      case 'HOME_OR_AWAY':
-      case 'HOME_AWAY':
-      case '12':
-        return this.clamp(model.homeWin + model.awayWin);
+    const draw = this.clamp(input.draw, 0, 1);
 
-      case 'AWAY_OR_DRAW':
-      case 'DRAW_AWAY':
-      case 'X2':
-        return this.clamp(model.draw + model.awayWin);
+    const away = this.clamp(input.away, 0, 1);
 
-      default:
-        return 0;
-    }
-  }
+    const total = home + draw + away;
 
-  private getDrawNoBetProbability(
-    selection: string,
-    model: ReturnType<typeof RawGoalModelUtil.calculate>,
-  ): number {
-    const totalDecisive = model.homeWin + model.awayWin;
-
-    if (totalDecisive <= 0) {
-      return 0;
+    if (total <= 0) {
+      return {
+        home: 1 / 3,
+        draw: 1 / 3,
+        away: 1 / 3,
+      };
     }
 
-    switch (selection.trim().toUpperCase()) {
-      case 'HOME':
-      case '1':
-      case 'HOME_WIN':
-        return this.clamp(model.homeWin / totalDecisive);
-
-      case 'AWAY':
-      case '2':
-      case 'AWAY_WIN':
-        return this.clamp(model.awayWin / totalDecisive);
-
-      default:
-        return 0;
-    }
+    return {
+      home: home / total,
+      draw: draw / total,
+      away: away / total,
+    };
   }
 
   private calculateReliability(

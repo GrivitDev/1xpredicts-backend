@@ -29,6 +29,46 @@ export class PredictionRunTeam {
 export const PredictionRunTeamSchema =
   SchemaFactory.createForClass(PredictionRunTeam);
 
+// ============================================================
+// MATCH RESULT PROBABILITIES
+// ============================================================
+
+@Schema({
+  _id: false,
+})
+export class PredictionRunMatchResultProbabilities {
+  @Prop({
+    type: Number,
+    required: true,
+    min: 0,
+    max: 1,
+  })
+  home!: number;
+
+  @Prop({
+    type: Number,
+    required: true,
+    min: 0,
+    max: 1,
+  })
+  draw!: number;
+
+  @Prop({
+    type: Number,
+    required: true,
+    min: 0,
+    max: 1,
+  })
+  away!: number;
+}
+
+export const PredictionRunMatchResultProbabilitiesSchema =
+  SchemaFactory.createForClass(PredictionRunMatchResultProbabilities);
+
+// ============================================================
+// PREDICTION RUN ITEM
+// ============================================================
+
 @Schema({
   _id: false,
 })
@@ -56,6 +96,20 @@ export class PredictionRunItem {
   probability!: number;
 
   @Prop({
+    type: PredictionRunMatchResultProbabilitiesSchema,
+    default: null,
+  })
+  matchResultProbabilities!: PredictionRunMatchResultProbabilities | null;
+
+  @Prop({
+    type: Number,
+    default: null,
+    min: 1,
+    max: 1000,
+  })
+  fairOdds!: number | null;
+
+  @Prop({
     type: Number,
     required: true,
     min: 0,
@@ -72,6 +126,10 @@ export class PredictionRunItem {
 
 export const PredictionRunItemSchema =
   SchemaFactory.createForClass(PredictionRunItem);
+
+// ============================================================
+// SETTLEMENT
+// ============================================================
 
 @Schema({
   _id: false,
@@ -144,6 +202,10 @@ export class PredictionRunSettlement {
 export const PredictionRunSettlementSchema = SchemaFactory.createForClass(
   PredictionRunSettlement,
 );
+
+// ============================================================
+// PREDICTION RUN
+// ============================================================
 
 @Schema({
   collection: 'prediction_runs',

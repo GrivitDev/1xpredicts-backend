@@ -1,3 +1,5 @@
+// src/predictions-engine/services/prediction-queue.service.ts
+
 import { Injectable, Logger } from '@nestjs/common';
 
 import { InjectModel } from '@nestjs/mongoose';
@@ -48,11 +50,7 @@ export class PredictionQueueService {
   }> {
     const now = new Date();
 
-    const horizon = new Date(now);
-
-    horizon.setDate(
-      horizon.getDate() + PREDICTION_ENGINE_CONFIG.queue.horizonDays,
-    );
+    const horizon = this.getPredictionHorizon(now);
 
     const fixtures = await this.fixtureModel
       .find({
@@ -121,8 +119,8 @@ export class PredictionQueueService {
         .exec();
 
       /*
-       * Only competitions known to the Sports competition
-       * registry enter the prediction queue.
+       * Only competitions registered by the Sports active
+       * competition system enter the prediction queue.
        */
       if (!competition) {
         skipped++;
@@ -153,6 +151,7 @@ export class PredictionQueueService {
               awayTeamId: String(fixture.awayTeamId).trim(),
 
               priority,
+
               priorityWeight,
 
               status: PredictionQueueStatus.PENDING,
@@ -160,12 +159,17 @@ export class PredictionQueueService {
               availableAt: now,
 
               lockedUntil: null,
+
               startedAt: null,
+
               completedAt: null,
+
               failedAt: null,
+
               lastAttemptAt: null,
 
               lastErrorCode: null,
+
               lastErrorMessage: null,
             },
 
@@ -185,7 +189,7 @@ export class PredictionQueueService {
     }
 
     this.logger.log(
-      `Prediction queue trigger completed: total=${fixtures.length} queued=${queued} alreadyQueued=${alreadyQueued} skipped=${skipped}`,
+      `Prediction queue trigger completed: total=${fixtures.length} queued=${queued} alreadyQueued=${alreadyQueued} skipped=${skipped} horizon=${horizon.toISOString()}`,
     );
 
     return {
@@ -199,11 +203,7 @@ export class PredictionQueueService {
   async claimNext(): Promise<PredictionQueueDocument | null> {
     const now = new Date();
 
-    const horizon = new Date(now);
-
-    horizon.setDate(
-      horizon.getDate() + PREDICTION_ENGINE_CONFIG.queue.horizonDays,
-    );
+    const horizon = this.getPredictionHorizon(now);
 
     const lockUntil = new Date(
       now.getTime() + PREDICTION_ENGINE_CONFIG.queue.workerLockMinutes * 60_000,
@@ -360,6 +360,28 @@ export class PredictionQueueService {
         },
       )
       .exec();
+  }
+
+  private getPredictionHorizon(now: Date): Date {
+    const horizon = new Date(now);
+
+    horizon.setDate(
+      horizon.getDate() + PREDICTION_ENGINE_CONFIG.queue.horizonDays,
+    );
+
+    /*
+     * horizonDays = 3 means:
+     *
+     * today
+     * + tomorrow
+     * + day 2
+     * + day 3
+     *
+     * Nothing beyond the end of the third day ahead.
+     */
+    horizon.setHours(23, 59, 59, 999);
+
+    return horizon;
   }
 
   private isValidFixture(fixture: unknown): fixture is Record<string, unknown> {

@@ -52,9 +52,7 @@ export class PredictionSaveService {
       updateOne: {
         filter: {
           eventId: prediction.eventId,
-
           market: prediction.market,
-
           selection: prediction.selection,
         },
 
@@ -83,6 +81,11 @@ export class PredictionSaveService {
             selection: prediction.selection,
 
             probability: prediction.probability,
+
+            matchResultProbabilities:
+              prediction.matchResultProbabilities ?? null,
+
+            fairOdds: prediction.fairOdds ?? null,
 
             confidence: prediction.confidence,
 
@@ -169,13 +172,11 @@ export class PredictionSaveService {
 
           homeTeam: {
             id: first.homeTeamId,
-
             name: first.homeTeamName,
           },
 
           awayTeam: {
             id: first.awayTeamId,
-
             name: first.awayTeamName,
           },
 
@@ -184,6 +185,10 @@ export class PredictionSaveService {
           selection: first.selection,
 
           probability: first.probability,
+
+          matchResultProbabilities: first.matchResultProbabilities ?? null,
+
+          fairOdds: first.fairOdds ?? null,
 
           confidence: first.confidence,
 
@@ -340,6 +345,10 @@ export class PredictionSaveService {
       selection: prediction.selection,
 
       probability: prediction.probability,
+
+      matchResultProbabilities: prediction.matchResultProbabilities ?? null,
+
+      fairOdds: prediction.fairOdds ?? null,
 
       confidence: prediction.confidence,
 

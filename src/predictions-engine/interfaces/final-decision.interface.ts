@@ -1,5 +1,4 @@
 import { PredictionMarket } from '../enums/prediction-market.enum';
-
 import { PredictionRisk } from '../enums/prediction-risk.enum';
 import { PredictionSource } from '../enums/prediction-source.enum';
 
@@ -10,6 +9,18 @@ export interface FinalDecision {
 
   probability: number;
 
+  /*
+   * Complete normalized 1X2 distribution.
+   */
+  matchResultProbabilities?: {
+    home: number;
+    draw: number;
+    away: number;
+  };
+
+  /*
+   * One confidence value for the complete 1X2 market.
+   */
   confidence: number;
 
   safetyScore: number;
