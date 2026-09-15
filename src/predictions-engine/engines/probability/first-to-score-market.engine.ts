@@ -73,6 +73,12 @@ export class FirstToScoreMarketEngine implements MarketModel {
       100,
     );
 
+    const modelReliability = this.clamp(
+      (1 - Math.exp(-sampleSize / 20)) * 0.35 +
+        (dataQuality / 100) * 0.4 +
+        (homeRate + awayRate > 0 ? 0.25 : 0),
+    );
+
     return {
       market: input.market,
       selection: input.selection,
@@ -80,11 +86,7 @@ export class FirstToScoreMarketEngine implements MarketModel {
       supportingProbability: probability,
       sampleSize,
       dataQuality,
-      modelReliability: this.clamp(
-        (1 - Math.exp(-sampleSize / 20)) * 0.35 +
-          (dataQuality / 100) * 0.4 +
-          (homeRate + awayRate > 0 ? 0.25 : 0),
-      ),
+      modelReliability,
       modelName: 'scored-first-rate-model',
       modelVersion: 'raw-first-score-v1',
       modelOutputs: {
@@ -145,14 +147,15 @@ export class FirstToScoreMarketEngine implements MarketModel {
       return 0;
     }
 
-    const weight = valid.reduce((sum, entry) => sum + entry.weight, 0);
+    const totalWeight = valid.reduce((sum, entry) => sum + entry.weight, 0);
 
-    if (weight <= 0) {
+    if (totalWeight <= 0) {
       return 0;
     }
 
     return (
-      valid.reduce((sum, entry) => sum + entry.value * entry.weight, 0) / weight
+      valid.reduce((sum, entry) => sum + entry.value * entry.weight, 0) /
+      totalWeight
     );
   }
 

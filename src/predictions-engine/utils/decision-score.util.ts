@@ -22,8 +22,13 @@ export class DecisionScoreUtil {
     const calibration = this.clamp(input.calibrationReliability, 0, 100) / 100;
 
     /*
-     * Probability remains the largest single contributor,
-     * but supporting evidence carries substantial weight.
+     * Probability remains the largest contributor.
+     * Supporting evidence determines how trustworthy that
+     * probability is.
+     *
+     * Calibration is deliberately given a smaller advisory weight.
+     * A new prediction with no calibration history therefore does
+     * not suffer a major decision-score penalty.
      */
     const probabilityScore = probability;
 
@@ -38,12 +43,12 @@ export class DecisionScoreUtil {
     const calibrationScore = calibration;
 
     const total =
-      probabilityScore * 0.3 +
+      probabilityScore * 0.32 +
       confidenceScore * 0.18 +
       safetyScore * 0.2 +
       agreementScore * 0.14 +
-      dataQualityScore * 0.1 +
-      calibrationScore * 0.08;
+      dataQualityScore * 0.12 +
+      calibrationScore * 0.04;
 
     return {
       total: this.clamp(total, 0, 1),

@@ -86,19 +86,7 @@ export class BttsMarketEngine implements MarketModel {
     const normalized = selection.trim().toUpperCase();
 
     if (market === PredictionMarket.BTTS_GOALS) {
-      const match = normalized.match(/^(YES|NO)(?:[:_-](\d+))?$/);
-
-      if (!match) {
-        return 0;
-      }
-
-      const side = match[1];
-
-      const goals = match[2] ? Number(match[2]) : 0;
-
-      const exact = this.calculateBttsGoalProbability(model, goals);
-
-      return side === 'YES' ? exact : this.clamp(1 - exact);
+      return this.resolveBttsGoalsProbability(normalized, model);
     }
 
     switch (normalized) {
@@ -115,6 +103,62 @@ export class BttsMarketEngine implements MarketModel {
       default:
         return 0;
     }
+  }
+
+  private resolveBttsGoalsProbability(
+    selection: string,
+    model: ReturnType<typeof RawGoalModelUtil.calculate>,
+  ): number {
+    /*
+     * Configured selections:
+     * 1+
+     * 2+
+     * 3+
+     *
+     * The BTTS condition always requires:
+     * homeGoals >= 1
+     * awayGoals >= 1
+     *
+     * The numeric selection then acts as the minimum total-goals
+     * threshold.
+     *
+     * Therefore:
+     * 1+ = all BTTS outcomes
+     * 2+ = all BTTS outcomes as well, because BTTS already requires 2 goals
+     * 3+ = BTTS with at least 3 total goals
+     */
+    const minimumGoalsMatch = selection.match(/^(\d+)\+$/);
+
+    if (minimumGoalsMatch) {
+      const minimumGoals = Number(minimumGoalsMatch[1]);
+
+      if (!Number.isFinite(minimumGoals) || minimumGoals < 0) {
+        return 0;
+      }
+
+      return this.calculateBttsGoalProbability(model, minimumGoals);
+    }
+
+    /*
+     * Preserve support for the explicit YES/NO form as well.
+     */
+    const explicitMatch = selection.match(/^(YES|NO)(?:[:_-](\d+))?$/);
+
+    if (!explicitMatch) {
+      return 0;
+    }
+
+    const side = explicitMatch[1];
+
+    const minimumGoals = explicitMatch[2] ? Number(explicitMatch[2]) : 0;
+
+    if (!Number.isFinite(minimumGoals) || minimumGoals < 0) {
+      return 0;
+    }
+
+    const probability = this.calculateBttsGoalProbability(model, minimumGoals);
+
+    return side === 'YES' ? probability : this.clamp(1 - probability);
   }
 
   private calculateBttsGoalProbability(

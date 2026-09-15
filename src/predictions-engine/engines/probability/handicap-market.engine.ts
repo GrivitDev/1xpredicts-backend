@@ -1,8 +1,11 @@
 import { Injectable } from '@nestjs/common';
 
 import { PredictionMarket } from '../../enums/prediction-market.enum';
+
 import { MarketModel } from '../../interfaces/market-model.interface';
+
 import { MarketModelInput } from '../../interfaces/market-model-input.interface';
+
 import { ProbabilityModelResult } from '../../interfaces/probability-result.interface';
 
 import { RawGoalModelUtil } from './raw-goal-model.util';
@@ -184,6 +187,16 @@ export class HandicapMarketEngine implements MarketModel {
   private parseAsianSelection(selection: string): { line: number } | null {
     const normalized = selection.trim().toUpperCase();
 
+    /*
+     * Supports:
+     *
+     * HOME_-2
+     * HOME_-1.5
+     * HOME_0
+     * HOME_1.5
+     * 1_-1.5
+     * -1.5
+     */
     const match = normalized.match(/^(?:HOME|1)[_: -]?([+-]?\d+(?:\.\d+)?)$/);
 
     if (match) {

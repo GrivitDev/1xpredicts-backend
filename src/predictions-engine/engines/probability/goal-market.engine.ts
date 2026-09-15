@@ -1,8 +1,11 @@
 import { Injectable } from '@nestjs/common';
 
 import { PredictionMarket } from '../../enums/prediction-market.enum';
+
 import { MarketModel } from '../../interfaces/market-model.interface';
+
 import { MarketModelInput } from '../../interfaces/market-model-input.interface';
+
 import { ProbabilityModelResult } from '../../interfaces/probability-result.interface';
 
 import { RawGoalModelUtil } from './raw-goal-model.util';
@@ -84,10 +87,9 @@ export class GoalMarketEngine implements MarketModel {
   }
 
   private resolveOverUnder(selection: string, probabilities: number[]): number {
-    const match = selection
-      .trim()
-      .toUpperCase()
-      .match(/^(OVER|UNDER)[_: -]?(\d+(?:\.\d+)?)$/);
+    const normalized = selection.trim().toUpperCase();
+
+    const match = normalized.match(/^(OVER|UNDER)[_: -]?(\d+(?:\.\d+)?)$/);
 
     if (!match) {
       return 0;
@@ -96,43 +98,73 @@ export class GoalMarketEngine implements MarketModel {
     const side = match[1];
     const line = Number(match[2]);
 
-    if (!Number.isFinite(line)) {
+    if (!Number.isFinite(line) || line < 0) {
       return 0;
     }
 
-    const over = this.probabilityOver(probabilities, line);
-
-    return side === 'OVER' ? over : this.probabilityUnder(probabilities, line);
+    return side === 'OVER'
+      ? this.probabilityOver(probabilities, line)
+      : this.probabilityUnder(probabilities, line);
   }
 
   private resolveGoalRange(selection: string, probabilities: number[]): number {
     const normalized = selection.trim().toUpperCase().replace(/\s+/g, '');
 
-    const exactMatch = normalized.match(
-      /^(?:GOALS?|TOTAL_?GOALS?)[_: -]?(\d+)$/,
+    /*
+     * Supports the configured forms:
+     *
+     * 0
+     * 1-2
+     * 3-4
+     * 5+
+     *
+     * Also supports optional explicit prefixes such as:
+     *
+     * GOALS_0
+     * TOTAL_GOALS_1-2
+     * GOALS_5+
+     */
+
+    const prefixed = normalized.match(
+      /^(?:GOALS?|TOTAL_GOALS?|TOTALGOALS?)[_: -]?(.+)$/,
     );
 
-    if (exactMatch) {
-      const goals = Number(exactMatch[1]);
+    const value = prefixed ? prefixed[1] : normalized;
 
-      return this.probabilityExactly(probabilities, goals);
+    if (/^\d+$/.test(value)) {
+      const goals = Number(value);
+
+      return Number.isFinite(goals)
+        ? this.probabilityExactly(probabilities, goals)
+        : 0;
     }
 
-    const rangeMatch = normalized.match(
-      /^(?:GOALS?|TOTAL_?GOALS?)[_: -]?(\d+)[_-](\d+)$|^(\d+)[_-](\d+)$/,
-    );
+    const atLeastMatch = value.match(/^(\d+)\+$/);
+
+    if (atLeastMatch) {
+      const minimum = Number(atLeastMatch[1]);
+
+      if (!Number.isFinite(minimum) || minimum < 0) {
+        return 0;
+      }
+
+      return this.probabilityAtLeast(probabilities, minimum);
+    }
+
+    const rangeMatch = value.match(/^(\d+)-(\d+)$/);
 
     if (!rangeMatch) {
       return 0;
     }
 
-    const minimum = Number(rangeMatch[1] ?? rangeMatch[3]);
-
-    const maximum = Number(rangeMatch[2] ?? rangeMatch[4]);
+    const minimum = Number(rangeMatch[1]);
+    const maximum = Number(rangeMatch[2]);
 
     if (
       !Number.isFinite(minimum) ||
       !Number.isFinite(maximum) ||
+      minimum < 0 ||
+      maximum < 0 ||
       minimum > maximum
     ) {
       return 0;
@@ -151,10 +183,11 @@ export class GoalMarketEngine implements MarketModel {
     selection: string,
     model: ReturnType<typeof RawGoalModelUtil.calculate>,
   ): number {
-    const match = selection
-      .trim()
-      .toUpperCase()
-      .match(/^(HOME|AWAY)_(OVER|UNDER)[_: -]?(\d+(?:\.\d+)?)$/);
+    const normalized = selection.trim().toUpperCase();
+
+    const match = normalized.match(
+      /^(HOME|AWAY)[_: -]?(OVER|UNDER)[_: -]?(\d+(?:\.\d+)?)$/,
+    );
 
     if (!match) {
       return 0;
@@ -163,6 +196,10 @@ export class GoalMarketEngine implements MarketModel {
     const team = match[1];
     const side = match[2];
     const line = Number(match[3]);
+
+    if (!Number.isFinite(line) || line < 0) {
+      return 0;
+    }
 
     const probabilities =
       team === 'HOME'
@@ -180,11 +217,29 @@ export class GoalMarketEngine implements MarketModel {
   ): number {
     const normalized = selection.trim().toUpperCase();
 
-    const match = normalized.match(/^(HOME|AWAY)[_: -]?(\d+)$/);
+    /*
+     * Configured forms:
+     *
+     * HOME_0
+     * HOME_1
+     * ...
+     * HOME_6
+     *
+     * AWAY_0
+     * AWAY_1
+     * ...
+     * AWAY_6
+     */
 
-    if (match) {
-      const team = match[1];
-      const goals = Number(match[2]);
+    const teamMatch = normalized.match(/^(HOME|AWAY)[_: -]?(\d+)$/);
+
+    if (teamMatch) {
+      const team = teamMatch[1];
+      const goals = Number(teamMatch[2]);
+
+      if (!Number.isFinite(goals) || goals < 0) {
+        return 0;
+      }
 
       return this.probabilityExactly(
         team === 'HOME'
@@ -194,6 +249,12 @@ export class GoalMarketEngine implements MarketModel {
       );
     }
 
+    /*
+     * Also support exact score selections such as:
+     *
+     * 2-1
+     * 0:0
+     */
     const scoreMatch = normalized.match(/^(\d+)[-:](\d+)$/);
 
     if (!scoreMatch) {
@@ -201,14 +262,15 @@ export class GoalMarketEngine implements MarketModel {
     }
 
     const homeGoals = Number(scoreMatch[1]);
-
     const awayGoals = Number(scoreMatch[2]);
 
     if (
+      !Number.isFinite(homeGoals) ||
+      !Number.isFinite(awayGoals) ||
       homeGoals < 0 ||
       awayGoals < 0 ||
       homeGoals >= model.matrix.length ||
-      awayGoals >= model.matrix.length
+      awayGoals >= model.matrix[homeGoals].length
     ) {
       return 0;
     }
@@ -240,6 +302,23 @@ export class GoalMarketEngine implements MarketModel {
     }
 
     return this.clamp(probabilities[goals] ?? 0);
+  }
+
+  private probabilityAtLeast(probabilities: number[], goals: number): number {
+    if (goals <= 0) {
+      return 1;
+    }
+
+    if (goals >= probabilities.length) {
+      return 0;
+    }
+
+    return this.clamp(
+      probabilities.reduce(
+        (sum, probability, index) => (index >= goals ? sum + probability : sum),
+        0,
+      ),
+    );
   }
 
   private calculateReliability(

@@ -46,40 +46,55 @@ export class ConfidenceEngine {
     const probabilityStrength = ConfidenceUtil.probabilityStrength(probability);
 
     /*
-     * Confidence measures evidence quality.
-     * Probability itself has deliberately limited weight.
+     * Confidence primarily measures the strength and consistency
+     * of the evidence supporting the prediction.
+     *
+     * Calibration is advisory and intentionally receives a smaller
+     * influence than the underlying model/data evidence.
+     *
+     * When calibration history is unavailable, reliability is 0,
+     * but that must not prevent a strong new prediction from
+     * receiving an appropriate confidence rating.
      */
     const raw =
-      probabilityStrength * 0.08 +
-      modelReliability * 0.18 +
-      dataQuality * 0.2 +
-      calibrationReliability * 0.2 +
+      probabilityStrength * 0.1 +
+      modelReliability * 0.22 +
+      dataQuality * 0.22 +
+      calibrationReliability * 0.08 +
       sampleReliability * 0.14 +
-      safety * 0.1 +
-      agreement * 0.1;
+      safety * 0.12 +
+      agreement * 0.12;
 
     let confidence = raw * 100;
 
     /*
-     * Hard caps prevent weak supporting evidence from being
-     * converted into false high confidence.
+     * Evidence caps protect against false high confidence when
+     * the underlying evidence is genuinely weak.
+     *
+     * Calibration is deliberately excluded from these hard caps.
+     * Missing historical calibration is not itself evidence that
+     * the current prediction is weak.
      */
     confidence = this.applyEvidenceCaps(confidence, {
       modelReliability,
       dataQuality,
-      calibrationReliability,
       sampleReliability,
       agreement,
       safety,
     });
 
     /*
-     * Existing calibration error should directly reduce
-     * confidence even when reliability is otherwise good.
+     * Existing calibration error can modestly reduce confidence.
+     *
+     * This only applies when calibration data actually exists.
+     * A brand-new prediction with no calibration history therefore
+     * receives no artificial confidence penalty.
      */
     const calibrationError = this.clamp(input.calibrationError ?? 0, 0, 1);
 
-    confidence *= 1 - Math.min(calibrationError * 0.75, 0.35);
+    if (sampleSize > 0 && calibrationReliability > 0) {
+      confidence *= 1 - Math.min(calibrationError * 0.5, 0.25);
+    }
 
     confidence = ConfidenceUtil.clamp(confidence);
 
@@ -122,7 +137,6 @@ export class ConfidenceEngine {
     evidence: {
       modelReliability: number;
       dataQuality: number;
-      calibrationReliability: number;
       sampleReliability: number;
       agreement: number;
       safety: number;
@@ -148,14 +162,6 @@ export class ConfidenceEngine {
 
     if (evidence.safety < 0.55) {
       result = Math.min(result, 60);
-    }
-
-    if (evidence.calibrationReliability < 0.5) {
-      result = Math.min(result, 72);
-    }
-
-    if (evidence.calibrationReliability < 0.7) {
-      result = Math.min(result, 84);
     }
 
     return result;
@@ -187,6 +193,13 @@ export class ConfidenceEngine {
 
     if (input.calibrationReliability >= 0.75) {
       reasons.push('Historical calibration reliability is strong.');
+    }
+
+    if (
+      input.calibrationReliability > 0 &&
+      input.calibrationReliability < 0.55
+    ) {
+      reasons.push('Calibration history is limited or still developing.');
     }
 
     if (input.sampleReliability >= 0.75) {

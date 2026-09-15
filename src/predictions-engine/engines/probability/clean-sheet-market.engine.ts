@@ -26,6 +26,10 @@ export class CleanSheetMarketEngine implements MarketModel {
       100,
     );
 
+    const modelReliability = this.clamp(
+      (1 - Math.exp(-sampleSize / 20)) * 0.45 + (dataQuality / 100) * 0.55,
+    );
+
     return {
       market: input.market,
       selection: input.selection,
@@ -33,9 +37,7 @@ export class CleanSheetMarketEngine implements MarketModel {
       supportingProbability: probability,
       sampleSize,
       dataQuality,
-      modelReliability: this.clamp(
-        (1 - Math.exp(-sampleSize / 20)) * 0.45 + (dataQuality / 100) * 0.55,
-      ),
+      modelReliability,
       modelName: 'raw-clean-sheet-model',
       modelVersion: 'raw-clean-sheet-v2',
       modelSignals: {

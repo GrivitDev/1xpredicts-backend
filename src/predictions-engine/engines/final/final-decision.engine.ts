@@ -1,17 +1,15 @@
 import { Injectable } from '@nestjs/common';
 
+import { PredictionMarket } from '../../enums/prediction-market.enum';
 import { PredictionRisk } from '../../enums/prediction-risk.enum';
-
 import { PredictionSource } from '../../enums/prediction-source.enum';
 
 import { FinalDecision } from '../../interfaces/final-decision.interface';
 
-import { DecisionScoreUtil } from '../../utils/decision-score.util';
-
-import { PredictionRiskUtil } from '../../utils/prediction-risk.util';
-
 import { PREDICTION_DECISION_CONFIG } from '../../config/prediction-decision.config';
-import { PredictionMarket } from 'src/predictions-engine/enums/prediction-market.enum';
+
+import { DecisionScoreUtil } from '../../utils/decision-score.util';
+import { PredictionRiskUtil } from '../../utils/prediction-risk.util';
 
 @Injectable()
 export class FinalDecisionEngine {
@@ -109,7 +107,28 @@ export class FinalDecisionEngine {
     const config = PREDICTION_DECISION_CONFIG;
 
     /*
-     * Candidate-level gate.
+     * Calibration is advisory.
+     *
+     * A new market may legitimately have no calibration history,
+     * therefore calibration reliability must never be a publication
+     * blocker and must never reject a prediction by itself.
+     *
+     * Existing calibration still influences:
+     * - probability adjustment
+     * - confidence
+     * - safety
+     * - risk
+     * - decision score
+     *
+     * The final decision therefore considers calibration, but does
+     * not require historical calibration before a prediction can exist.
+     */
+
+    /*
+     * Candidate-level evidence gate.
+     *
+     * These checks determine whether the market has enough underlying
+     * evidence to be considered a meaningful candidate.
      */
     if (input.probability < config.probability.minimumCandidate) {
       return `Probability below minimum candidate threshold (${config.probability.minimumCandidate}).`;
@@ -132,14 +151,17 @@ export class FinalDecisionEngine {
     }
 
     /*
-     * HIGH risk is never publishable.
+     * Calibration is intentionally NOT checked here.
+     *
+     * A prediction with calibrationReliability = 0 is still allowed
+     * to proceed when the underlying evidence supports it.
      */
-    if (input.risk === PredictionRisk.HIGH) {
-      return 'Prediction remains HIGH risk after combining probability and supporting evidence.';
-    }
 
     /*
-     * Publishable prediction gate.
+     * Publishable evidence gate.
+     *
+     * These checks determine whether this particular market/selection
+     * is strong enough to be selected as a normal published prediction.
      */
     if (input.probability < config.probability.minimumPublishable) {
       return `Probability below publishable threshold (${config.probability.minimumPublishable}).`;
@@ -161,16 +183,30 @@ export class FinalDecisionEngine {
       return `Data quality below publishable threshold (${config.dataQuality.minimumPublishable}).`;
     }
 
-    if (
-      input.calibrationReliability <
-      config.calibration.minimumReliabilityPublishable
-    ) {
-      return `Calibration reliability below publishable threshold (${config.calibration.minimumReliabilityPublishable}).`;
-    }
+    /*
+     * Calibration reliability is deliberately excluded from the
+     * publishability gate.
+     *
+     * Existing calibration can improve or reduce the final score,
+     * risk classification, probability and confidence, but it cannot
+     * prevent a new prediction from being produced merely because
+     * historical calibration is unavailable or weak.
+     */
 
     if (input.decisionScore < config.selection.minimumDecisionScore) {
       return `Decision score below minimum threshold (${config.selection.minimumDecisionScore}).`;
     }
+
+    /*
+     * Risk is advisory for ranking/selection.
+     *
+     * The market-selection layer decides which candidates survive.
+     * We do not automatically reject a prediction merely because
+     * PredictionRiskUtil classified it as HIGH.
+     *
+     * This prevents calibration/risk state from becoming a global
+     * prediction shutdown mechanism.
+     */
 
     return null;
   }

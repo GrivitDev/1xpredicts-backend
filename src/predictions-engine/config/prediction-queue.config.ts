@@ -9,7 +9,7 @@ export const PREDICTION_QUEUE_CONFIG = {
   } as const,
 
   worker: {
-    pollIntervalMs: 1000,
+    pollIntervalMs: 5000,
     batchSize: 1,
     maxAttempts: 3,
   },

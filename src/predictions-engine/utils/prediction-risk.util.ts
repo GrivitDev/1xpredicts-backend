@@ -31,13 +31,25 @@ export class PredictionRiskUtil {
 
     const medium = PREDICTION_DECISION_CONFIG.risk.medium;
 
+    /*
+     * Calibration is advisory.
+     *
+     * A new prediction may have no historical calibration profile.
+     * That must not automatically force the prediction into HIGH risk.
+     *
+     * Existing calibration can still qualify a prediction for LOW or
+     * MEDIUM risk when the historical evidence is available.
+     */
+    const hasCalibrationHistory = calibrationReliability > 0;
+
     if (
       probability >= low.minimumProbability &&
       confidence >= low.minimumConfidence &&
       safetyScore >= low.minimumSafetyScore &&
       agreement >= low.minimumModelAgreement &&
       dataQuality >= low.minimumDataQuality &&
-      calibrationReliability >= low.minimumCalibrationReliability
+      (!hasCalibrationHistory ||
+        calibrationReliability >= low.minimumCalibrationReliability)
     ) {
       return PredictionRisk.LOW;
     }
@@ -48,7 +60,8 @@ export class PredictionRiskUtil {
       safetyScore >= medium.minimumSafetyScore &&
       agreement >= medium.minimumModelAgreement &&
       dataQuality >= medium.minimumDataQuality &&
-      calibrationReliability >= medium.minimumCalibrationReliability
+      (!hasCalibrationHistory ||
+        calibrationReliability >= medium.minimumCalibrationReliability)
     ) {
       return PredictionRisk.MEDIUM;
     }

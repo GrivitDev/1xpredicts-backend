@@ -1,21 +1,29 @@
 import { Injectable, Logger } from '@nestjs/common';
 
 import { PredictionMarket } from '../enums/prediction-market.enum';
+import { PredictionRisk } from '../enums/prediction-risk.enum';
+import { PredictionSource } from '../enums/prediction-source.enum';
 
 import { PredictionEngineResult } from '../interfaces/prediction-engine-result.interface';
 import { PredictionResult } from '../interfaces/prediction-result.interface';
 import { PredictionRunInput } from '../interfaces/prediction-run.interface';
+import { EnsembleResult } from '../interfaces/ensemble-result.interface';
+import { MarketEvaluation } from '../interfaces/market-evaluation.interface';
+
+import { ENABLED_PREDICTION_MARKETS } from '../config/prediction-markets.config';
+import { PREDICTION_ENGINE_CONFIG } from '../config/prediction-engine.config';
+
+import { DecisionScoreUtil } from '../utils/decision-score.util';
 
 import { RawPredictionDataService } from './raw-prediction-data.service';
 import { RawPredictionFeatureService } from './raw-prediction-feature.service';
 import { MarketEvaluationService } from './market-evaluation.service';
 
-import { ENABLED_PREDICTION_MARKETS } from '../config/prediction-markets.config';
-import { PredictionRisk } from '../enums/prediction-risk.enum';
-
 @Injectable()
 export class PredictionEngineService {
   private readonly logger = new Logger(PredictionEngineService.name);
+
+  private readonly minimumPredictionsPerFixture = 6;
 
   constructor(
     private readonly rawPredictionDataService: RawPredictionDataService,
@@ -34,9 +42,7 @@ export class PredictionEngineService {
 
     const markets = this.getEnabledMarkets();
 
-    const predictions: PredictionResult[] = [];
-
-    let rejected = 0;
+    const evaluations: MarketEvaluation[] = [];
 
     for (const market of markets) {
       const evaluation = await this.marketEvaluationService.evaluateMarket(
@@ -44,53 +50,111 @@ export class PredictionEngineService {
         market,
       );
 
-      if (!evaluation?.decision) {
-        rejected++;
+      evaluations.push(evaluation);
+    }
+
+    /*
+     * First pass:
+     *
+     * Use the normal final-decision result exactly as produced by
+     * the decision engine.
+     */
+    const predictions: PredictionResult[] = [];
+
+    for (const evaluation of evaluations) {
+      if (!evaluation.decision) {
         continue;
       }
 
       if (!evaluation.decision.accepted) {
-        rejected++;
         continue;
       }
 
-      const decision = evaluation.decision;
-
-      predictions.push({
-        eventId: rawData.fixture.eventId,
-        competitionId: String(rawData.fixture.leagueId),
-        season: rawData.fixture.season,
-        fixtureDate: rawData.fixture.fixtureDate,
-
-        homeTeamId: String(rawData.fixture.homeTeamId),
-        awayTeamId: String(rawData.fixture.awayTeamId),
-
-        homeTeamName:
-          rawData.homeTeam?.name ?? String(rawData.fixture.homeTeamId),
-
-        awayTeamName:
-          rawData.awayTeam?.name ?? String(rawData.fixture.awayTeamId),
-
-        market: decision.market,
-        selection: decision.selection,
-
-        probability: decision.probability,
-        confidence: decision.confidence,
-
-        safetyScore: decision.safetyScore,
-        modelAgreement: decision.modelAgreement,
-        dataQuality: decision.dataQuality,
-        calibrationReliability: decision.calibrationReliability,
-
-        risk: decision.risk,
-        decisionScore: decision.decisionScore,
-
-        source: decision.source,
-        modelVersion: 'raw-ensemble-v1',
-
-        generatedAt: new Date(),
-      });
+      predictions.push(
+        this.buildPrediction(
+          rawData,
+          evaluation.decision.market,
+          evaluation.decision.selection,
+          evaluation.decision.probability,
+          evaluation.decision.confidence,
+          evaluation.decision.safetyScore,
+          evaluation.decision.modelAgreement,
+          evaluation.decision.dataQuality,
+          evaluation.decision.calibrationReliability,
+          evaluation.decision.risk,
+          evaluation.decision.decisionScore,
+          evaluation.decision.source,
+        ),
+      );
     }
+
+    /*
+     * Second pass:
+     *
+     * The system must not leave a fixture with fewer than six
+     * predictions merely because the normal publish thresholds
+     * rejected too many market candidates.
+     *
+     * We therefore examine the strongest remaining candidate from
+     * every market family and use those candidates to fill the
+     * minimum fixture prediction set.
+     *
+     * We never fabricate a probability. Candidates with zero or
+     * invalid probability are excluded.
+     */
+    if (predictions.length < this.minimumPredictionsPerFixture) {
+      const selectedKeys = new Set(
+        predictions.map(
+          (prediction) => `${prediction.market}:${prediction.selection}`,
+        ),
+      );
+
+      const fallbackCandidates = this.getFallbackCandidates(
+        evaluations,
+        selectedKeys,
+      );
+
+      for (const candidate of fallbackCandidates) {
+        if (predictions.length >= this.minimumPredictionsPerFixture) {
+          break;
+        }
+
+        const key = `${candidate.market}:${candidate.selection}`;
+
+        if (selectedKeys.has(key)) {
+          continue;
+        }
+
+        predictions.push(
+          this.buildPrediction(
+            rawData,
+            candidate.market,
+            candidate.selection,
+            candidate.probability,
+            candidate.confidence,
+            candidate.safetyResult.safetyScore,
+            candidate.modelAgreement,
+            candidate.dataQuality,
+            candidate.calibrationReliability,
+            candidate.safetyResult.risk,
+            this.calculateDecisionScore(candidate),
+            PredictionSource.ENSEMBLE,
+          ),
+        );
+
+        selectedKeys.add(key);
+      }
+    }
+
+    const publishedKeys = new Set(
+      predictions.map(
+        (prediction) => `${prediction.market}:${prediction.selection}`,
+      ),
+    );
+
+    const accepted = predictions.length;
+
+    const rejected = Math.max(markets.length - accepted, 0);
 
     const run: PredictionRunInput = {
       eventId: rawData.fixture.eventId,
@@ -133,7 +197,7 @@ export class PredictionEngineService {
 
       marketsProcessed: markets.length,
 
-      accepted: predictions.length,
+      accepted,
 
       rejected,
 
@@ -149,40 +213,138 @@ export class PredictionEngineService {
     };
 
     this.logger.log(
-      `Prediction generation completed: event=${eventId} markets=${markets.length} accepted=${predictions.length} rejected=${rejected}`,
+      `Prediction generation completed: event=${eventId} markets=${markets.length} accepted=${accepted} rejected=${rejected} minimum=${this.minimumPredictionsPerFixture}`,
     );
+
+    if (publishedKeys.size < this.minimumPredictionsPerFixture) {
+      this.logger.warn(
+        `Prediction generation produced fewer than ${this.minimumPredictionsPerFixture} valid markets: event=${eventId} count=${publishedKeys.size}`,
+      );
+    }
 
     return result;
   }
 
-  private getEnabledMarkets(): PredictionMarket[] {
-    const config = ENABLED_PREDICTION_MARKETS as unknown as {
-      markets?:
-        | Record<
-            string,
-            {
-              enabled?: boolean;
-            }
-          >
-        | Array<{
-            market: PredictionMarket;
-            enabled?: boolean;
-          }>;
+  private getFallbackCandidates(
+    evaluations: MarketEvaluation[],
+    selectedKeys: Set<string>,
+  ): EnsembleResult[] {
+    const candidates: EnsembleResult[] = [];
+
+    for (const evaluation of evaluations) {
+      const available = evaluation.candidates.filter((candidate) => {
+        const key = `${candidate.market}:${candidate.selection}`;
+
+        if (selectedKeys.has(key)) {
+          return false;
+        }
+
+        return (
+          Number.isFinite(candidate.probability) &&
+          candidate.probability > 0 &&
+          Number.isFinite(candidate.confidence) &&
+          candidate.confidence > 0 &&
+          Number.isFinite(candidate.safetyResult.safetyScore) &&
+          candidate.safetyResult.safetyScore > 0
+        );
+      });
+
+      if (!available.length) {
+        continue;
+      }
+
+      const strongest = [...available].sort(
+        (a, b) =>
+          this.calculateDecisionScore(b) - this.calculateDecisionScore(a),
+      )[0];
+
+      if (strongest) {
+        candidates.push(strongest);
+      }
+    }
+
+    return candidates.sort(
+      (a, b) => this.calculateDecisionScore(b) - this.calculateDecisionScore(a),
+    );
+  }
+
+  private calculateDecisionScore(candidate: EnsembleResult): number {
+    return DecisionScoreUtil.calculate({
+      probability: this.clamp(candidate.probability, 0, 1),
+      confidence: this.clamp(candidate.confidence, 0, 98),
+      safetyScore: this.clamp(candidate.safetyResult.safetyScore, 0, 100),
+      modelAgreement: this.clamp(candidate.modelAgreement, 0, 1),
+      dataQuality: this.clamp(candidate.dataQuality, 0, 100),
+      calibrationReliability: this.clamp(
+        candidate.calibrationReliability,
+        0,
+        100,
+      ),
+    }).total;
+  }
+
+  private buildPrediction(
+    rawData: Awaited<
+      ReturnType<RawPredictionDataService['getMatch']>
+    > extends infer T
+      ? NonNullable<T>
+      : never,
+    market: PredictionMarket,
+    selection: string,
+    probability: number,
+    confidence: number,
+    safetyScore: number,
+    modelAgreement: number,
+    dataQuality: number,
+    calibrationReliability: number,
+    risk: PredictionRisk,
+    decisionScore: number,
+    source: PredictionSource,
+  ): PredictionResult {
+    return {
+      eventId: rawData.fixture.eventId,
+      competitionId: String(rawData.fixture.leagueId),
+      season: rawData.fixture.season,
+      fixtureDate: rawData.fixture.fixtureDate,
+
+      homeTeamId: String(rawData.fixture.homeTeamId),
+      awayTeamId: String(rawData.fixture.awayTeamId),
+
+      homeTeamName:
+        rawData.homeTeam?.name ?? String(rawData.fixture.homeTeamId),
+
+      awayTeamName:
+        rawData.awayTeam?.name ?? String(rawData.fixture.awayTeamId),
+
+      market,
+      selection,
+
+      probability: this.clamp(probability, 0, 1),
+      confidence: this.clamp(confidence, 0, 98),
+
+      safetyScore: this.clamp(safetyScore, 0, 100),
+      modelAgreement: this.clamp(modelAgreement, 0, 1),
+      dataQuality: this.clamp(dataQuality, 0, 100),
+      calibrationReliability: this.clamp(calibrationReliability, 0, 100),
+
+      risk,
+      decisionScore: this.clamp(decisionScore, 0, 1),
+
+      source,
+      modelVersion: PREDICTION_ENGINE_CONFIG.modelVersion,
+
+      generatedAt: new Date(),
     };
+  }
 
-    if (!config.markets) {
-      return Object.values(PredictionMarket);
-    }
-
-    if (Array.isArray(config.markets)) {
-      return config.markets
-        .filter((item) => item.enabled !== false)
-        .map((item) => item.market);
-    }
-
-    return Object.entries(config.markets)
-      .filter(([, value]) => value?.enabled !== false)
-      .map(([market]) => market as PredictionMarket);
+  private getEnabledMarkets(): PredictionMarket[] {
+    return [
+      ...new Set(
+        ENABLED_PREDICTION_MARKETS.filter((item) => item.enabled).map(
+          (item) => item.market,
+        ),
+      ),
+    ];
   }
 
   private getStrongestPrediction(
@@ -195,5 +357,13 @@ export class PredictionEngineService {
     return [...predictions].sort(
       (a, b) => b.decisionScore - a.decisionScore,
     )[0];
+  }
+
+  private clamp(value: number, minimum: number, maximum: number): number {
+    if (!Number.isFinite(value)) {
+      return minimum;
+    }
+
+    return Math.min(Math.max(value, minimum), maximum);
   }
 }

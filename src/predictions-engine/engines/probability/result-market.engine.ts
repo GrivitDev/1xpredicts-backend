@@ -107,14 +107,17 @@ export class ResultMarketEngine implements MarketModel {
     model: ReturnType<typeof RawGoalModelUtil.calculate>,
   ): number {
     switch (selection.trim().toUpperCase()) {
+      case 'HOME_OR_DRAW':
       case 'HOME_DRAW':
       case '1X':
         return this.clamp(model.homeWin + model.draw);
 
+      case 'HOME_OR_AWAY':
       case 'HOME_AWAY':
       case '12':
         return this.clamp(model.homeWin + model.awayWin);
 
+      case 'AWAY_OR_DRAW':
       case 'DRAW_AWAY':
       case 'X2':
         return this.clamp(model.draw + model.awayWin);

@@ -1,8 +1,11 @@
 import { Injectable } from '@nestjs/common';
 
 import { PredictionMarket } from '../../enums/prediction-market.enum';
+
 import { MarketModel } from '../../interfaces/market-model.interface';
+
 import { MarketModelInput } from '../../interfaces/market-model-input.interface';
+
 import { ProbabilityModelResult } from '../../interfaces/probability-result.interface';
 
 import { RawGoalModelUtil } from './raw-goal-model.util';
@@ -123,6 +126,19 @@ export class HalfMarketEngine implements MarketModel {
   ): number {
     const normalized = selection.trim().toUpperCase().replace(/\s+/g, '');
 
+    /*
+     * Configured selections:
+     *
+     * HOME_HOME
+     * HOME_DRAW
+     * HOME_AWAY
+     * DRAW_HOME
+     * DRAW_DRAW
+     * DRAW_AWAY
+     * AWAY_HOME
+     * AWAY_DRAW
+     * AWAY_AWAY
+     */
     const match = normalized.match(/^(HOME|DRAW|AWAY)[_-](HOME|DRAW|AWAY)$/);
 
     if (!match) {
@@ -130,7 +146,6 @@ export class HalfMarketEngine implements MarketModel {
     }
 
     const firstHalf = match[1];
-
     const fullTime = match[2];
 
     const firstProbability = this.resolveResult(firstHalf, model.halfTime);
@@ -157,6 +172,10 @@ export class HalfMarketEngine implements MarketModel {
 
     const fullSign = this.resultSign(fullResult);
 
+    if (halfSign === 99 || fullSign === 99) {
+      return 0;
+    }
+
     let probability = 0;
     let denominator = 0;
 
@@ -167,6 +186,10 @@ export class HalfMarketEngine implements MarketModel {
         awayGoals++
       ) {
         const p = model.matrix[homeGoals][awayGoals] ?? 0;
+
+        if (p <= 0) {
+          continue;
+        }
 
         const halfGoalsHome = this.halfTimeGoalsApproximation(
           homeGoals,
@@ -254,7 +277,12 @@ export class HalfMarketEngine implements MarketModel {
     }
 
     const side = match[1];
+
     const line = Number(match[2]);
+
+    if (!Number.isFinite(line) || line < 0) {
+      return 0;
+    }
 
     if (side === 'OVER') {
       return this.clamp(

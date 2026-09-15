@@ -37,7 +37,9 @@ export class SafetyEngine {
     const calibrationReliability =
       this.clamp(input.calibrationReliability, 0, 100) / 100;
 
-    const sampleReliability = 1 - Math.exp(-Math.max(input.sampleSize, 0) / 25);
+    const sampleSize = Math.max(Math.floor(input.sampleSize ?? 0), 0);
+
+    const sampleReliability = 1 - Math.exp(-sampleSize / 25);
 
     const probabilityRisk = this.clamp(1 - probability, 0, 1);
 
@@ -49,22 +51,38 @@ export class SafetyEngine {
 
     const sampleRisk = 1 - sampleReliability;
 
-    const calibrationRisk = CalibrationRiskUtil.calculate({
-      confidence: 0,
-      reliability: calibrationReliability,
-      sampleSize: input.sampleSize,
-      calibrationError: input.calibrationError ?? 0,
-    });
+    /*
+     * Calibration is advisory.
+     *
+     * A brand-new market has no historical calibration record.
+     * In that case calibration must contribute no artificial risk.
+     *
+     * Once historical calibration exists, its risk can modestly
+     * influence the safety assessment.
+     */
+    const calibrationRisk =
+      sampleSize > 0
+        ? CalibrationRiskUtil.calculate({
+            confidence: 0,
+            reliability: calibrationReliability,
+            sampleSize,
+            calibrationError: input.calibrationError ?? 0,
+          })
+        : 0;
 
     const marketRisk = this.calculateMarketRisk(input.market);
 
+    /*
+     * Safety is primarily driven by the actual evidence supporting
+     * the prediction. Calibration provides a smaller advisory signal.
+     */
     const riskScore = this.clamp(
-      probabilityRisk * 0.22 +
-        dataRisk * 0.18 +
-        modelRisk * 0.14 +
-        agreementRisk * 0.13 +
+      probabilityRisk * 0.24 +
+        dataRisk * 0.2 +
+        modelRisk * 0.16 +
+        agreementRisk * 0.15 +
         sampleRisk * 0.1 +
-        calibrationRisk * 0.18 +
+        calibrationRisk * 0.1 +
         marketRisk * 0.05,
       0,
       1,
@@ -81,13 +99,21 @@ export class SafetyEngine {
       calibrationReliability: input.calibrationReliability,
     });
 
+    /*
+     * Safety is an assessment, not a publication blocker.
+     *
+     * Calibration history is not required for a prediction to be
+     * considered safe enough for further decision processing.
+     *
+     * HIGH risk remains visible to the final decision layer so it
+     * can rank and compare candidates, but it does not automatically
+     * invalidate this market here.
+     */
     const isSafe =
       safetyScore >= 60 &&
       agreement >= 0.5 &&
       input.dataQuality >= 50 &&
-      input.calibrationReliability >= 50 &&
-      sampleReliability >= 0.5 &&
-      risk !== PredictionRisk.HIGH;
+      sampleReliability >= 0.5;
 
     const reasons = this.buildReasons({
       probability,
