@@ -242,10 +242,6 @@ export class PredictionRun {
 export const PredictionRunSchema = SchemaFactory.createForClass(PredictionRun);
 
 PredictionRunSchema.index({
-  eventId: 1,
-});
-
-PredictionRunSchema.index({
   fixtureDate: -1,
   generatedAt: -1,
 });
