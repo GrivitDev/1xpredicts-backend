@@ -196,20 +196,15 @@ export class RawGoalModelUtil {
         : -goalProductionDifference;
 
       /*
-       * Positive goal-prevention difference means the home
-       * side has stronger prevention evidence.
+       * Positive goal-prevention difference means
+       * the home side has stronger prevention evidence.
        *
        * Therefore:
        *
-       *   home lambda  -> decreases
-       *   away lambda  -> also decreases
-       *
-       * The previous away branch incorrectly increased the
-       * away lambda when the home side had stronger prevention.
+       *   home lambda -> decreases
+       *   away lambda -> decreases
        */
-      const preventionSignal = isHome
-        ? -goalPreventionDifference
-        : -goalPreventionDifference;
+      const preventionSignal = -goalPreventionDifference;
 
       const directionalAdjustment =
         directionalSignal * comparisonConfidence * 0.08;
@@ -242,31 +237,37 @@ export class RawGoalModelUtil {
     /*
      * Recent points-per-match.
      *
-     * recentDifference is already:
+     * recentDifference is:
      *
      *   current team's PPM
      *   -
      *   opponent's PPM
      *
-     * Therefore it should not be inverted for away teams.
-     * The previous inversion incorrectly penalized a stronger
-     * away side.
+     * It is therefore not inverted for away teams.
+     *
+     * Missing recent data is simply ignored.
      */
-    const recentDifference =
-      this.safeNumber(team.recent.pointsPerMatch) -
-      this.safeNumber(opponent.recent.pointsPerMatch);
+    const teamRecent = team.recent;
 
-    if (Number.isFinite(recentDifference)) {
-      const directionalRecent = this.clamp(recentDifference, -3, 3);
+    const opponentRecent = opponent.recent;
 
-      lambda += directionalRecent * 0.07;
+    if (teamRecent && opponentRecent) {
+      const recentDifference =
+        this.safeNumber(teamRecent.pointsPerMatch) -
+        this.safeNumber(opponentRecent.pointsPerMatch);
+
+      if (Number.isFinite(recentDifference)) {
+        const directionalRecent = this.clamp(recentDifference, -3, 3);
+
+        lambda += directionalRecent * 0.07;
+      }
     }
 
     /*
-     * Venue scoring remains directly compared with the team's
-     * overall scoring level.
+     * Venue scoring remains directly compared
+     * with the team's overall scoring level.
      */
-    const venueScoring = this.safePositive(team.venue.averageGoalsScored);
+    const venueScoring = this.safePositive(team.venue?.averageGoalsScored);
 
     const overallScoring = this.safePositive(team.averageGoalsScored);
 
@@ -308,6 +309,10 @@ export class RawGoalModelUtil {
 
     const profile = team.sourceData?.performanceProfile;
 
+    const recent = team.recent;
+
+    const venue = team.venue;
+
     return [
       {
         value: this.readNullableNumber(team.averageGoalsScored),
@@ -316,14 +321,16 @@ export class RawGoalModelUtil {
       },
 
       {
-        value: this.readNullableNumber(team.recent.averageGoalsScored),
-        sample: this.readNumber(team.recent.sampleSize),
+        value: recent
+          ? this.readNullableNumber(recent.averageGoalsScored)
+          : null,
+        sample: recent ? this.readNumber(recent.sampleSize) : 0,
         weight: 0.1,
       },
 
       {
-        value: this.readNullableNumber(team.venue.averageGoalsScored),
-        sample: this.readNumber(team.venue.sampleSize),
+        value: venue ? this.readNullableNumber(venue.averageGoalsScored) : null,
+        sample: venue ? this.readNumber(venue.sampleSize) : 0,
         weight: 0.14,
       },
 
@@ -339,11 +346,13 @@ export class RawGoalModelUtil {
             ? this.readNullableNumber(stats.homeAverageGoalsScored)
             : this.readNullableNumber(stats.awayAverageGoalsScored)
           : null,
+
         sample: stats
           ? isHome
             ? this.readNumber(stats.homePlayed)
             : this.readNumber(stats.awayPlayed)
           : 0,
+
         weight: 0.16,
       },
 
@@ -351,7 +360,9 @@ export class RawGoalModelUtil {
         value: profile
           ? this.readNullableNumber(profile.averageGoalsScored)
           : null,
+
         sample: profile ? this.readNumber(profile.matchesAnalyzed) : 0,
+
         weight: 0.07,
       },
 
@@ -361,11 +372,13 @@ export class RawGoalModelUtil {
             ? this.readNullableNumber(profile.homeAverageGoalsScored)
             : this.readNullableNumber(profile.awayAverageGoalsScored)
           : null,
+
         sample: profile
           ? isHome
             ? this.readNumber(profile.homeMatches)
             : this.readNumber(profile.awayMatches)
           : 0,
+
         weight: 0.12,
       },
 
@@ -373,7 +386,9 @@ export class RawGoalModelUtil {
         value: stats
           ? this.readNullableNumber(stats.averageExpectedGoals)
           : null,
+
         sample: stats ? this.readNumber(stats.played) : 0,
+
         weight: 0.09,
       },
     ];
@@ -391,6 +406,10 @@ export class RawGoalModelUtil {
 
     const profile = opponent.sourceData?.performanceProfile;
 
+    const recent = opponent.recent;
+
+    const venue = opponent.venue;
+
     return [
       {
         value: this.readNullableNumber(opponent.averageGoalsConceded),
@@ -399,14 +418,22 @@ export class RawGoalModelUtil {
       },
 
       {
-        value: this.readNullableNumber(opponent.recent.averageGoalsConceded),
-        sample: this.readNumber(opponent.recent.sampleSize),
+        value: recent
+          ? this.readNullableNumber(recent.averageGoalsConceded)
+          : null,
+
+        sample: recent ? this.readNumber(recent.sampleSize) : 0,
+
         weight: 0.08,
       },
 
       {
-        value: this.readNullableNumber(opponent.venue.averageGoalsConceded),
-        sample: this.readNumber(opponent.venue.sampleSize),
+        value: venue
+          ? this.readNullableNumber(venue.averageGoalsConceded)
+          : null,
+
+        sample: venue ? this.readNumber(venue.sampleSize) : 0,
+
         weight: 0.12,
       },
 
@@ -414,7 +441,9 @@ export class RawGoalModelUtil {
         value: stats
           ? this.readNullableNumber(stats.averageGoalsConceded)
           : null,
+
         sample: stats ? this.readNumber(stats.played) : 0,
+
         weight: 0.12,
       },
 
@@ -424,11 +453,13 @@ export class RawGoalModelUtil {
             ? this.readNullableNumber(stats.homeAverageGoalsConceded)
             : this.readNullableNumber(stats.awayAverageGoalsConceded)
           : null,
+
         sample: stats
           ? opponentIsHome
             ? this.readNumber(stats.homePlayed)
             : this.readNumber(stats.awayPlayed)
           : 0,
+
         weight: 0.16,
       },
 
@@ -436,7 +467,9 @@ export class RawGoalModelUtil {
         value: profile
           ? this.readNullableNumber(profile.averageGoalsConceded)
           : null,
+
         sample: profile ? this.readNumber(profile.matchesAnalyzed) : 0,
+
         weight: 0.08,
       },
 
@@ -446,17 +479,21 @@ export class RawGoalModelUtil {
             ? this.readNullableNumber(profile.homeAverageGoalsConceded)
             : this.readNullableNumber(profile.awayAverageGoalsConceded)
           : null,
+
         sample: profile
           ? opponentIsHome
             ? this.readNumber(profile.homeMatches)
             : this.readNumber(profile.awayMatches)
           : 0,
+
         weight: 0.13,
       },
 
       {
         value: this.getDefensiveAdjustedConcession(opponent),
+
         sample: this.readNumber(opponent.sampleSize),
+
         weight: 0.07,
       },
     ];
@@ -484,9 +521,15 @@ export class RawGoalModelUtil {
     features: RawPredictionFeatures,
     isHome: boolean,
   ): number {
-    const own = isHome ? features.standings.home : features.standings.away;
+    const standings = features.standings;
 
-    const opponent = isHome ? features.standings.away : features.standings.home;
+    if (!standings) {
+      return 0;
+    }
+
+    const own = isHome ? standings.home : standings.away;
+
+    const opponent = isHome ? standings.away : standings.home;
 
     if (!own || !opponent) {
       return 0;
@@ -504,9 +547,6 @@ export class RawGoalModelUtil {
 
     /*
      * own is already side-specific.
-     *
-     * A stronger away side must receive a positive adjustment,
-     * not a negative one.
      */
     const pointShare = ownPoints / total;
 
@@ -525,8 +565,15 @@ export class RawGoalModelUtil {
 
     /*
      * Complete historical sample.
+     *
+     * Missing historical arrays are treated
+     * as empty evidence.
      */
-    for (const match of features.home.historical) {
+    const homeHistorical = features.home.historical ?? [];
+
+    const awayHistorical = features.away.historical ?? [];
+
+    for (const match of homeHistorical) {
       const teamWasHome = match.homeTeamId === features.homeTeamId;
 
       const currentHomeGoals = teamWasHome ? match.homeGoals : match.awayGoals;
@@ -536,7 +583,7 @@ export class RawGoalModelUtil {
       this.addHistoricalScore(matrix, currentHomeGoals, currentAwayGoals);
     }
 
-    for (const match of features.away.historical) {
+    for (const match of awayHistorical) {
       const teamWasHome = match.homeTeamId === features.awayTeamId;
 
       const currentAwayGoals = teamWasHome ? match.homeGoals : match.awayGoals;
@@ -562,12 +609,19 @@ export class RawGoalModelUtil {
 
     const safeAway = this.clampInteger(awayGoals, 0, MAX_GOALS);
 
+    if (!matrix[safeHome] || !Number.isFinite(matrix[safeHome][safeAway])) {
+      return;
+    }
+
     matrix[safeHome][safeAway] += 1;
   }
 
   private static getEmpiricalWeight(features: RawPredictionFeatures): number {
-    const totalSample =
-      features.home.historical.length + features.away.historical.length;
+    const homeHistorical = features.home.historical ?? [];
+
+    const awayHistorical = features.away.historical ?? [];
+
+    const totalSample = homeHistorical.length + awayHistorical.length;
 
     if (totalSample <= 0) {
       return 0;
@@ -656,7 +710,7 @@ export class RawGoalModelUtil {
 
     for (let homeGoals = 0; homeGoals <= MAX_GOALS; homeGoals += 1) {
       for (let awayGoals = 0; awayGoals <= MAX_GOALS; awayGoals += 1) {
-        result[homeGoals + awayGoals] += matrix[homeGoals][awayGoals] ?? 0;
+        result[homeGoals + awayGoals] += matrix[homeGoals]?.[awayGoals] ?? 0;
       }
     }
 
@@ -669,7 +723,7 @@ export class RawGoalModelUtil {
     for (let homeGoals = 0; homeGoals <= MAX_GOALS; homeGoals += 1) {
       for (let awayGoals = 0; awayGoals <= MAX_GOALS; awayGoals += 1) {
         if (homeGoals > awayGoals) {
-          probability += matrix[homeGoals][awayGoals] ?? 0;
+          probability += matrix[homeGoals]?.[awayGoals] ?? 0;
         }
       }
     }
@@ -693,7 +747,7 @@ export class RawGoalModelUtil {
     for (let homeGoals = 0; homeGoals <= MAX_GOALS; homeGoals += 1) {
       for (let awayGoals = 0; awayGoals <= MAX_GOALS; awayGoals += 1) {
         if (awayGoals > homeGoals) {
-          probability += matrix[homeGoals][awayGoals] ?? 0;
+          probability += matrix[homeGoals]?.[awayGoals] ?? 0;
         }
       }
     }
@@ -887,7 +941,7 @@ export class RawGoalModelUtil {
 
     const directAverage = this.average(available);
 
-    const venueScoring = this.safePositive(team.venue.averageGoalsScored);
+    const venueScoring = this.safePositive(team.venue?.averageGoalsScored);
 
     const overallScoring = this.safePositive(team.averageGoalsScored);
 
