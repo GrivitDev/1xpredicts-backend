@@ -6,7 +6,7 @@ import { RolesGuard } from '../../common/guards/roles.guard';
 
 import { Roles } from '../../common/decorators/roles.decorator';
 
-import { SettlementService } from '../services/settlement.service';
+import { SettlementService } from '../settlement/settlement.service';
 
 import { PredictionRunReadService } from '../services/prediction-run-read.service';
 

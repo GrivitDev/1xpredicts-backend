@@ -1,4 +1,6 @@
-import { Injectable, Logger } from '@nestjs/common';
+// src/predictions-engine/services/raw-prediction-data.service.ts
+
+import { Injectable } from '@nestjs/common';
 
 import { InjectModel } from '@nestjs/mongoose';
 
@@ -38,10 +40,6 @@ import { RawPredictionMatchInput } from '../interfaces/raw-prediction-match.inte
 
 @Injectable()
 export class RawPredictionDataService {
-  private readonly logger = new Logger(RawPredictionDataService.name);
-
-  private readonly historicalFixtureLimit = 30;
-
   constructor(
     @InjectModel(EspnFixture.name)
     private readonly fixtureModel: Model<EspnFixtureDocument>,
@@ -100,9 +98,17 @@ export class RawPredictionDataService {
 
     const season = Number(fixture.season);
 
+    if (!Number.isFinite(season)) {
+      return null;
+    }
+
     const homeTeamId = String(fixture.homeTeamId).trim();
 
     const awayTeamId = String(fixture.awayTeamId).trim();
+
+    if (!homeTeamId || !awayTeamId) {
+      return null;
+    }
 
     const [
       homeTeam,
@@ -190,20 +196,29 @@ export class RawPredictionDataService {
       fixture,
 
       homeTeam,
+
       awayTeam,
 
       homeStanding,
+
       awayStanding,
 
       homeTeamCompetitionStats,
+
       awayTeamCompetitionStats,
 
       homeTeamPerformanceProfile,
+
       awayTeamPerformanceProfile,
 
       headToHead,
 
+      /*
+       * Complete historical fixtures are passed downstream.
+       * No age-based reduction occurs here.
+       */
       homeHistoricalFixtures,
+
       awayHistoricalFixtures,
 
       retrievedAt: new Date(),
@@ -216,9 +231,18 @@ export class RawPredictionDataService {
     competitionId: string,
   ): Promise<EspnFixtureDocument[]> {
     /*
-     * Historical form for prediction is deliberately
-     * limited to the same competition and to fixtures
-     * strictly before the target kickoff.
+     * ----------------------------------------------------------
+     * COMPLETE HISTORICAL DATA
+     * ----------------------------------------------------------
+     *
+     * There is deliberately no lookback window and no maximum
+     * number of historical fixtures.
+     *
+     * Every completed fixture for the team in the same competition
+     * before the target kickoff is supplied to the prediction layer.
+     *
+     * The model decides how observations are weighted. The data
+     * service does not discard older observations.
      */
     return this.fixtureModel
       .find({
@@ -242,7 +266,6 @@ export class RawPredictionDataService {
       .sort({
         fixtureDate: -1,
       })
-      .limit(this.historicalFixtureLimit)
       .exec();
   }
 
@@ -269,10 +292,17 @@ export class RawPredictionDataService {
       return null;
     }
 
-    return this.trimHeadToHeadToCutoff(headToHead, fixtureDate);
+    /*
+     * H2H aggregates are produced from completed historical
+     * meetings. We only protect against an accidentally stored
+     * future meeting being exposed to the prediction engine.
+     *
+     * Older meetings are never removed because of age.
+     */
+    return this.trimFutureHeadToHeadMeetings(headToHead, fixtureDate);
   }
 
-  private trimHeadToHeadToCutoff(
+  private trimFutureHeadToHeadMeetings(
     headToHead: HeadToHeadDocument,
     cutoff: Date,
   ): HeadToHeadDocument {
@@ -280,26 +310,27 @@ export class RawPredictionDataService {
       meetings?: unknown;
     };
 
-    const meetings: unknown[] = Array.isArray(source.meetings)
-      ? source.meetings
-      : [];
+    const meetings = Array.isArray(source.meetings) ? source.meetings : [];
 
     if (!meetings.length) {
       return headToHead;
     }
 
     const filteredMeetings = meetings.filter((meeting: unknown) => {
-      if (typeof meeting !== 'object' || meeting === null) {
+      if (!meeting || typeof meeting !== 'object') {
         return false;
       }
 
-      const meetingRecord = meeting as Record<string, unknown>;
-      const meetingDate = meetingRecord.fixtureDate ?? meetingRecord.date;
+      const record = meeting as Record<string, unknown>;
+
+      const meetingDate = record.fixtureDate ?? record.date;
 
       if (
-        typeof meetingDate !== 'string' &&
-        typeof meetingDate !== 'number' &&
-        !(meetingDate instanceof Date)
+        !(
+          typeof meetingDate === 'string' ||
+          typeof meetingDate === 'number' ||
+          meetingDate instanceof Date
+        )
       ) {
         return false;
       }
@@ -313,6 +344,13 @@ export class RawPredictionDataService {
       return headToHead;
     }
 
+    /*
+     * Only the meeting list is filtered here.
+     *
+     * The aggregate H2H fields remain untouched because replacing
+     * or partially rebuilding those aggregates in this service
+     * would risk silently discarding existing H2H information.
+     */
     const cloned = headToHead.toObject() as unknown as Record<string, unknown>;
 
     cloned.meetings = filteredMeetings;

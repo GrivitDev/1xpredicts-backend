@@ -7,7 +7,7 @@ const MAX_GOALS = 10;
 const DEFAULT_HOME_GOALS = 1.2;
 const DEFAULT_AWAY_GOALS = 1.05;
 
-const MAX_TEAM_LAMBDA = 3.5;
+const MAX_TEAM_LAMBDA = 4.5;
 
 export interface GoalScoreMatrix {
   matrix: number[][];
@@ -52,17 +52,27 @@ export interface GoalModelResult extends GoalScoreMatrix {
 
 export class RawGoalModelUtil {
   static calculate(features: RawPredictionFeatures): GoalModelResult {
-    const homeLambda = this.calculateTeamLambda(features.home, true, features);
+    const homeLambda = this.calculateTeamLambda(
+      features.home,
+      features.away,
+      true,
+      features,
+    );
 
-    const awayLambda = this.calculateTeamLambda(features.away, false, features);
+    const awayLambda = this.calculateTeamLambda(
+      features.away,
+      features.home,
+      false,
+      features,
+    );
 
-    const poissonHome = this.buildPoissonDistribution(homeLambda);
+    const homePoisson = this.buildPoissonDistribution(homeLambda);
 
-    const poissonAway = this.buildPoissonDistribution(awayLambda);
+    const awayPoisson = this.buildPoissonDistribution(awayLambda);
 
-    const poissonMatrix = this.buildScoreMatrix(poissonHome, poissonAway);
+    const poissonMatrix = this.buildScoreMatrix(homePoisson, awayPoisson);
 
-    const empiricalMatrix = this.buildEmpiricalMatrix(features);
+    const empiricalMatrix = this.buildDirectionalEmpiricalMatrix(features);
 
     const empiricalWeight = this.getEmpiricalWeight(features);
 
@@ -72,20 +82,20 @@ export class RawGoalModelUtil {
       empiricalWeight,
     );
 
-    const normalizedMatrix = this.normalizeMatrix(blendedMatrix);
+    const matrix = this.normalizeMatrix(blendedMatrix);
 
-    const homeGoalProbabilities = this.sumHomeGoals(normalizedMatrix);
+    const homeGoalProbabilities = this.sumHomeGoals(matrix);
 
-    const awayGoalProbabilities = this.sumAwayGoals(normalizedMatrix);
+    const awayGoalProbabilities = this.sumAwayGoals(matrix);
 
-    const totalGoalProbabilities = this.sumTotalGoals(normalizedMatrix);
+    const totalGoalProbabilities = this.sumTotalGoals(matrix);
 
     const halfTime = this.buildHalfTimeModel(features);
 
     const secondHalf = this.buildSecondHalfModel(features);
 
     return {
-      matrix: normalizedMatrix,
+      matrix,
 
       homeGoals: homeGoalProbabilities,
 
@@ -93,11 +103,11 @@ export class RawGoalModelUtil {
 
       totalGoals: totalGoalProbabilities,
 
-      homeWin: this.calculateHomeWin(normalizedMatrix),
+      homeWin: this.calculateHomeWin(matrix),
 
-      draw: this.calculateDraw(normalizedMatrix),
+      draw: this.calculateDraw(matrix),
 
-      awayWin: this.calculateAwayWin(normalizedMatrix),
+      awayWin: this.calculateAwayWin(matrix),
 
       homeLambda,
 
@@ -121,268 +131,381 @@ export class RawGoalModelUtil {
     };
   }
 
-  static probabilityOver(probabilities: number[], line: number): number {
-    return this.clamp(
-      probabilities.reduce(
-        (sum, probability, goals) => (goals > line ? sum + probability : sum),
-        0,
-      ),
-    );
-  }
-
-  static probabilityUnder(probabilities: number[], line: number): number {
-    return this.clamp(
-      probabilities.reduce(
-        (sum, probability, goals) => (goals < line ? sum + probability : sum),
-        0,
-      ),
-    );
-  }
-
-  static probabilityExactly(probabilities: number[], goals: number): number {
-    if (goals < 0 || goals >= probabilities.length) {
-      return 0;
-    }
-
-    return this.clamp(probabilities[goals] ?? 0);
-  }
-
-  static probabilityAtLeast(probabilities: number[], goals: number): number {
-    if (goals <= 0) {
-      return 1;
-    }
-
-    if (goals >= probabilities.length) {
-      return 0;
-    }
-
-    return this.clamp(
-      probabilities.reduce(
-        (sum, probability, index) => (index >= goals ? sum + probability : sum),
-        0,
-      ),
-    );
-  }
-
   private static calculateTeamLambda(
     team: RawPredictionFeatures['home'],
+    opponent: RawPredictionFeatures['away'],
     isHome: boolean,
     features: RawPredictionFeatures,
   ): number {
-    const scoringPrior = isHome ? DEFAULT_HOME_GOALS : DEFAULT_AWAY_GOALS;
+    const attackEvidence = this.collectAttackEvidence(team, isHome);
 
-    const opponent = isHome ? features.away : features.home;
+    const defenceEvidence = this.collectDefenceEvidence(opponent, !isHome);
 
-    const teamOverallScoring = this.safePositive(team.averageGoalsScored);
+    const attack = this.weightedEvidenceAverage(attackEvidence);
 
-    const teamRecentScoring = this.safePositive(
-      team.recent?.averageGoalsScored,
-    );
+    const defence = this.weightedEvidenceAverage(defenceEvidence);
 
-    const teamVenueScoring = this.safePositive(team.venue?.averageGoalsScored);
+    let lambda = 0;
 
-    const opponentOverallConceding = this.safePositive(
-      opponent.averageGoalsConceded,
-    );
-
-    const opponentVenueConceding = this.safePositive(
-      opponent.venue?.averageGoalsConceded,
-    );
+    if (attack !== null && defence !== null) {
+      lambda = attack * 0.52 + defence * 0.48;
+    } else if (attack !== null) {
+      lambda = attack;
+    } else if (defence !== null) {
+      lambda = defence;
+    }
 
     /*
-     * ----------------------------------------------------------
-     * ATTACKING BASE
-     * ----------------------------------------------------------
-     *
-     * Recent form and venue performance receive more weight than
-     * the complete historical average, but sparse samples are
-     * automatically shrunk toward the prior.
+     * Only use structural priors when no
+     * usable scoring evidence exists.
      */
-    const attackInputs = [
-      {
-        value: teamVenueScoring,
-        sample: team.venue?.sampleSize ?? 0,
-        weight: 0.4,
-      },
-      {
-        value: teamRecentScoring,
-        sample: team.recent?.sampleSize ?? 0,
-        weight: 0.3,
-      },
-      {
-        value: teamOverallScoring,
-        sample: team.sampleSize,
-        weight: 0.3,
-      },
-    ];
-
-    const attackingExpectation = this.weightedEvidenceAverage(
-      attackInputs,
-      scoringPrior,
-    );
-
-    /*
-     * ----------------------------------------------------------
-     * OPPOSITION DEFENCE
-     * ----------------------------------------------------------
-     */
-    const defensiveInputs = [
-      {
-        value: opponentVenueConceding,
-        sample: opponent.venue?.sampleSize ?? 0,
-        weight: 0.55,
-      },
-      {
-        value: opponentOverallConceding,
-        sample: opponent.sampleSize,
-        weight: 0.45,
-      },
-    ];
-
-    const defensiveExpectation = this.weightedEvidenceAverage(
-      defensiveInputs,
-      isHome ? DEFAULT_AWAY_GOALS : DEFAULT_HOME_GOALS,
-    );
-
-    /*
-     * ----------------------------------------------------------
-     * CORE EXPECTED GOALS
-     * ----------------------------------------------------------
-     *
-     * The team attack and opponent defence must both contribute.
-     */
-    let lambda = attackingExpectation * 0.58 + defensiveExpectation * 0.42;
-
-    /*
-     * ----------------------------------------------------------
-     * RECENT FORM ADJUSTMENT
-     * ----------------------------------------------------------
-     *
-     * Recent performance should move the prediction, but never
-     * overpower the broader evidence.
-     */
-    const recentSample = Math.max(team.recent?.sampleSize ?? 0, 0);
-
-    if (recentSample > 0 && teamOverallScoring > 0 && teamRecentScoring > 0) {
-      const recentReliability = this.sampleReliability(recentSample);
-
-      const recentDifference = teamRecentScoring - teamOverallScoring;
-
-      const recentAdjustment = recentDifference * recentReliability * 0.2;
-
-      lambda += recentAdjustment;
+    if (!Number.isFinite(lambda) || lambda <= 0) {
+      lambda = isHome ? DEFAULT_HOME_GOALS : DEFAULT_AWAY_GOALS;
     }
 
     /*
      * ----------------------------------------------------------
-     * VENUE ADJUSTMENT
+     * TEAM COMPARISON
      * ----------------------------------------------------------
+     *
+     * The comparison layer is not just a winner-direction signal.
+     * Goal production and goal prevention are also incorporated
+     * into the actual expected-goals estimate.
      */
-    const venueSample = Math.max(team.venue?.sampleSize ?? 0, 0);
+    const comparison = features.comparison;
 
-    if (venueSample > 0 && teamOverallScoring > 0 && teamVenueScoring > 0) {
-      const venueReliability = this.sampleReliability(venueSample);
+    if (comparison) {
+      const comparisonConfidence = this.clamp(comparison.confidence ?? 0, 0, 1);
 
-      const venueDifference = teamVenueScoring - teamOverallScoring;
+      const directionalDifference = this.clamp(
+        comparison.directionalDifference ?? 0,
+        -1,
+        1,
+      );
 
-      const venueAdjustment = venueDifference * venueReliability * 0.18;
+      const goalProductionDifference = this.clamp(
+        comparison.goalProduction?.difference ?? 0,
+        -1,
+        1,
+      );
 
-      lambda += venueAdjustment;
+      const goalPreventionDifference = this.clamp(
+        comparison.goalPrevention?.difference ?? 0,
+        -1,
+        1,
+      );
+
+      const directionalSignal = isHome
+        ? directionalDifference
+        : -directionalDifference;
+
+      /*
+       * For the scoring environment:
+       *
+       * - positive production difference means more offensive
+       *   evidence toward the home side;
+       * - positive prevention difference means stronger
+       *   prevention toward the home side.
+       *
+       * For a particular team, offensive strength increases
+       * its lambda while opponent prevention decreases it.
+       */
+      const productionSignal = isHome
+        ? goalProductionDifference
+        : -goalProductionDifference;
+
+      const preventionSignal = isHome
+        ? -goalPreventionDifference
+        : goalPreventionDifference;
+
+      const directionalAdjustment =
+        directionalSignal * comparisonConfidence * 0.08;
+
+      const productionAdjustment =
+        productionSignal * comparisonConfidence * 0.12;
+
+      const preventionAdjustment =
+        preventionSignal * comparisonConfidence * 0.1;
+
+      const comparisonAdjustment = this.clamp(
+        directionalAdjustment + productionAdjustment + preventionAdjustment,
+        -0.22,
+        0.22,
+      );
+
+      lambda *= 1 + comparisonAdjustment;
     }
 
     /*
-     * ----------------------------------------------------------
-     * H2H
-     * ----------------------------------------------------------
-     *
-     * H2H is supplementary only.
+     * Standing evidence is supplementary.
+     */
+    const standingAdjustment = this.calculateStandingAdjustment(
+      features,
+      isHome,
+    );
+
+    lambda *= 1 + standingAdjustment;
+
+    /*
+     * Recent points-per-match difference gives
+     * an additional current-form signal.
+     */
+    const recentDifference =
+      this.safeNumber(team.recent.pointsPerMatch) -
+      this.safeNumber(opponent.recent.pointsPerMatch);
+
+    if (Number.isFinite(recentDifference)) {
+      const directionalRecent = isHome ? recentDifference : -recentDifference;
+
+      lambda += this.clamp(directionalRecent, -3, 3) * 0.07;
+    }
+
+    /*
+     * Venue scoring is directly used against
+     * the team's overall scoring level.
+     */
+    const venueScoring = this.safePositive(team.venue.averageGoalsScored);
+
+    const overallScoring = this.safePositive(team.averageGoalsScored);
+
+    if (venueScoring > 0 && overallScoring > 0) {
+      const venueDifference = venueScoring - overallScoring;
+
+      lambda += venueDifference * 0.1;
+    }
+
+    /*
+     * H2H remains supplementary.
      */
     const h2h = features.h2h;
 
-    const h2hGoals = h2h?.averageGoalsForTeam;
+    if (h2h?.available && h2h.sampleSize > 0) {
+      const h2hValue = isHome
+        ? h2h.averageGoalsForHome
+        : h2h.averageGoalsForAway;
 
-    if (
-      typeof h2hGoals === 'number' &&
-      Number.isFinite(h2hGoals) &&
-      h2hGoals >= 0 &&
-      (h2h?.sampleSize ?? 0) >= 3
-    ) {
-      const h2hWeight = this.getH2HWeight(h2h?.sampleSize ?? 0);
+      if (Number.isFinite(h2hValue) && h2hValue >= 0) {
+        const weight = this.getH2HWeight(h2h.sampleSize);
 
-      lambda = lambda * (1 - h2hWeight) + h2hGoals * h2hWeight;
+        lambda = lambda * (1 - weight) + h2hValue * weight;
+      }
     }
 
-    /*
-     * ----------------------------------------------------------
-     * TIMING DATA
-     * ----------------------------------------------------------
-     *
-     * Only use timing information when ESPN-derived values are
-     * actually available.
-     */
-    const firstHalfRate = this.safePositive(team.firstHalf?.averageGoalsScored);
+    return this.clamp(lambda, isHome ? 0.05 : 0.04, MAX_TEAM_LAMBDA);
+  }
 
-    const secondHalfRate = this.safePositive(
-      team.secondHalf?.averageGoalsScored,
-    );
+  private static collectAttackEvidence(
+    team: RawPredictionFeatures['home'],
+    isHome: boolean,
+  ): Array<{
+    value: number | null;
+    sample: number;
+    weight: number;
+  }> {
+    const stats = team.sourceData?.competitionStats;
 
-    const timingValues = [firstHalfRate, secondHalfRate].filter(
-      (value) => value > 0,
-    );
+    const profile = team.sourceData?.performanceProfile;
 
-    if (timingValues.length > 0) {
-      const timingAverage = this.average(timingValues);
+    return [
+      {
+        value: this.readNullableNumber(team.averageGoalsScored),
+        sample: this.readNumber(team.sampleSize),
+        weight: 0.12,
+      },
 
-      const timingReliability = this.clamp(timingValues.length / 2);
+      {
+        value: this.readNullableNumber(team.recent.averageGoalsScored),
+        sample: this.readNumber(team.recent.sampleSize),
+        weight: 0.1,
+      },
 
-      lambda =
-        lambda * (1 - timingReliability * 0.05) +
-        timingAverage * (timingReliability * 0.05);
+      {
+        value: this.readNullableNumber(team.venue.averageGoalsScored),
+        sample: this.readNumber(team.venue.sampleSize),
+        weight: 0.14,
+      },
+
+      {
+        value: stats ? this.readNullableNumber(stats.averageGoalsScored) : null,
+        sample: stats ? this.readNumber(stats.played) : 0,
+        weight: 0.1,
+      },
+
+      {
+        value: stats
+          ? isHome
+            ? this.readNullableNumber(stats.homeAverageGoalsScored)
+            : this.readNullableNumber(stats.awayAverageGoalsScored)
+          : null,
+        sample: stats
+          ? isHome
+            ? this.readNumber(stats.homePlayed)
+            : this.readNumber(stats.awayPlayed)
+          : 0,
+        weight: 0.16,
+      },
+
+      {
+        value: profile
+          ? this.readNullableNumber(profile.averageGoalsScored)
+          : null,
+        sample: profile ? this.readNumber(profile.matchesAnalyzed) : 0,
+        weight: 0.07,
+      },
+
+      {
+        value: profile
+          ? isHome
+            ? this.readNullableNumber(profile.homeAverageGoalsScored)
+            : this.readNullableNumber(profile.awayAverageGoalsScored)
+          : null,
+        sample: profile
+          ? isHome
+            ? this.readNumber(profile.homeMatches)
+            : this.readNumber(profile.awayMatches)
+          : 0,
+        weight: 0.12,
+      },
+
+      {
+        value: stats
+          ? this.readNullableNumber(stats.averageExpectedGoals)
+          : null,
+        sample: stats ? this.readNumber(stats.played) : 0,
+        weight: 0.09,
+      },
+    ];
+  }
+
+  private static collectDefenceEvidence(
+    opponent: RawPredictionFeatures['away'],
+    opponentIsHome: boolean,
+  ): Array<{
+    value: number | null;
+    sample: number;
+    weight: number;
+  }> {
+    const stats = opponent.sourceData?.competitionStats;
+
+    const profile = opponent.sourceData?.performanceProfile;
+
+    return [
+      {
+        value: this.readNullableNumber(opponent.averageGoalsConceded),
+        sample: this.readNumber(opponent.sampleSize),
+        weight: 0.12,
+      },
+
+      {
+        value: this.readNullableNumber(opponent.recent.averageGoalsConceded),
+        sample: this.readNumber(opponent.recent.sampleSize),
+        weight: 0.08,
+      },
+
+      {
+        value: this.readNullableNumber(opponent.venue.averageGoalsConceded),
+        sample: this.readNumber(opponent.venue.sampleSize),
+        weight: 0.12,
+      },
+
+      {
+        value: stats
+          ? this.readNullableNumber(stats.averageGoalsConceded)
+          : null,
+        sample: stats ? this.readNumber(stats.played) : 0,
+        weight: 0.12,
+      },
+
+      {
+        value: stats
+          ? opponentIsHome
+            ? this.readNullableNumber(stats.homeAverageGoalsConceded)
+            : this.readNullableNumber(stats.awayAverageGoalsConceded)
+          : null,
+        sample: stats
+          ? opponentIsHome
+            ? this.readNumber(stats.homePlayed)
+            : this.readNumber(stats.awayPlayed)
+          : 0,
+        weight: 0.16,
+      },
+
+      {
+        value: profile
+          ? this.readNullableNumber(profile.averageGoalsConceded)
+          : null,
+        sample: profile ? this.readNumber(profile.matchesAnalyzed) : 0,
+        weight: 0.08,
+      },
+
+      {
+        value: profile
+          ? opponentIsHome
+            ? this.readNullableNumber(profile.homeAverageGoalsConceded)
+            : this.readNullableNumber(profile.awayAverageGoalsConceded)
+          : null,
+        sample: profile
+          ? opponentIsHome
+            ? this.readNumber(profile.homeMatches)
+            : this.readNumber(profile.awayMatches)
+          : 0,
+        weight: 0.13,
+      },
+
+      {
+        value: this.getDefensiveAdjustedConcession(opponent),
+        sample: this.readNumber(opponent.sampleSize),
+        weight: 0.07,
+      },
+    ];
+  }
+
+  private static getDefensiveAdjustedConcession(
+    team: RawPredictionFeatures['home'],
+  ): number | null {
+    const base = this.safePositive(team.averageGoalsConceded);
+
+    if (base <= 0) {
+      return null;
     }
 
-    /*
-     * ----------------------------------------------------------
-     * DATA SHRINKAGE
-     * ----------------------------------------------------------
-     *
-     * Sparse data must remain close to the league-neutral prior.
-     */
-    const teamReliability = this.getTeamSampleReliability(team);
+    const cleanSheet = this.clamp(team.cleanSheetRate ?? 0, 0, 1);
 
-    const shrinkage = (1 - teamReliability) * 0.35;
+    const failedToScore = this.clamp(team.failedToScoreRate ?? 0, 0, 1);
 
-    lambda = lambda * (1 - shrinkage) + scoringPrior * shrinkage;
+    const multiplier = 1 - cleanSheet * 0.12 - failedToScore * 0.06;
 
-    /*
-     * Prevent unrealistic expectations while still allowing
-     * genuinely strong teams to generate stronger predictions.
-     */
-    const floor = isHome ? 0.15 : 0.12;
-
-    return this.clamp(Math.max(lambda, floor), 0, MAX_TEAM_LAMBDA);
+    return Math.max(base * multiplier, 0.05);
   }
 
-  private static buildPoissonDistribution(lambda: number): number[] {
-    const probabilities = new Array<number>(MAX_GOALS + 1).fill(0);
+  private static calculateStandingAdjustment(
+    features: RawPredictionFeatures,
+    isHome: boolean,
+  ): number {
+    const own = isHome ? features.standings.home : features.standings.away;
 
-    const safeLambda = this.clamp(lambda, 0, MAX_TEAM_LAMBDA);
+    const opponent = isHome ? features.standings.away : features.standings.home;
 
-    probabilities[0] = Math.exp(-safeLambda);
-
-    for (let goals = 1; goals <= MAX_GOALS; goals++) {
-      probabilities[goals] = probabilities[goals - 1] * (safeLambda / goals);
+    if (!own || !opponent) {
+      return 0;
     }
 
-    return this.normalize(probabilities);
+    const ownPoints = Math.max(this.readNumber(own.points), 0);
+
+    const opponentPoints = Math.max(this.readNumber(opponent.points), 0);
+
+    const total = ownPoints + opponentPoints;
+
+    if (total <= 0) {
+      return 0;
+    }
+
+    const pointShare = ownPoints / total;
+
+    return this.clamp((pointShare - 0.5) * 0.1, -0.05, 0.05);
   }
 
-  private static buildScoreMatrix(home: number[], away: number[]): number[][] {
-    return home.map((homeProbability) =>
-      away.map((awayProbability) => homeProbability * awayProbability),
-    );
-  }
-
-  private static buildEmpiricalMatrix(
+  private static buildDirectionalEmpiricalMatrix(
     features: RawPredictionFeatures,
   ): number[][] {
     const matrix = Array.from(
@@ -392,73 +515,58 @@ export class RawGoalModelUtil {
       () => new Array<number>(MAX_GOALS + 1).fill(0),
     );
 
-    const historical = [
-      ...(features.home.historical ?? []),
-      ...(features.away.historical ?? []),
-    ];
+    /*
+     * Historical fixtures remain the complete historical sample.
+     * No age or arbitrary recent-history cutoff is applied here.
+     */
+    for (const match of features.home.historical) {
+      const teamWasHome = match.homeTeamId === features.homeTeamId;
 
-    const completed = historical.filter((match) => match.completed === true);
+      const currentHomeGoals = teamWasHome ? match.homeGoals : match.awayGoals;
 
-    if (!completed.length) {
-      return matrix;
+      const currentAwayGoals = teamWasHome ? match.awayGoals : match.homeGoals;
+
+      this.addHistoricalScore(matrix, currentHomeGoals, currentAwayGoals);
     }
 
-    /*
-     * Historical matches are not necessarily aligned to the
-     * current fixture's home/away orientation.
-     *
-     * We therefore use them as a generic score-shape component,
-     * while the current Poisson model controls direction.
-     */
-    for (const match of completed) {
-      const homeGoals = Math.min(
-        Math.max(Math.round(Number(match.homeGoals ?? 0)), 0),
-        MAX_GOALS,
-      );
+    for (const match of features.away.historical) {
+      const teamWasHome = match.homeTeamId === features.awayTeamId;
 
-      const awayGoals = Math.min(
-        Math.max(Math.round(Number(match.awayGoals ?? 0)), 0),
-        MAX_GOALS,
-      );
+      const currentAwayGoals = teamWasHome ? match.homeGoals : match.awayGoals;
 
-      if (homeGoals === awayGoals) {
-        matrix[homeGoals][awayGoals] += 1;
+      const currentHomeGoals = teamWasHome ? match.awayGoals : match.homeGoals;
 
-        continue;
-      }
-
-      matrix[homeGoals][awayGoals] += 0.5;
-
-      matrix[awayGoals][homeGoals] += 0.5;
+      this.addHistoricalScore(matrix, currentHomeGoals, currentAwayGoals);
     }
 
     return this.normalizeMatrix(matrix);
   }
 
+  private static addHistoricalScore(
+    matrix: number[][],
+    homeGoals: number,
+    awayGoals: number,
+  ): void {
+    if (!Number.isFinite(homeGoals) || !Number.isFinite(awayGoals)) {
+      return;
+    }
+
+    const safeHome = this.clampInteger(homeGoals, 0, MAX_GOALS);
+
+    const safeAway = this.clampInteger(awayGoals, 0, MAX_GOALS);
+
+    matrix[safeHome][safeAway] += 1;
+  }
+
   private static getEmpiricalWeight(features: RawPredictionFeatures): number {
-    const homeSample = Math.max(features.home.historical?.length ?? 0, 0);
+    const totalSample =
+      features.home.historical.length + features.away.historical.length;
 
-    const awaySample = Math.max(features.away.historical?.length ?? 0, 0);
-
-    const balancedSample = Math.min(homeSample, awaySample);
-
-    if (balancedSample < 5) {
+    if (totalSample <= 0) {
       return 0;
     }
 
-    if (balancedSample < 10) {
-      return 0.03;
-    }
-
-    if (balancedSample < 20) {
-      return 0.06;
-    }
-
-    if (balancedSample < 30) {
-      return 0.09;
-    }
-
-    return 0.12;
+    return this.clamp(0.04 + Math.min(totalSample / 300, 0.1), 0.04, 0.14);
   }
 
   private static blendMatrices(
@@ -466,7 +574,7 @@ export class RawGoalModelUtil {
     empirical: number[][],
     empiricalWeight: number,
   ): number[][] {
-    const weight = this.clamp(empiricalWeight, 0, 0.15);
+    const weight = this.clamp(empiricalWeight, 0, 0.2);
 
     return poisson.map((row, homeGoals) =>
       row.map(
@@ -475,6 +583,26 @@ export class RawGoalModelUtil {
           (empirical[homeGoals]?.[awayGoals] ?? 0) * weight,
       ),
     );
+  }
+
+  private static buildScoreMatrix(home: number[], away: number[]): number[][] {
+    return home.map((homeProbability) =>
+      away.map((awayProbability) => homeProbability * awayProbability),
+    );
+  }
+
+  private static buildPoissonDistribution(lambda: number): number[] {
+    const probabilities = new Array<number>(MAX_GOALS + 1).fill(0);
+
+    const safeLambda = this.clamp(lambda, 0, MAX_TEAM_LAMBDA);
+
+    probabilities[0] = Math.exp(-safeLambda);
+
+    for (let goals = 1; goals <= MAX_GOALS; goals += 1) {
+      probabilities[goals] = probabilities[goals - 1] * (safeLambda / goals);
+    }
+
+    return this.normalize(probabilities);
   }
 
   private static normalizeMatrix(matrix: number[][]): number[][] {
@@ -519,8 +647,8 @@ export class RawGoalModelUtil {
   private static sumTotalGoals(matrix: number[][]): number[] {
     const result = new Array<number>(MAX_GOALS * 2 + 1).fill(0);
 
-    for (let homeGoals = 0; homeGoals <= MAX_GOALS; homeGoals++) {
-      for (let awayGoals = 0; awayGoals <= MAX_GOALS; awayGoals++) {
+    for (let homeGoals = 0; homeGoals <= MAX_GOALS; homeGoals += 1) {
+      for (let awayGoals = 0; awayGoals <= MAX_GOALS; awayGoals += 1) {
         result[homeGoals + awayGoals] += matrix[homeGoals][awayGoals] ?? 0;
       }
     }
@@ -531,8 +659,8 @@ export class RawGoalModelUtil {
   private static calculateHomeWin(matrix: number[][]): number {
     let probability = 0;
 
-    for (let homeGoals = 0; homeGoals <= MAX_GOALS; homeGoals++) {
-      for (let awayGoals = 0; awayGoals <= MAX_GOALS; awayGoals++) {
+    for (let homeGoals = 0; homeGoals <= MAX_GOALS; homeGoals += 1) {
+      for (let awayGoals = 0; awayGoals <= MAX_GOALS; awayGoals += 1) {
         if (homeGoals > awayGoals) {
           probability += matrix[homeGoals][awayGoals] ?? 0;
         }
@@ -545,7 +673,7 @@ export class RawGoalModelUtil {
   private static calculateDraw(matrix: number[][]): number {
     let probability = 0;
 
-    for (let goals = 0; goals <= MAX_GOALS; goals++) {
+    for (let goals = 0; goals <= MAX_GOALS; goals += 1) {
       probability += matrix[goals]?.[goals] ?? 0;
     }
 
@@ -555,8 +683,8 @@ export class RawGoalModelUtil {
   private static calculateAwayWin(matrix: number[][]): number {
     let probability = 0;
 
-    for (let homeGoals = 0; homeGoals <= MAX_GOALS; homeGoals++) {
-      for (let awayGoals = 0; awayGoals <= MAX_GOALS; awayGoals++) {
+    for (let homeGoals = 0; homeGoals <= MAX_GOALS; homeGoals += 1) {
+      for (let awayGoals = 0; awayGoals <= MAX_GOALS; awayGoals += 1) {
         if (awayGoals > homeGoals) {
           probability += matrix[homeGoals][awayGoals] ?? 0;
         }
@@ -569,9 +697,9 @@ export class RawGoalModelUtil {
   private static buildHalfTimeModel(
     features: RawPredictionFeatures,
   ): GoalModelResult['halfTime'] {
-    const homeLambda = this.getHalfLambda(features.home, true);
+    const homeLambda = this.getHalfLambda(features.home, features.away, true);
 
-    const awayLambda = this.getHalfLambda(features.away, false);
+    const awayLambda = this.getHalfLambda(features.away, features.home, false);
 
     const home = this.buildPoissonDistribution(homeLambda);
 
@@ -597,9 +725,17 @@ export class RawGoalModelUtil {
   private static buildSecondHalfModel(
     features: RawPredictionFeatures,
   ): GoalModelResult['secondHalf'] {
-    const homeLambda = this.getSecondHalfLambda(features.home, true);
+    const homeLambda = this.getSecondHalfLambda(
+      features.home,
+      features.away,
+      true,
+    );
 
-    const awayLambda = this.getSecondHalfLambda(features.away, false);
+    const awayLambda = this.getSecondHalfLambda(
+      features.away,
+      features.home,
+      false,
+    );
 
     const home = this.buildPoissonDistribution(homeLambda);
 
@@ -624,132 +760,202 @@ export class RawGoalModelUtil {
 
   private static getHalfLambda(
     team: RawPredictionFeatures['home'],
+    opponent: RawPredictionFeatures['away'],
     isHome: boolean,
   ): number {
-    const firstHalf = this.safePositive(team.firstHalf?.averageGoalsScored);
+    const scoring = this.getPeriodScoringAverage(team, 'firstHalf');
 
-    if (firstHalf > 0) {
-      return this.clamp(firstHalf, 0.05, 2.5);
+    const conceding = this.getPeriodScoringAverage(opponent, 'firstHalf', true);
+
+    let lambda = this.combinePeriodEvidence(
+      scoring,
+      conceding,
+      team,
+      isHome,
+      0.46,
+    );
+
+    /*
+     * No fabricated half-time evidence.
+     * If period data is unavailable, use the structural
+     * proportion of the full-match scoring estimate.
+     */
+    if (lambda === null || !Number.isFinite(lambda) || lambda <= 0) {
+      const fullMatch = this.safePositive(team.averageGoalsScored);
+
+      lambda =
+        fullMatch > 0
+          ? fullMatch * 0.46
+          : isHome
+            ? DEFAULT_HOME_GOALS * 0.46
+            : DEFAULT_AWAY_GOALS * 0.45;
     }
 
-    const total = this.safePositive(team.averageGoalsScored);
-
-    const factor = isHome ? 0.46 : 0.45;
-
-    return this.clamp(
-      total > 0
-        ? total * factor
-        : isHome
-          ? DEFAULT_HOME_GOALS * factor
-          : DEFAULT_AWAY_GOALS * factor,
-      0.05,
-      2.5,
-    );
+    return this.clamp(lambda, 0.03, 2.5);
   }
 
   private static getSecondHalfLambda(
     team: RawPredictionFeatures['home'],
+    opponent: RawPredictionFeatures['away'],
     isHome: boolean,
   ): number {
-    const secondHalf = this.safePositive(team.secondHalf?.averageGoalsScored);
+    const scoring = this.getPeriodScoringAverage(team, 'secondHalf');
 
-    if (secondHalf > 0) {
-      return this.clamp(secondHalf, 0.05, 2.5);
-    }
-
-    const total = this.safePositive(team.averageGoalsScored);
-
-    const factor = isHome ? 0.54 : 0.55;
-
-    return this.clamp(
-      total > 0
-        ? total * factor
-        : isHome
-          ? DEFAULT_HOME_GOALS * factor
-          : DEFAULT_AWAY_GOALS * factor,
-      0.05,
-      2.5,
+    const conceding = this.getPeriodScoringAverage(
+      opponent,
+      'secondHalf',
+      true,
     );
+
+    let lambda = this.combinePeriodEvidence(
+      scoring,
+      conceding,
+      team,
+      isHome,
+      0.54,
+    );
+
+    /*
+     * No fabricated second-half evidence.
+     * If period data is unavailable, use the structural
+     * proportion of the full-match scoring estimate.
+     */
+    if (lambda === null || !Number.isFinite(lambda) || lambda <= 0) {
+      const fullMatch = this.safePositive(team.averageGoalsScored);
+
+      lambda =
+        fullMatch > 0
+          ? fullMatch * 0.54
+          : isHome
+            ? DEFAULT_HOME_GOALS * 0.54
+            : DEFAULT_AWAY_GOALS * 0.53;
+    }
+
+    return this.clamp(lambda, 0.03, 2.5);
   }
 
-  private static getTeamSampleReliability(
+  private static getPeriodScoringAverage(
     team: RawPredictionFeatures['home'],
-  ): number {
-    const samples = [
-      team.sampleSize,
-      team.venue?.sampleSize ?? 0,
-      team.recent?.sampleSize ?? 0,
-    ].filter((sample) => Number.isFinite(sample) && sample > 0);
+    period: 'firstHalf' | 'secondHalf',
+    conceding = false,
+  ): number | null {
+    const periodData =
+      period === 'firstHalf' ? team.firstHalf : team.secondHalf;
 
-    if (!samples.length) {
-      return 0;
+    if (!periodData) {
+      return null;
     }
 
-    const averageSample =
-      samples.reduce((sum, sample) => sum + sample, 0) / samples.length;
+    const keys = conceding
+      ? ['averageGoalsConceded', 'averageGoalsAgainst', 'goalsConceded']
+      : ['averageGoalsScored', 'averageGoalsFor', 'goalsScored'];
 
-    return this.sampleReliability(averageSample);
-  }
+    const value = this.readFirstNumber(periodData, keys);
 
-  private static sampleReliability(sampleSize: number): number {
-    if (!Number.isFinite(sampleSize) || sampleSize <= 0) {
-      return 0;
+    if (value === null || value < 0) {
+      return null;
     }
 
-    return this.clamp(1 - Math.exp(-sampleSize / 18));
+    return value;
   }
 
-  private static getSampleWeight(
-    sampleSize: number,
-    baseWeight: number,
-  ): number {
-    return this.clamp(baseWeight, 0, 1) * this.sampleReliability(sampleSize);
-  }
+  private static combinePeriodEvidence(
+    scoring: number | null,
+    conceding: number | null,
+    team: RawPredictionFeatures['home'],
+    isHome: boolean,
+    scoringFactor: number,
+  ): number | null {
+    const available: number[] = [];
 
-  private static weightedEvidenceAverage(
-    values: Array<{
-      value: number;
-      sample: number;
-      weight: number;
-    }>,
-    fallback: number,
-  ): number {
-    let weightedValue = 0;
+    /*
+     * Period values are already half-specific.
+     */
+    if (scoring !== null && scoring >= 0) {
+      available.push(scoring);
+    }
 
-    let totalWeight = 0;
+    if (conceding !== null && conceding >= 0) {
+      available.push(conceding);
+    }
 
-    for (const entry of values) {
-      if (
-        !Number.isFinite(entry.value) ||
-        entry.value < 0 ||
-        !Number.isFinite(entry.sample) ||
-        entry.sample <= 0 ||
-        !Number.isFinite(entry.weight) ||
-        entry.weight <= 0
-      ) {
-        continue;
+    /*
+     * Full-match scoring is scaled to the period only when
+     * period-specific evidence is incomplete.
+     */
+    if (available.length < 2) {
+      const overallScoring = this.safePositive(team.averageGoalsScored);
+
+      if (overallScoring > 0) {
+        available.push(overallScoring * scoringFactor);
       }
-
-      const sampleReliability = this.sampleReliability(entry.sample);
-
-      const effectiveWeight = entry.weight * sampleReliability;
-
-      weightedValue += entry.value * effectiveWeight;
-
-      totalWeight += effectiveWeight;
     }
 
-    const fallbackWeight = Math.max(1 - totalWeight, 0.15);
-
-    weightedValue += fallback * fallbackWeight;
-
-    totalWeight += fallbackWeight;
-
-    if (totalWeight <= 0) {
-      return fallback;
+    if (!available.length) {
+      return null;
     }
 
-    return weightedValue / totalWeight;
+    const directAverage = this.average(available);
+
+    const venueScoring = this.safePositive(team.venue.averageGoalsScored);
+
+    const overallScoring = this.safePositive(team.averageGoalsScored);
+
+    let lambda = directAverage;
+
+    if (venueScoring > 0 && overallScoring > 0) {
+      const venueRatio = this.clamp(venueScoring / overallScoring, 0.75, 1.35);
+
+      lambda *= 0.9 + venueRatio * 0.1;
+    }
+
+    /*
+     * Small structural home/away adjustment.
+     */
+    lambda *= isHome ? 1.03 : 0.99;
+
+    /*
+     * Bring comparison evidence into the
+     * period model as well when available.
+     */
+    const comparison = this.getComparisonForTeam(team, isHome);
+
+    if (comparison) {
+      const confidence = this.clamp(comparison.confidence, 0, 1);
+
+      const periodAdjustment =
+        comparison.goalProductionDifference * 0.06 * confidence -
+        comparison.goalPreventionDifference * 0.04 * confidence;
+
+      lambda *= 1 + this.clamp(periodAdjustment, -0.1, 0.1);
+    }
+
+    return lambda;
+  }
+
+  private static getComparisonForTeam(
+    team: RawPredictionFeatures['home'],
+    isHome: boolean,
+  ): {
+    confidence: number;
+    goalProductionDifference: number;
+    goalPreventionDifference: number;
+  } | null {
+    /*
+     * Comparison is already attached to the complete feature
+     * object, so this helper is kept intentionally small.
+     *
+     * Period-specific directional inversion is handled by the
+     * caller's home/away orientation.
+     *
+     * The actual comparison object is unavailable from the team
+     * object alone, so period-level comparison adjustment is
+     * deliberately omitted rather than fabricating a mapping.
+     */
+    void team;
+    void isHome;
+
+    return null;
   }
 
   private static getH2HWeight(sampleSize: number): number {
@@ -766,6 +972,109 @@ export class RawGoalModelUtil {
     }
 
     return 0.06;
+  }
+
+  private static weightedEvidenceAverage(
+    values: Array<{
+      value: number | null;
+      sample: number;
+      weight: number;
+    }>,
+  ): number | null {
+    let weightedValue = 0;
+
+    let totalWeight = 0;
+
+    for (const entry of values) {
+      if (
+        entry.value === null ||
+        !Number.isFinite(entry.value) ||
+        entry.value < 0 ||
+        !Number.isFinite(entry.sample) ||
+        entry.sample <= 0 ||
+        !Number.isFinite(entry.weight) ||
+        entry.weight <= 0
+      ) {
+        continue;
+      }
+
+      const reliability = this.sampleReliability(entry.sample);
+
+      if (reliability <= 0) {
+        continue;
+      }
+
+      const effectiveWeight = entry.weight * reliability;
+
+      weightedValue += entry.value * effectiveWeight;
+
+      totalWeight += effectiveWeight;
+    }
+
+    if (totalWeight <= 0) {
+      return null;
+    }
+
+    return weightedValue / totalWeight;
+  }
+
+  private static sampleReliability(sampleSize: number): number {
+    if (!Number.isFinite(sampleSize) || sampleSize <= 0) {
+      return 0;
+    }
+
+    return this.clamp(1 - Math.exp(-sampleSize / 25), 0, 1);
+  }
+
+  private static readNumber(value: unknown): number {
+    if (typeof value === 'number') {
+      return Number.isFinite(value) ? Math.max(value, 0) : 0;
+    }
+
+    const number = Number(value);
+
+    return Number.isFinite(number) ? Math.max(number, 0) : 0;
+  }
+
+  private static readNullableNumber(value: unknown): number | null {
+    if (value === null || value === undefined || value === '') {
+      return null;
+    }
+
+    const number = Number(value);
+
+    return Number.isFinite(number) ? number : null;
+  }
+
+  private static readFirstNumber(
+    source: object,
+    keys: string[],
+  ): number | null {
+    const record = source as Record<string, unknown>;
+
+    for (const key of keys) {
+      const value = this.readNullableNumber(record[key]);
+
+      if (value !== null) {
+        return value;
+      }
+    }
+
+    return null;
+  }
+
+  private static safeNumber(value: unknown): number {
+    const number = Number(value);
+
+    return Number.isFinite(number) ? number : 0;
+  }
+
+  private static safePositive(value: number | null | undefined): number {
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+      return 0;
+    }
+
+    return value;
   }
 
   private static expectedValue(probabilities: number[]): number {
@@ -787,22 +1096,6 @@ export class RawGoalModelUtil {
     return safe.map((value) => value / total);
   }
 
-  private static safePositive(value: number | null | undefined): number {
-    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
-      return 0;
-    }
-
-    return value;
-  }
-
-  private static nonNegative(value: number): number {
-    return Number.isFinite(value) && value > 0 ? value : 0;
-  }
-
-  private static sum(values: number[]): number {
-    return values.reduce((sum, value) => sum + this.nonNegative(value), 0);
-  }
-
   private static average(values: number[]): number {
     if (!values.length) {
       return 0;
@@ -811,11 +1104,31 @@ export class RawGoalModelUtil {
     return values.reduce((sum, value) => sum + value, 0) / values.length;
   }
 
+  private static sum(values: number[]): number {
+    return values.reduce((sum, value) => sum + this.nonNegative(value), 0);
+  }
+
+  private static nonNegative(value: number): number {
+    return Number.isFinite(value) && value > 0 ? value : 0;
+  }
+
   private static clamp(value: number, minimum = 0, maximum = 1): number {
     if (!Number.isFinite(value)) {
       return minimum;
     }
 
     return Math.min(Math.max(value, minimum), maximum);
+  }
+
+  private static clampInteger(
+    value: number,
+    minimum: number,
+    maximum: number,
+  ): number {
+    if (!Number.isFinite(value)) {
+      return minimum;
+    }
+
+    return Math.min(Math.max(Math.round(value), minimum), maximum);
   }
 }

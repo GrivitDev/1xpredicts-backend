@@ -1,3 +1,5 @@
+// src/predictions-engine/engines/safety/safety.engine.ts
+
 import { Injectable } from '@nestjs/common';
 
 import { PredictionMarket } from '../../enums/prediction-market.enum';
@@ -24,6 +26,12 @@ export class SafetyEngine {
     calibrationError?: number;
 
     sampleSize: number;
+
+    comparisonConfidence?: number;
+    directionalDifference?: number;
+    goalProductionDifference?: number;
+    goalPreventionDifference?: number;
+    evidenceCoherence?: number;
   }): SafetyResult {
     const probability = this.clamp(input.probability, 0, 1);
 
@@ -36,14 +44,55 @@ export class SafetyEngine {
     const calibrationReliability =
       this.clamp(input.calibrationReliability, 0, 100) / 100;
 
+    const comparisonConfidence = this.clamp(
+      input.comparisonConfidence ?? 0,
+      0,
+      1,
+    );
+
+    const directionalDifference = this.clamp(
+      input.directionalDifference ?? 0,
+      -1,
+      1,
+    );
+
+    const goalProductionDifference = this.clamp(
+      input.goalProductionDifference ?? 0,
+      -1,
+      1,
+    );
+
+    const goalPreventionDifference = this.clamp(
+      input.goalPreventionDifference ?? 0,
+      -1,
+      1,
+    );
+
+    const explicitCoherence =
+      input.evidenceCoherence === undefined
+        ? null
+        : this.clamp(input.evidenceCoherence, 0, 1);
+
     const sampleSize = Math.max(Math.floor(input.sampleSize ?? 0), 0);
 
     const sampleReliability = 1 - Math.exp(-sampleSize / 25);
 
     /*
-     * Probability contributes to safety, but it must not dominate
-     * the assessment. A high probability that is poorly supported
-     * should not automatically receive a high safety score.
+     * ----------------------------------------------------------
+     * CORE EVIDENCE RISK
+     * ----------------------------------------------------------
+     *
+     * Probability is diagnostic, not a rejection gate.
+     *
+     * The principal safety dimensions are:
+     *   - data quality
+     *   - model reliability
+     *   - model agreement
+     *   - comparison evidence
+     *   - historical sample
+     *   - calibration
+     *
+     * No fixed market penalty is applied.
      */
     const probabilitySupport = this.calculateProbabilitySupport(probability);
 
@@ -57,12 +106,29 @@ export class SafetyEngine {
 
     const sampleRisk = 1 - sampleReliability;
 
-    /*
-     * Calibration is advisory.
-     *
-     * New markets without sufficient history should not receive
-     * artificial calibration penalties.
-     */
+    const directionalEvidence = this.calculateDirectionalEvidence(
+      directionalDifference,
+      comparisonConfidence,
+    );
+
+    const goalEvidence = this.calculateGoalEvidence(
+      goalProductionDifference,
+      goalPreventionDifference,
+      comparisonConfidence,
+    );
+
+    const comparisonEvidence =
+      explicitCoherence !== null
+        ? explicitCoherence
+        : this.calculateComparisonEvidence(
+            agreement,
+            comparisonConfidence,
+            directionalEvidence,
+            goalEvidence,
+          );
+
+    const comparisonRisk = 1 - comparisonEvidence;
+
     const calibrationRisk =
       sampleSize > 0
         ? CalibrationRiskUtil.calculate({
@@ -74,26 +140,32 @@ export class SafetyEngine {
         : 0;
 
     /*
-     * Market risk now reflects only the remaining market families.
+     * Dynamic structural risk replaces the former
+     * market-hardcoded risk.
      *
-     * It does not decide whether a market is valuable.
-     * It only accounts for additional structural complexity.
+     * It increases only when the actual evidence package is
+     * internally weak, rather than because a market has been
+     * classified as inherently risky.
      */
-    const marketRisk = this.calculateMarketRisk(input.market);
+    const structuralRisk = this.calculateStructuralRisk({
+      probability,
+      modelReliability,
+      dataQuality,
+      agreement,
+      comparisonEvidence,
+      sampleReliability,
+      calibrationReliability,
+    });
 
-    /*
-     * Evidence quality is deliberately more important than raw
-     * probability. This prevents the engine from treating every
-     * 85-95% estimate as inherently safe.
-     */
     const riskScore = this.clamp(
-      probabilityRisk * 0.16 +
-        dataRisk * 0.24 +
-        modelRisk * 0.2 +
+      probabilityRisk * 0.06 +
+        dataRisk * 0.2 +
+        modelRisk * 0.18 +
         agreementRisk * 0.2 +
+        comparisonRisk * 0.21 +
         sampleRisk * 0.1 +
-        calibrationRisk * 0.05 +
-        marketRisk * 0.05,
+        calibrationRisk * 0.03 +
+        structuralRisk * 0.02,
       0,
       1,
     );
@@ -110,16 +182,19 @@ export class SafetyEngine {
     });
 
     /*
-     * Safety does not determine whether a prediction is interesting.
+     * Safety must not reject a prediction merely because:
+     *   - probability is low
+     *   - risk is high
+     *   - confidence is low
      *
-     * It only determines whether the underlying evidence is strong
-     * enough to continue through the decision pipeline.
+     * Coherence/rejection remains downstream.
      */
     const isSafe =
-      safetyScore >= 55 &&
-      agreement >= 0.5 &&
-      input.dataQuality >= 50 &&
-      sampleReliability >= 0.5;
+      dataQuality >= 0.35 &&
+      modelReliability >= 0.35 &&
+      agreement >= 0.35 &&
+      comparisonEvidence >= 0.35 &&
+      sampleReliability >= 0.25;
 
     const reasons = this.buildReasons({
       probability,
@@ -128,12 +203,16 @@ export class SafetyEngine {
       agreement,
       calibrationReliability,
       sampleReliability,
+      comparisonEvidence,
+      directionalEvidence,
+      goalEvidence,
       safetyScore,
       risk,
     });
 
     return {
       market: input.market,
+
       selection: input.selection,
 
       safetyScore,
@@ -142,7 +221,7 @@ export class SafetyEngine {
 
       modelRisk: modelRisk * 100,
 
-      marketRisk: marketRisk * 100,
+      marketRisk: structuralRisk * 100,
 
       calibrationRisk: calibrationRisk * 100,
 
@@ -159,81 +238,139 @@ export class SafetyEngine {
   }
 
   private calculateProbabilitySupport(probability: number): number {
-    /*
-     * The strongest safety contribution comes from probabilities
-     * meaningfully above 50%, but returns diminish as probability
-     * becomes extremely high.
-     *
-     * This prevents 90%+ probabilities from receiving almost
-     * automatic safety simply because they are numerically high.
-     */
+    if (probability <= 0.35) {
+      return 0.05;
+    }
+
+    if (probability < 0.45) {
+      return 0.15;
+    }
+
     if (probability < 0.5) {
-      return 0;
+      return 0.25;
     }
 
     if (probability < 0.55) {
-      return 0.1;
-    }
-
-    if (probability < 0.6) {
-      return 0.2;
-    }
-
-    if (probability < 0.65) {
       return 0.35;
     }
 
+    if (probability < 0.6) {
+      return 0.45;
+    }
+
+    if (probability < 0.65) {
+      return 0.55;
+    }
+
     if (probability < 0.7) {
-      return 0.5;
+      return 0.65;
     }
 
     if (probability < 0.75) {
-      return 0.62;
+      return 0.74;
     }
 
     if (probability < 0.8) {
-      return 0.72;
+      return 0.81;
     }
 
     if (probability < 0.85) {
-      return 0.8;
+      return 0.87;
     }
 
     if (probability < 0.9) {
-      return 0.86;
+      return 0.91;
     }
 
     if (probability < 0.95) {
-      return 0.9;
+      return 0.94;
     }
 
-    return 0.92;
+    return 0.96;
   }
 
-  private calculateMarketRisk(market: PredictionMarket): number {
-    switch (market) {
-      case PredictionMarket.MATCH_RESULT:
-      case PredictionMarket.DOUBLE_CHANCE:
-      case PredictionMarket.DRAW_NO_BET:
-      case PredictionMarket.OVER_UNDER:
-      case PredictionMarket.BOTH_TEAMS_TO_SCORE:
-      case PredictionMarket.GOAL_RANGE:
-      case PredictionMarket.TEAM_TOTAL_GOALS:
-        return 0.05;
+  private calculateDirectionalEvidence(
+    directionalDifference: number,
+    comparisonConfidence: number,
+  ): number {
+    const directionalStrength = Math.abs(directionalDifference);
 
-      case PredictionMarket.HALF_TIME_RESULT:
-      case PredictionMarket.SECOND_HALF_RESULT:
-      case PredictionMarket.FIRST_HALF_GOALS:
-      case PredictionMarket.SECOND_HALF_GOALS:
-        return 0.1;
+    return this.clamp(
+      comparisonConfidence * (0.35 + directionalStrength * 0.65),
+      0,
+      1,
+    );
+  }
 
-      case PredictionMarket.ASIAN_HANDICAP:
-      case PredictionMarket.EUROPEAN_HANDICAP:
-        return 0.12;
+  private calculateGoalEvidence(
+    goalProductionDifference: number,
+    goalPreventionDifference: number,
+    comparisonConfidence: number,
+  ): number {
+    const productionStrength = Math.abs(goalProductionDifference);
 
-      default:
-        return 0.1;
-    }
+    const preventionStrength = Math.abs(goalPreventionDifference);
+
+    const combinedStrength = this.clamp(
+      (productionStrength + preventionStrength) / 2,
+      0,
+      1,
+    );
+
+    return this.clamp(
+      comparisonConfidence * (0.4 + combinedStrength * 0.6),
+      0,
+      1,
+    );
+  }
+
+  private calculateComparisonEvidence(
+    agreement: number,
+    comparisonConfidence: number,
+    directionalEvidence: number,
+    goalEvidence: number,
+  ): number {
+    return this.clamp(
+      agreement * 0.35 +
+        comparisonConfidence * 0.35 +
+        directionalEvidence * 0.15 +
+        goalEvidence * 0.15,
+      0,
+      1,
+    );
+  }
+
+  private calculateStructuralRisk(input: {
+    probability: number;
+    modelReliability: number;
+    dataQuality: number;
+    agreement: number;
+    comparisonEvidence: number;
+    sampleReliability: number;
+    calibrationReliability: number;
+  }): number {
+    /*
+     * Structural risk is evidence-driven rather than
+     * market-driven.
+     *
+     * It responds to the actual quality of the evidence package
+     * and is deliberately kept small because the main evidence
+     * dimensions already carry the majority of the risk score.
+     */
+    const evidenceQuality =
+      input.modelReliability * 0.25 +
+      input.dataQuality * 0.2 +
+      input.agreement * 0.2 +
+      input.comparisonEvidence * 0.15 +
+      input.sampleReliability * 0.1 +
+      input.calibrationReliability * 0.1;
+
+    const uncertainty = 1 - this.clamp(evidenceQuality, 0, 1);
+
+    const probabilityUncertainty =
+      1 - this.calculateProbabilitySupport(input.probability);
+
+    return this.clamp(uncertainty * 0.8 + probabilityUncertainty * 0.2, 0, 1);
   }
 
   private buildReasons(input: {
@@ -243,41 +380,77 @@ export class SafetyEngine {
     agreement: number;
     calibrationReliability: number;
     sampleReliability: number;
+    comparisonEvidence: number;
+    directionalEvidence: number;
+    goalEvidence: number;
     safetyScore: number;
     risk: PredictionRisk;
   }): string[] {
     const reasons: string[] = [];
 
-    if (input.probability < 0.65) {
+    /*
+     * Probability remains diagnostic only.
+     */
+    if (input.probability < 0.5) {
       reasons.push(
-        'Underlying probability is below the stronger prediction range.',
+        'Probability is below 50%, so the prediction carries a weaker raw probability profile.',
+      );
+    } else if (input.probability < 0.65) {
+      reasons.push(
+        'Probability is moderate and should be interpreted together with the evidence comparison.',
       );
     }
 
-    if (input.dataQuality < 0.6) {
-      reasons.push('Data quality is not yet strong enough for high safety.');
+    if (input.dataQuality < 0.5) {
+      reasons.push(
+        'Data quality is not yet strong enough for a high safety assessment.',
+      );
     }
 
-    if (input.modelReliability < 0.6) {
-      reasons.push('Model reliability is limited by available evidence.');
+    if (input.modelReliability < 0.5) {
+      reasons.push('Model reliability is limited by the available evidence.');
     }
 
-    if (input.agreement < 0.6) {
-      reasons.push('Supporting model signals are not sufficiently aligned.');
+    if (input.agreement < 0.5) {
+      reasons.push('Independent model signals show meaningful disagreement.');
+    }
+
+    if (input.comparisonEvidence < 0.5) {
+      reasons.push('Team-comparison evidence is not yet strongly aligned.');
+    }
+
+    if (input.directionalEvidence < 0.5) {
+      reasons.push('Directional team evidence is relatively weak.');
+    }
+
+    if (input.goalEvidence < 0.5) {
+      reasons.push(
+        'Goal-production and goal-prevention evidence is relatively weak.',
+      );
     }
 
     if (input.calibrationReliability < 0.55) {
-      reasons.push('Calibration history is limited or unreliable.');
+      reasons.push('Calibration history is limited or not yet reliable.');
     }
 
     if (input.sampleReliability < 0.6) {
-      reasons.push('Historical sample size is limited.');
+      reasons.push(
+        'The historical sample is still limited for a strong safety assessment.',
+      );
     }
 
     if (input.safetyScore >= 80) {
-      reasons.push('Overall evidence supports a strong safety assessment.');
+      reasons.push(
+        'The combined sports-data evidence supports a strong safety assessment.',
+      );
     } else if (input.safetyScore >= 65) {
-      reasons.push('Evidence supports a moderate safety assessment.');
+      reasons.push(
+        'The combined sports-data evidence supports a moderate safety assessment.',
+      );
+    } else if (input.safetyScore >= 50) {
+      reasons.push(
+        'The available evidence supports a cautious safety assessment.',
+      );
     }
 
     if (input.risk === PredictionRisk.HIGH) {

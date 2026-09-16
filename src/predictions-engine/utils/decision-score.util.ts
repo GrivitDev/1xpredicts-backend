@@ -1,3 +1,5 @@
+// src/predictions-engine/utils/decision-score.util.ts
+
 import { DecisionScore } from '../interfaces/decision-score.interface';
 
 export class DecisionScoreUtil {
@@ -8,6 +10,12 @@ export class DecisionScoreUtil {
     modelAgreement: number;
     dataQuality: number;
     calibrationReliability: number;
+
+    comparisonConfidence?: number;
+    directionalDifference?: number;
+    goalProductionDifference?: number;
+    goalPreventionDifference?: number;
+    evidenceCoherence?: number;
   }): DecisionScore {
     const probability = this.clamp(input.probability, 0, 1);
 
@@ -21,20 +29,75 @@ export class DecisionScoreUtil {
 
     const calibration = this.clamp(input.calibrationReliability, 0, 100) / 100;
 
+    const comparisonConfidence = this.clamp(
+      input.comparisonConfidence ?? 0,
+      0,
+      1,
+    );
+
+    const directionalDifference = this.clamp(
+      input.directionalDifference ?? 0,
+      -1,
+      1,
+    );
+
+    const goalProductionDifference = this.clamp(
+      input.goalProductionDifference ?? 0,
+      -1,
+      1,
+    );
+
+    const goalPreventionDifference = this.clamp(
+      input.goalPreventionDifference ?? 0,
+      -1,
+      1,
+    );
+
+    const evidenceCoherence = this.clamp(input.evidenceCoherence ?? 0, 0, 1);
+
+    /*
+     * ----------------------------------------------------------
+     * COMPARISON EVIDENCE
+     * ----------------------------------------------------------
+     *
+     * Directional evidence is made selection-aware outside this
+     * utility where necessary. Here we measure the strength of
+     * the underlying comparison signal without converting a
+     * neutral comparison into a directional advantage.
+     *
+     * Goal production/prevention are treated as supporting
+     * evidence rather than independent probability estimates.
+     */
+    const directionalStrength = Math.abs(directionalDifference);
+
+    const goalStrength =
+      Math.abs(goalProductionDifference) * 0.5 +
+      Math.abs(goalPreventionDifference) * 0.5;
+
+    const comparisonEvidence = this.clamp(
+      comparisonConfidence *
+        (directionalStrength * 0.4 +
+          goalStrength * 0.3 +
+          evidenceCoherence * 0.3),
+      0,
+      1,
+    );
+
     /*
      * Probability remains the largest contributor.
-     * Supporting evidence determines how trustworthy that
-     * probability is.
      *
-     * Calibration is deliberately given a smaller advisory weight.
-     * A new prediction with no calibration history therefore does
-     * not suffer a major decision-score penalty.
+     * Comparison evidence now participates explicitly in the
+     * decision score, while confidence, safety, agreement and
+     * data quality remain important supporting signals.
+     *
+     * Calibration stays advisory because new predictions may
+     * legitimately have little historical calibration data.
      */
     const probabilityScore = probability;
 
     const confidenceScore = confidence;
 
-    const safetyScore = safety;
+    const safetyScoreValue = safety;
 
     const agreementScore = agreement;
 
@@ -43,11 +106,12 @@ export class DecisionScoreUtil {
     const calibrationScore = calibration;
 
     const total =
-      probabilityScore * 0.32 +
-      confidenceScore * 0.18 +
-      safetyScore * 0.2 +
-      agreementScore * 0.14 +
-      dataQualityScore * 0.12 +
+      probabilityScore * 0.3 +
+      confidenceScore * 0.17 +
+      safetyScoreValue * 0.18 +
+      agreementScore * 0.13 +
+      dataQualityScore * 0.1 +
+      comparisonEvidence * 0.08 +
       calibrationScore * 0.04;
 
     return {
@@ -57,7 +121,7 @@ export class DecisionScoreUtil {
 
       confidence: confidenceScore,
 
-      safety: safetyScore,
+      safety: safetyScoreValue,
 
       modelAgreement: agreementScore,
 

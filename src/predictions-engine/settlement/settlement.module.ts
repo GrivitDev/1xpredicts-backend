@@ -1,3 +1,5 @@
+// src/predictions-engine/settlement/settlement.module.ts
+
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 
@@ -21,20 +23,16 @@ import {
   PredictionCalibrationSchema,
 } from '../schemas/prediction-calibration.schema';
 
-import { SettlementService } from '../services/settlement.service';
+import { SettlementService } from './settlement.service';
+import { SettlementTriggerService } from './settlement-trigger.service';
+import { SettlementCompletionWatcherService } from './settlement-completion-watcher.service';
 
-import { SettlementTriggerService } from '../services/settlement-trigger.service';
-
-import { PredictionSettlementService } from '../services/prediction-settlement.service';
-
-import { PredictionRunSettlementService } from '../services/prediction-run-settlement.service';
+import { PredictionSettlementService } from './prediction-settlement.service';
+import { PredictionRunSettlementService } from './prediction-run-settlement.service';
 
 import { CalibrationService } from '../calibration/calibration.service';
-
 import { CalibrationCalculator } from '../calibration/calibration.calculator';
-
 import { CalibrationAssessment } from '../calibration/calibration.assessment';
-
 import { CalibrationEngine } from '../calibration/calibration.engine';
 
 @Module({
@@ -62,9 +60,9 @@ import { CalibrationEngine } from '../calibration/calibration.engine';
   providers: [
     SettlementService,
     SettlementTriggerService,
+    SettlementCompletionWatcherService,
     PredictionSettlementService,
     PredictionRunSettlementService,
-
     CalibrationService,
     CalibrationCalculator,
     CalibrationAssessment,

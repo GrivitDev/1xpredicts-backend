@@ -35,6 +35,15 @@ export class FinalDecisionEngine {
       safetyScore: number;
       calibrationReliability: number;
     };
+
+    comparisonConfidence?: number;
+    directionalDifference?: number;
+    goalProductionDifference?: number;
+    goalPreventionDifference?: number;
+    evidenceCoherence?: number;
+
+    modelSignals?: Record<string, unknown>;
+    modelOutputs?: Record<string, unknown>;
   }): FinalDecision {
     const probability = this.clamp(input.probability, 0, 1);
 
@@ -88,7 +97,69 @@ export class FinalDecisionEngine {
           calibrationReliability,
         };
 
-    const confidence = this.calculateFinalConfidence(input);
+    /*
+     * ----------------------------------------------------------
+     * SHARED COMPARISON EVIDENCE
+     * ----------------------------------------------------------
+     */
+    const comparisonConfidence = this.clamp(
+      input.comparisonConfidence ??
+        this.readSignal(input, 'comparisonConfidence') ??
+        0,
+      0,
+      1,
+    );
+
+    const directionalDifference = this.clamp(
+      input.directionalDifference ??
+        this.readSignal(input, 'directionalDifference') ??
+        0,
+      -1,
+      1,
+    );
+
+    const goalProductionDifference = this.clamp(
+      input.goalProductionDifference ??
+        this.readSignal(input, 'goalProductionDifference') ??
+        0,
+      -1,
+      1,
+    );
+
+    const goalPreventionDifference = this.clamp(
+      input.goalPreventionDifference ??
+        this.readSignal(input, 'goalPreventionDifference') ??
+        0,
+      -1,
+      1,
+    );
+
+    const evidenceCoherence =
+      input.evidenceCoherence !== undefined
+        ? this.clamp(input.evidenceCoherence, 0, 1)
+        : this.calculateEvidenceCoherence(
+            input,
+            effectiveEvidence.modelAgreement,
+            comparisonConfidence,
+            directionalDifference,
+            goalProductionDifference,
+            goalPreventionDifference,
+          );
+
+    /*
+     * ----------------------------------------------------------
+     * FINAL CONFIDENCE
+     * ----------------------------------------------------------
+     *
+     * MATCH_RESULT uses one shared confidence for the complete
+     * 1X2 distribution.
+     */
+    const confidence = this.calculateFinalConfidence(
+      input,
+      effectiveEvidence,
+      evidenceCoherence,
+      comparisonConfidence,
+    );
 
     const risk = PredictionRiskUtil.fromScores({
       probability,
@@ -99,6 +170,14 @@ export class FinalDecisionEngine {
       calibrationReliability: effectiveEvidence.calibrationReliability,
     });
 
+    /*
+     * ----------------------------------------------------------
+     * DECISION SCORE
+     * ----------------------------------------------------------
+     *
+     * Comparison evidence participates in the descriptive score,
+     * but the score does not independently decide acceptance.
+     */
     const score = DecisionScoreUtil.calculate({
       probability,
       confidence,
@@ -106,31 +185,40 @@ export class FinalDecisionEngine {
       modelAgreement: effectiveEvidence.modelAgreement,
       dataQuality: effectiveEvidence.dataQuality,
       calibrationReliability: effectiveEvidence.calibrationReliability,
+
+      comparisonConfidence,
+
+      directionalDifference,
+
+      goalProductionDifference,
+
+      goalPreventionDifference,
+
+      evidenceCoherence,
     });
 
-    const normalizedDataQuality = effectiveEvidence.dataQuality / 100;
-
-    const normalizedSafety = effectiveEvidence.safetyScore / 100;
-
-    const normalizedCalibration =
-      effectiveEvidence.calibrationReliability > 0
-        ? effectiveEvidence.calibrationReliability / 100
-        : 0.5;
-
-    const evidenceSupport =
-      effectiveEvidence.modelAgreement * 0.6 +
-      normalizedDataQuality * 0.2 +
-      normalizedSafety * 0.1 +
-      normalizedCalibration * 0.1;
-
+    /*
+     * ----------------------------------------------------------
+     * REJECTION
+     * ----------------------------------------------------------
+     *
+     * Low probability, low confidence, high risk or modest data
+     * quality are not rejection conditions.
+     *
+     * Rejection is reserved for genuine evidence incoherence.
+     */
     let rejectionReason: string | null = null;
 
-    if (effectiveEvidence.modelAgreement < 0.35) {
-      rejectionReason = 'INSUFFICIENT_MODEL_AGREEMENT';
-    } else if (effectiveEvidence.dataQuality < 35) {
-      rejectionReason = 'INSUFFICIENT_DATA_QUALITY';
-    } else if (evidenceSupport < 0.45) {
-      rejectionReason = 'INSUFFICIENT_EVIDENCE_SUPPORT';
+    if (evidenceCoherence < 0.35) {
+      rejectionReason = 'PREDICTION_CONTRADICTS_UNDERLYING_EVIDENCE';
+    } else if (
+      isMatchResult &&
+      !this.matchResultDistributionIsCoherent(
+        input.matchResultProbabilities!,
+        input,
+      )
+    ) {
+      rejectionReason = 'MATCH_RESULT_DISTRIBUTION_INCOHERENT';
     }
 
     return {
@@ -144,11 +232,11 @@ export class FinalDecisionEngine {
 
       safetyScore,
 
-      modelAgreement,
+      modelAgreement: effectiveEvidence.modelAgreement,
 
-      dataQuality,
+      dataQuality: effectiveEvidence.dataQuality,
 
-      calibrationReliability,
+      calibrationReliability: effectiveEvidence.calibrationReliability,
 
       risk,
 
@@ -162,39 +250,48 @@ export class FinalDecisionEngine {
     };
   }
 
-  private calculateFinalConfidence(input: {
-    market: PredictionMarket;
-    probability: number;
-    confidence: number;
-    modelAgreement: number;
-    dataQuality: number;
-    safetyScore: number;
-    calibrationReliability: number;
+  private calculateFinalConfidence(
+    input: {
+      market: PredictionMarket;
+      probability: number;
+      confidence: number;
 
-    matchResultProbabilities?: {
-      home: number;
-      draw: number;
-      away: number;
-    };
-
-    matchResultEvidence?: {
+      matchResultProbabilities?: {
+        home: number;
+        draw: number;
+        away: number;
+      };
+    },
+    evidence: {
       modelAgreement: number;
       dataQuality: number;
       safetyScore: number;
       calibrationReliability: number;
-    };
-  }): number {
+    },
+    evidenceCoherence: number,
+    comparisonConfidence: number,
+  ): number {
     if (
       input.matchResultProbabilities &&
       this.valid1X2Probabilities(input.matchResultProbabilities)
     ) {
       return this.calculate1X2Confidence(
         input.matchResultProbabilities,
-        input.matchResultEvidence,
+        evidence,
+        evidenceCoherence,
+        comparisonConfidence,
       );
     }
 
-    return this.clamp(input.confidence, 0, 98);
+    /*
+     * ConfidenceEngine remains the primary confidence source for
+     * all non-1X2 markets.
+     */
+    const base = this.clamp(input.confidence, 0, 98);
+
+    const coherenceMultiplier = this.getCoherenceMultiplier(evidenceCoherence);
+
+    return this.clamp(base * coherenceMultiplier, 0, 98);
   }
 
   private calculate1X2Confidence(
@@ -203,12 +300,14 @@ export class FinalDecisionEngine {
       draw: number;
       away: number;
     },
-    evidence?: {
+    evidence: {
       modelAgreement: number;
       dataQuality: number;
       safetyScore: number;
       calibrationReliability: number;
     },
+    evidenceCoherence: number,
+    comparisonConfidence: number,
   ): number {
     const normalized = this.normalize1X2Probabilities(probabilities);
 
@@ -220,28 +319,181 @@ export class FinalDecisionEngine {
 
     const margin = Math.max(maximum - secondHighest, 0);
 
+    /*
+     * Distribution shape contributes to confidence but cannot
+     * override weak underlying evidence.
+     */
     const distributionStrength = this.clamp(0.45 + margin * 1.8, 0.45, 1);
 
-    const agreement = this.clamp(evidence?.modelAgreement ?? 0, 0, 1);
+    const agreement = this.clamp(evidence.modelAgreement, 0, 1);
 
-    const dataQuality = this.clamp(evidence?.dataQuality ?? 0, 0, 100) / 100;
+    const dataQuality = this.clamp(evidence.dataQuality / 100, 0, 1);
 
-    const safety = this.clamp(evidence?.safetyScore ?? 0, 0, 100) / 100;
+    const safety = this.clamp(evidence.safetyScore / 100, 0, 1);
 
-    const calibration =
-      this.clamp(evidence?.calibrationReliability ?? 0, 0, 100) / 100;
+    const calibration = this.clamp(evidence.calibrationReliability / 100, 0, 1);
 
     const effectiveCalibration = calibration > 0 ? calibration : 0.5;
 
     const evidenceStrength =
-      agreement * 0.45 +
-      dataQuality * 0.25 +
-      safety * 0.15 +
-      effectiveCalibration * 0.15;
+      agreement * 0.28 +
+      comparisonConfidence * 0.24 +
+      evidenceCoherence * 0.18 +
+      dataQuality * 0.16 +
+      safety * 0.08 +
+      effectiveCalibration * 0.06;
 
-    const confidence = evidenceStrength * 70 + distributionStrength * 30;
+    const rawConfidence = evidenceStrength * 70 + distributionStrength * 30;
 
-    return this.clamp(confidence, 0, 98);
+    return this.clamp(rawConfidence, 0, 98);
+  }
+
+  private calculateEvidenceCoherence(
+    input: {
+      market: PredictionMarket;
+      selection: string;
+      probability: number;
+
+      matchResultProbabilities?: {
+        home: number;
+        draw: number;
+        away: number;
+      };
+
+      modelSignals?: Record<string, unknown>;
+      modelOutputs?: Record<string, unknown>;
+    },
+    modelAgreement: number,
+    comparisonConfidence: number,
+    directionalDifference: number,
+    goalProductionDifference: number,
+    goalPreventionDifference: number,
+  ): number {
+    const selectedProbability = this.clamp(input.probability, 0, 1);
+
+    const commonProbability = this.readSignal(input, 'commonScoreMatrix');
+
+    const registeredProbability = this.readSignal(
+      input,
+      'registeredMarketModel',
+    );
+
+    const comparisonProbability = this.readSignal(input, 'comparisonModel');
+
+    const deviations: number[] = [];
+
+    if (commonProbability !== null) {
+      deviations.push(Math.abs(selectedProbability - commonProbability));
+    }
+
+    if (registeredProbability !== null) {
+      deviations.push(Math.abs(selectedProbability - registeredProbability));
+    }
+
+    if (comparisonProbability !== null) {
+      deviations.push(Math.abs(selectedProbability - comparisonProbability));
+    }
+
+    const modelPathCoherence =
+      deviations.length > 0
+        ? this.clamp(
+            1 -
+              (deviations.reduce((sum, value) => sum + value, 0) /
+                deviations.length) *
+                4,
+            0,
+            1,
+          )
+        : modelAgreement;
+
+    const directionalEvidence = this.clamp(
+      Math.abs(directionalDifference) * comparisonConfidence,
+      0,
+      1,
+    );
+
+    const goalEvidence = this.clamp(
+      ((Math.abs(goalProductionDifference) +
+        Math.abs(goalPreventionDifference)) /
+        2) *
+        comparisonConfidence,
+      0,
+      1,
+    );
+
+    return this.clamp(
+      modelPathCoherence * 0.45 +
+        comparisonConfidence * 0.25 +
+        modelAgreement * 0.15 +
+        directionalEvidence * 0.075 +
+        goalEvidence * 0.075,
+      0,
+      1,
+    );
+  }
+
+  private matchResultDistributionIsCoherent(
+    probabilities: {
+      home: number;
+      draw: number;
+      away: number;
+    },
+    input: {
+      modelOutputs?: Record<string, unknown>;
+      modelSignals?: Record<string, unknown>;
+    },
+  ): boolean {
+    const normalized = this.normalize1X2Probabilities(probabilities);
+
+    const modelHome = this.readSignal(input, 'homeWin');
+
+    const modelDraw = this.readSignal(input, 'draw');
+
+    const modelAway = this.readSignal(input, 'awayWin');
+
+    if (modelHome === null && modelDraw === null && modelAway === null) {
+      return true;
+    }
+
+    const modelDistribution = this.normalize1X2Probabilities({
+      home: modelHome ?? normalized.home,
+
+      draw: modelDraw ?? normalized.draw,
+
+      away: modelAway ?? normalized.away,
+    });
+
+    const distance =
+      (Math.abs(normalized.home - modelDistribution.home) +
+        Math.abs(normalized.draw - modelDistribution.draw) +
+        Math.abs(normalized.away - modelDistribution.away)) /
+      3;
+
+    return distance <= 0.15;
+  }
+
+  private getCoherenceMultiplier(evidenceCoherence: number): number {
+    if (evidenceCoherence >= 0.85) {
+      return 1;
+    }
+
+    if (evidenceCoherence >= 0.75) {
+      return 0.98;
+    }
+
+    if (evidenceCoherence >= 0.65) {
+      return 0.95;
+    }
+
+    if (evidenceCoherence >= 0.55) {
+      return 0.91;
+    }
+
+    if (evidenceCoherence >= 0.45) {
+      return 0.85;
+    }
+
+    return 0.75;
   }
 
   private normalize1X2Probabilities(probabilities: {
@@ -294,6 +546,28 @@ export class FinalDecisionEngine {
 
   private getSecondHighest(values: number[]): number {
     return [...values].sort((a, b) => b - a)[1] ?? 0;
+  }
+
+  private readSignal(
+    input: {
+      modelSignals?: Record<string, unknown>;
+      modelOutputs?: Record<string, unknown>;
+    },
+    key: string,
+  ): number | null {
+    const signal = input.modelSignals?.[key];
+
+    if (typeof signal === 'number' && Number.isFinite(signal)) {
+      return signal;
+    }
+
+    const output = input.modelOutputs?.[key];
+
+    if (typeof output === 'number' && Number.isFinite(output)) {
+      return output;
+    }
+
+    return null;
   }
 
   private clamp(value: number, minimum: number, maximum: number): number {

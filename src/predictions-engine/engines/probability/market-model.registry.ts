@@ -1,3 +1,5 @@
+// src/predictions-engine/engines/probability/market-model.registry.ts
+
 import { Injectable } from '@nestjs/common';
 
 import { PredictionMarket } from '../../enums/prediction-market.enum';
@@ -11,7 +13,7 @@ import { HandicapMarketEngine } from './handicap-market.engine';
 
 @Injectable()
 export class MarketModelRegistry {
-  private readonly models: MarketModel[];
+  private readonly models: readonly MarketModel[];
 
   constructor(
     private readonly resultMarketEngine: ResultMarketEngine,
@@ -39,7 +41,7 @@ export class MarketModelRegistry {
 
   supports(model: MarketModel, market: PredictionMarket): boolean {
     if (typeof model.supports === 'function') {
-      return Boolean(model.supports(market));
+      return model.supports(market);
     }
 
     if (Array.isArray(model.supportedMarkets)) {

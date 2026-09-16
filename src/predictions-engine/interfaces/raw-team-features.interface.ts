@@ -1,3 +1,5 @@
+// src/predictions-engine/interfaces/raw-team-features.interface.ts
+
 export interface RawTeamVenueFeatures {
   sampleSize: number;
 
@@ -74,6 +76,12 @@ export interface RawTeamHalfFeatures {
   averageGoalsConceded: number;
 }
 
+export interface RawTeamSourceData {
+  competitionStats: Record<string, unknown>;
+
+  performanceProfile: Record<string, unknown>;
+}
+
 export interface RawTeamFeatures {
   teamId: string;
   teamName: string;
@@ -118,6 +126,14 @@ export interface RawTeamFeatures {
 
   venue: RawTeamVenueFeatures;
 
+  /*
+   * Sports-module datasets are preserved independently.
+   *
+   * Neither source replaces historical ESPN fixtures.
+   * Neither source is reduced to a fallback-only role.
+   */
+  sourceData: RawTeamSourceData;
+
   historical: Array<{
     eventId: string;
     fixtureDate: Date;
@@ -139,5 +155,8 @@ export interface RawTeamFeatures {
     venueMatches: boolean;
     halfTimeData: boolean;
     scoredFirstData: boolean;
+
+    competitionStats: boolean;
+    performanceProfile: boolean;
   };
 }

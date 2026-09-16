@@ -1,3 +1,5 @@
+// src/predictions-engine/services/prediction-run-settlement.service.ts
+
 import { Injectable, Logger } from '@nestjs/common';
 
 import { InjectModel } from '@nestjs/mongoose';
@@ -7,12 +9,14 @@ import {
   PredictionEnginePrediction,
   PredictionEnginePredictionDocument,
 } from '../schemas/prediction.schema';
+
 import {
   PredictionRun,
   PredictionRunDocument,
 } from '../schemas/prediction-run.schema';
 
 import { PredictionStatus } from '../enums/prediction-status.enum';
+
 import { SettlementStatus } from '../enums/settlement-status.enum';
 
 @Injectable()
@@ -36,19 +40,21 @@ export class PredictionRunSettlementService {
     void: number;
     settledAt: Date | null;
   }> {
+    const normalizedEventId = String(eventId).trim();
+
     const run = await this.predictionRunModel
       .findOne({
-        eventId,
+        eventId: normalizedEventId,
       })
       .exec();
 
     if (!run) {
-      throw new Error(`Prediction run not found for ${eventId}.`);
+      throw new Error(`Prediction run not found for ${normalizedEventId}.`);
     }
 
     const predictions = await this.predictionModel
       .find({
-        eventId,
+        eventId: normalizedEventId,
         status: {
           $in: [
             PredictionStatus.WON,
@@ -92,10 +98,6 @@ export class PredictionRunSettlementService {
     } else if (won === 0 && lost === 0 && voidCount > 0) {
       status = SettlementStatus.VOID;
     } else {
-      /*
-       * The run is fully settled regardless of whether
-       * individual predictions have mixed outcomes.
-       */
       status = SettlementStatus.PARTIAL;
     }
 
@@ -118,13 +120,13 @@ export class PredictionRunSettlementService {
 
       source: 'ESPN_FIXTURE',
 
-      settlementVersion: 'settlement-v2',
+      settlementVersion: 'settlement-v3',
     };
 
     await run.save();
 
     this.logger.debug(
-      `Prediction run settlement rebuilt: event=${eventId} total=${total} settled=${settled} won=${won} lost=${lost} void=${voidCount}`,
+      `Prediction run settlement rebuilt: event=${normalizedEventId} total=${total} settled=${settled} won=${won} lost=${lost} void=${voidCount}`,
     );
 
     return {

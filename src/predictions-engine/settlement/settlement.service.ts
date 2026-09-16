@@ -1,3 +1,5 @@
+// src/predictions-engine/services/settlement.service.ts
+
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 
 import { InjectModel } from '@nestjs/mongoose';
@@ -60,9 +62,16 @@ export class SettlementService {
     });
 
     if (!predictionExists) {
-      throw new NotFoundException(
-        `No predictions found for ${normalizedEventId}.`,
-      );
+      return {
+        eventId: normalizedEventId,
+        total: 0,
+        settled: 0,
+        won: 0,
+        lost: 0,
+        void: 0,
+        pending: 0,
+        run: null,
+      };
     }
 
     const score = EspnSettlementUtil.extract(fixture);

@@ -17,6 +17,12 @@ export class ConfidenceEngine {
     calibrationReliability: number;
     calibrationError?: number;
     sampleSize?: number;
+
+    comparisonConfidence?: number;
+    directionalDifference?: number;
+    goalProductionDifference?: number;
+    goalPreventionDifference?: number;
+    evidenceCoherence?: number;
   }): ConfidenceResult {
     const probability = this.clamp(input.probability.probability, 0, 1);
 
@@ -26,8 +32,11 @@ export class ConfidenceEngine {
       1,
     );
 
-    const dataQuality =
-      this.clamp(input.probability.dataQuality ?? 0, 0, 100) / 100;
+    const dataQuality = this.clamp(
+      (input.probability.dataQuality ?? 0) / 100,
+      0,
+      1,
+    );
 
     const calibrationReliability =
       this.clamp(input.calibrationReliability ?? 0, 0, 100) / 100;
@@ -45,92 +54,122 @@ export class ConfidenceEngine {
 
     /*
      * ----------------------------------------------------------
+     * TEAM-COMPARISON EVIDENCE
+     * ----------------------------------------------------------
+     */
+    const comparisonConfidence = this.clamp(
+      input.comparisonConfidence ??
+        this.readModelSignal(input.probability, 'comparisonConfidence') ??
+        0,
+      0,
+      1,
+    );
+
+    const directionalDifference = this.clamp(
+      input.directionalDifference ??
+        this.readModelSignal(input.probability, 'directionalDifference') ??
+        0,
+      -1,
+      1,
+    );
+
+    const goalProductionDifference = this.clamp(
+      input.goalProductionDifference ??
+        this.readModelSignal(input.probability, 'goalProductionDifference') ??
+        0,
+      -1,
+      1,
+    );
+
+    const goalPreventionDifference = this.clamp(
+      input.goalPreventionDifference ??
+        this.readModelSignal(input.probability, 'goalPreventionDifference') ??
+        0,
+      -1,
+      1,
+    );
+
+    const evidenceCoherence =
+      input.evidenceCoherence !== undefined
+        ? this.clamp(input.evidenceCoherence, 0, 1)
+        : this.calculateEvidenceCoherence(
+            input.probability,
+            agreement,
+            comparisonConfidence,
+            directionalDifference,
+            goalProductionDifference,
+            goalPreventionDifference,
+          );
+
+    /*
+     * ----------------------------------------------------------
      * PROBABILITY SIGNAL
      * ----------------------------------------------------------
      *
-     * Probability should materially influence confidence.
-     *
-     * 50% probability provides almost no directional support.
-     * 70% provides meaningful support.
-     * 80% provides strong support.
-     * 90% provides very strong support.
-     *
-     * This does NOT mean:
-     *
-     *   90% probability = 90 confidence.
-     *
-     * Evidence must still support the probability.
+     * Probability contributes to confidence but cannot by itself
+     * create high confidence.
      */
     const probabilityStrength = this.calculateProbabilityStrength(probability);
 
     /*
      * ----------------------------------------------------------
+     * COMPARISON SIGNAL
+     * ----------------------------------------------------------
+     */
+    const comparisonEvidence = this.calculateComparisonEvidence(
+      comparisonConfidence,
+      directionalDifference,
+      goalProductionDifference,
+      goalPreventionDifference,
+      evidenceCoherence,
+    );
+
+    /*
+     * ----------------------------------------------------------
      * EVIDENCE SCORE
      * ----------------------------------------------------------
-     *
-     * Evidence remains the larger component of confidence.
-     *
-     * The system must trust the underlying evidence before
-     * assigning very high confidence.
      */
     const evidenceScore =
-      modelReliability * 0.22 +
-      agreement * 0.22 +
-      dataQuality * 0.2 +
-      safety * 0.16 +
-      sampleReliability * 0.12 +
-      this.calibrationSupport(calibrationReliability) * 0.08;
+      modelReliability * 0.18 +
+      agreement * 0.18 +
+      dataQuality * 0.16 +
+      comparisonEvidence * 0.24 +
+      safety * 0.1 +
+      sampleReliability * 0.09 +
+      this.calibrationSupport(calibrationReliability) * 0.05;
 
     /*
      * ----------------------------------------------------------
      * PROBABILITY / EVIDENCE BLEND
      * ----------------------------------------------------------
-     *
-     * Probability now contributes meaningfully to confidence,
-     * but evidence remains dominant.
-     *
-     * 70% evidence
-     * 30% probability strength
      */
     let confidence = evidenceScore * 70 + probabilityStrength * 30;
 
-    /*
-     * ----------------------------------------------------------
-     * AGREEMENT ADJUSTMENT
-     * ----------------------------------------------------------
-     *
-     * Disagreement reduces confidence, particularly for
-     * aggressive probabilities.
-     */
+    confidence = this.applyComparisonAdjustment(
+      confidence,
+      evidenceCoherence,
+      comparisonConfidence,
+      probability,
+    );
+
     confidence = this.applyAgreementAdjustment(
       confidence,
       agreement,
       probability,
     );
 
-    /*
-     * ----------------------------------------------------------
-     * PROBABILITY / CONFIDENCE COHERENCE
-     * ----------------------------------------------------------
-     *
-     * Prevents two bad states:
-     *
-     *   very high probability + very low confidence
-     *   modest probability + unrealistically high confidence
-     */
     confidence = this.applyProbabilityCoherence(
       confidence,
       probability,
       agreement,
       evidenceScore,
+      evidenceCoherence,
     );
 
     /*
      * ----------------------------------------------------------
      * EVIDENCE CAPS
      * ----------------------------------------------------------
-     *
-     * Weak evidence still prevents extreme confidence.
      */
     confidence = this.applyEvidenceCaps(confidence, {
       modelReliability,
@@ -138,14 +177,13 @@ export class ConfidenceEngine {
       sampleReliability,
       agreement,
       safety,
+      comparisonEvidence,
     });
 
     /*
      * ----------------------------------------------------------
-     * CALIBRATION ADJUSTMENT
+     * CALIBRATION
      * ----------------------------------------------------------
-     *
-     * Calibration remains advisory.
      */
     const calibrationError = this.clamp(input.calibrationError ?? 0, 0, 1);
 
@@ -157,12 +195,31 @@ export class ConfidenceEngine {
 
     const factors: Record<string, number> = {
       probabilityStrength,
+
       modelReliability,
+
       dataQuality,
+
       calibrationReliability,
+
       sampleReliability,
+
       modelAgreement: agreement,
+
       safety,
+
+      comparisonConfidence,
+
+      directionalEvidence: Math.abs(directionalDifference),
+
+      goalProductionEvidence: Math.abs(goalProductionDifference),
+
+      goalPreventionEvidence: Math.abs(goalPreventionDifference),
+
+      evidenceCoherence,
+
+      comparisonEvidence,
+
       evidenceScore,
     };
 
@@ -175,6 +232,9 @@ export class ConfidenceEngine {
       sampleReliability,
       agreement,
       safety,
+      comparisonConfidence,
+      evidenceCoherence,
+      comparisonEvidence,
     });
 
     return {
@@ -200,25 +260,150 @@ export class ConfidenceEngine {
 
   private calculateProbabilityStrength(probability: number): number {
     /*
-     * Convert probability into a confidence-support signal.
-     *
-     * 50% -> 0
-     * 55% -> 0.10
-     * 60% -> 0.20
-     * 65% -> 0.30
-     * 70% -> 0.40
-     * 75% -> 0.50
-     * 80% -> 0.60
-     * 85% -> 0.70
-     * 90% -> 0.80
-     * 95% -> 0.90
-     *
-     * This keeps probability influential without making
-     * confidence identical to probability.
+     * Probabilities below 50% do not receive positive
+     * probability-strength credit.
      */
     const strength = (probability - 0.5) / 0.5;
 
     return this.clamp(strength, 0, 1);
+  }
+
+  private calculateComparisonEvidence(
+    comparisonConfidence: number,
+    directionalDifference: number,
+    goalProductionDifference: number,
+    goalPreventionDifference: number,
+    evidenceCoherence: number,
+  ): number {
+    const directionalStrength = this.clamp(
+      Math.abs(directionalDifference),
+      0,
+      1,
+    );
+
+    const goalStrength = this.clamp(
+      (Math.abs(goalProductionDifference) +
+        Math.abs(goalPreventionDifference)) /
+        2,
+      0,
+      1,
+    );
+
+    return this.clamp(
+      comparisonConfidence * 0.35 +
+        directionalStrength * 0.15 +
+        goalStrength * 0.15 +
+        evidenceCoherence * 0.35,
+      0,
+      1,
+    );
+  }
+
+  private calculateEvidenceCoherence(
+    probabilityResult: ProbabilityModelResult,
+    agreement: number,
+    comparisonConfidence: number,
+    directionalDifference: number,
+    goalProductionDifference: number,
+    goalPreventionDifference: number,
+  ): number {
+    const selectedProbability = this.clamp(probabilityResult.probability, 0, 1);
+
+    const comparisonModel = this.readModelSignal(
+      probabilityResult,
+      'comparisonModel',
+    );
+
+    const commonModel = this.readModelSignal(
+      probabilityResult,
+      'commonScoreMatrix',
+    );
+
+    const registeredModel = this.readModelSignal(
+      probabilityResult,
+      'registeredMarketModel',
+    );
+
+    const deviations: number[] = [];
+
+    if (comparisonModel !== null) {
+      deviations.push(Math.abs(selectedProbability - comparisonModel));
+    }
+
+    if (commonModel !== null) {
+      deviations.push(Math.abs(selectedProbability - commonModel));
+    }
+
+    if (registeredModel !== null) {
+      deviations.push(Math.abs(selectedProbability - registeredModel));
+    }
+
+    const modelCoherence =
+      deviations.length > 0
+        ? this.clamp(
+            1 -
+              (deviations.reduce((sum, value) => sum + value, 0) /
+                deviations.length) *
+                4,
+            0,
+            1,
+          )
+        : agreement;
+
+    const directionalStrength = Math.abs(directionalDifference);
+
+    const goalStrength =
+      (Math.abs(goalProductionDifference) +
+        Math.abs(goalPreventionDifference)) /
+      2;
+
+    const underlyingEvidence = this.clamp(
+      comparisonConfidence *
+        (0.55 + directionalStrength * 0.2 + goalStrength * 0.25),
+      0,
+      1,
+    );
+
+    return this.clamp(
+      modelCoherence * 0.5 +
+        underlyingEvidence * 0.3 +
+        comparisonConfidence * 0.2,
+      0,
+      1,
+    );
+  }
+
+  private applyComparisonAdjustment(
+    confidence: number,
+    evidenceCoherence: number,
+    comparisonConfidence: number,
+    probability: number,
+  ): number {
+    let multiplier = 1;
+
+    if (evidenceCoherence >= 0.85) {
+      multiplier = 1;
+    } else if (evidenceCoherence >= 0.75) {
+      multiplier = 0.98;
+    } else if (evidenceCoherence >= 0.65) {
+      multiplier = 0.95;
+    } else if (evidenceCoherence >= 0.55) {
+      multiplier = 0.91;
+    } else if (evidenceCoherence >= 0.45) {
+      multiplier = 0.85;
+    } else {
+      multiplier = 0.76;
+    }
+
+    if (probability >= 0.8 && comparisonConfidence < 0.5) {
+      multiplier *= 0.9;
+    }
+
+    if (probability >= 0.9 && evidenceCoherence < 0.6) {
+      multiplier *= 0.88;
+    }
+
+    return confidence * multiplier;
   }
 
   private applyAgreementAdjustment(
@@ -242,9 +427,6 @@ export class ConfidenceEngine {
       multiplier = 0.75;
     }
 
-    /*
-     * High probabilities require stronger agreement.
-     */
     if (probability >= 0.85 && agreement < 0.65) {
       multiplier *= 0.9;
     }
@@ -261,17 +443,13 @@ export class ConfidenceEngine {
     probability: number,
     agreement: number,
     evidenceScore: number,
+    evidenceCoherence: number,
   ): number {
     let result = confidence;
 
     /*
-     * ----------------------------------------------------------
-     * UPPER COHERENCE LIMIT
-     * ----------------------------------------------------------
-     *
-     * Moderate probabilities cannot produce exceptional
-     * confidence simply because the underlying evidence happens
-     * to be strong.
+     * Probability establishes the maximum confidence band only
+     * after evidence has been considered.
      */
     if (probability < 0.55) {
       result = Math.min(result, 55);
@@ -291,42 +469,51 @@ export class ConfidenceEngine {
       result = Math.min(result, 94);
     }
 
-    /*
-     * ----------------------------------------------------------
-     * LOWER COHERENCE SUPPORT
-     * ----------------------------------------------------------
-     *
-     * A very strong probability should not collapse to an
-     * extremely low confidence number when evidence is at least
-     * moderately supportive.
-     *
-     * This is deliberately evidence-dependent.
-     */
-    if (probability >= 0.8 && evidenceScore >= 0.5) {
+    if (
+      probability >= 0.8 &&
+      evidenceScore >= 0.5 &&
+      evidenceCoherence >= 0.55
+    ) {
       result = Math.max(result, 62);
     }
 
-    if (probability >= 0.85 && evidenceScore >= 0.55 && agreement >= 0.55) {
+    if (
+      probability >= 0.85 &&
+      evidenceScore >= 0.55 &&
+      agreement >= 0.55 &&
+      evidenceCoherence >= 0.6
+    ) {
       result = Math.max(result, 68);
     }
 
-    if (probability >= 0.9 && evidenceScore >= 0.6 && agreement >= 0.6) {
+    if (
+      probability >= 0.9 &&
+      evidenceScore >= 0.6 &&
+      agreement >= 0.6 &&
+      evidenceCoherence >= 0.65
+    ) {
       result = Math.max(result, 74);
     }
 
-    if (probability >= 0.95 && evidenceScore >= 0.7 && agreement >= 0.75) {
+    if (
+      probability >= 0.95 &&
+      evidenceScore >= 0.7 &&
+      agreement >= 0.75 &&
+      evidenceCoherence >= 0.75
+    ) {
       result = Math.max(result, 82);
     }
 
     /*
-     * Very weak agreement must still limit confidence.
+     * Contradictory evidence limits confidence even when the
+     * raw probability is high.
      */
-    if (probability >= 0.8 && agreement < 0.45) {
-      result = Math.min(result, 65);
+    if (probability >= 0.8 && evidenceCoherence < 0.45) {
+      result = Math.min(result, 62);
     }
 
-    if (probability >= 0.9 && agreement < 0.6) {
-      result = Math.min(result, 72);
+    if (probability >= 0.9 && evidenceCoherence < 0.55) {
+      result = Math.min(result, 70);
     }
 
     return result;
@@ -340,6 +527,7 @@ export class ConfidenceEngine {
       sampleReliability: number;
       agreement: number;
       safety: number;
+      comparisonEvidence: number;
     },
   ): number {
     let result = confidence;
@@ -384,12 +572,20 @@ export class ConfidenceEngine {
       result = Math.min(result, 72);
     }
 
+    if (evidence.comparisonEvidence < 0.35) {
+      result = Math.min(result, 55);
+    } else if (evidence.comparisonEvidence < 0.45) {
+      result = Math.min(result, 62);
+    } else if (evidence.comparisonEvidence < 0.55) {
+      result = Math.min(result, 70);
+    }
+
     return result;
   }
 
   private calibrationSupport(reliability: number): number {
     /*
-     * No calibration history is neutral.
+     * No calibration history is neutral rather than negative.
      */
     if (reliability <= 0) {
       return 0.7;
@@ -407,6 +603,9 @@ export class ConfidenceEngine {
     sampleReliability: number;
     agreement: number;
     safety: number;
+    comparisonConfidence: number;
+    evidenceCoherence: number;
+    comparisonEvidence: number;
   }): string[] {
     const reasons: string[] = [];
 
@@ -438,6 +637,28 @@ export class ConfidenceEngine {
       reasons.push('Historical sample evidence is substantial.');
     } else if (input.sampleReliability < 0.45) {
       reasons.push('Historical sample evidence is limited.');
+    }
+
+    if (input.comparisonConfidence >= 0.75) {
+      reasons.push('Team-comparison confidence is strong.');
+    } else if (input.comparisonConfidence < 0.5) {
+      reasons.push('Team-comparison confidence is limited.');
+    }
+
+    if (input.comparisonEvidence >= 0.75) {
+      reasons.push('Team comparison provides substantial supporting evidence.');
+    } else if (input.comparisonEvidence < 0.5) {
+      reasons.push('Team comparison provides limited supporting evidence.');
+    }
+
+    if (input.evidenceCoherence >= 0.8) {
+      reasons.push(
+        'The probability is strongly coherent with the underlying evidence.',
+      );
+    } else if (input.evidenceCoherence < 0.5) {
+      reasons.push(
+        'The probability has meaningful disagreement with the underlying comparison evidence.',
+      );
     }
 
     if (input.agreement >= 0.85) {
@@ -473,7 +694,7 @@ export class ConfidenceEngine {
       );
     } else if (input.confidence >= 75) {
       reasons.push(
-        'Confidence is meaningfully supported by the probability and evidence.',
+        'Confidence is meaningfully supported by probability and evidence.',
       );
     }
 
@@ -482,6 +703,25 @@ export class ConfidenceEngine {
     }
 
     return reasons;
+  }
+
+  private readModelSignal(
+    result: ProbabilityModelResult,
+    key: string,
+  ): number | null {
+    const signal = result.modelSignals?.[key];
+
+    if (typeof signal === 'number' && Number.isFinite(signal)) {
+      return signal;
+    }
+
+    const output = result.modelOutputs?.[key];
+
+    if (typeof output === 'number' && Number.isFinite(output)) {
+      return output;
+    }
+
+    return null;
   }
 
   private clamp(value: number, minimum: number, maximum: number): number {

@@ -1,3 +1,5 @@
+// src/predictions-engine/services/prediction-settlement.service.ts
+
 import { Injectable, Logger } from '@nestjs/common';
 
 import { InjectModel } from '@nestjs/mongoose';
@@ -73,24 +75,16 @@ export class PredictionSettlementService {
     const recalibrationKeys = new Set<string>();
 
     for (const prediction of predictions) {
-      /*
-       * A settled prediction is never recalculated.
-       */
-      if (
-        prediction.status === PredictionStatus.WON ||
-        prediction.status === PredictionStatus.LOST ||
-        prediction.status === PredictionStatus.VOID
-      ) {
-        continue;
-      }
-
       const evaluation = SettlementOutcomeUtil.evaluate(
         prediction.market,
         prediction.selection,
         {
           finalHomeScore: input.finalHomeScore,
+
           finalAwayScore: input.finalAwayScore,
+
           halfTimeHomeScore: input.halfTimeHomeScore,
+
           halfTimeAwayScore: input.halfTimeAwayScore,
         },
       );
@@ -102,9 +96,7 @@ export class PredictionSettlementService {
 
       const now = new Date();
 
-      const nextStatus = this.mapSettlementStatus(evaluation.status);
-
-      prediction.status = nextStatus;
+      prediction.status = this.mapSettlementStatus(evaluation.status);
 
       prediction.actualOutcome = evaluation.actualOutcome;
 
@@ -129,7 +121,7 @@ export class PredictionSettlementService {
 
         source: 'ESPN_FIXTURE',
 
-        settlementVersion: 'settlement-v2',
+        settlementVersion: 'settlement-v3',
 
         settledAt: now,
       };
@@ -138,12 +130,18 @@ export class PredictionSettlementService {
 
       settled++;
 
-      if (evaluation.status === SettlementStatus.WON) {
-        won++;
-      } else if (evaluation.status === SettlementStatus.LOST) {
-        lost++;
-      } else if (evaluation.status === SettlementStatus.VOID) {
-        voidCount++;
+      switch (evaluation.status) {
+        case SettlementStatus.WON:
+          won++;
+          break;
+
+        case SettlementStatus.LOST:
+          lost++;
+          break;
+
+        case SettlementStatus.VOID:
+          voidCount++;
+          break;
       }
 
       if (

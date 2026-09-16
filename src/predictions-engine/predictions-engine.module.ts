@@ -90,6 +90,7 @@ import {
   TeamPerformanceProfileSchema,
 } from 'src/sports/schemas/team-performance-profile.schema';
 import { OddsCalculationService } from './engines/value/odds-calculation.service';
+import { TeamComparisonService } from './services/team-comparison.service';
 
 @Module({
   imports: [
@@ -206,6 +207,8 @@ import { OddsCalculationService } from './engines/value/odds-calculation.service
     EnsembleEngine,
     ConfidenceEngine,
     FinalDecisionEngine,
+
+    TeamComparisonService,
   ],
 
   exports: [
@@ -220,6 +223,8 @@ import { OddsCalculationService } from './engines/value/odds-calculation.service
 
     RawPredictionDataService,
     RawPredictionFeatureService,
+
+    TeamComparisonService,
   ],
 })
 export class PredictionsEngineModule {}

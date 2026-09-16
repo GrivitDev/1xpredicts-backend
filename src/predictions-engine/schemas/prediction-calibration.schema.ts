@@ -1,3 +1,5 @@
+// src/predictions-engine/schemas/prediction-calibration.schema.ts
+
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument } from 'mongoose';
 
@@ -88,8 +90,8 @@ export class PredictionCalibration {
     type: Number,
     required: true,
     default: 0,
-    min: 0,
-    max: 1,
+    min: -0.1,
+    max: 0.1,
   })
   adjustment!: number;
 
@@ -98,7 +100,7 @@ export class PredictionCalibration {
     required: true,
     default: 0,
     min: 0,
-    max: 100,
+    max: 1,
   })
   reliabilityScore!: number;
 

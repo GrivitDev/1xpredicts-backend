@@ -1,3 +1,5 @@
+// src/predictions-engine/utils/espn-settlement.util.ts
+
 import { EspnSettlementScore } from '../interfaces/espn-settlement-score.interface';
 
 interface LineScoreLike {
@@ -59,120 +61,74 @@ export class EspnSettlementUtil {
       return null;
     }
 
-    const finalHome = this.readScore(fixture, true);
+    const finalHomeScore = this.readScore(fixture, true);
+    const finalAwayScore = this.readScore(fixture, false);
 
-    const finalAway = this.readScore(fixture, false);
-
-    if (finalHome === null || finalAway === null) {
+    if (finalHomeScore === null || finalAwayScore === null) {
       return null;
     }
 
-    const halfTimeHome = this.readHalfTimeScore(fixture, true);
-
-    const halfTimeAway = this.readHalfTimeScore(fixture, false);
-
     return {
-      finalHomeScore: finalHome,
-      finalAwayScore: finalAway,
-      halfTimeHomeScore: halfTimeHome,
-      halfTimeAwayScore: halfTimeAway,
+      finalHomeScore,
+      finalAwayScore,
+      halfTimeHomeScore: this.readHalfTimeScore(fixture, true),
+      halfTimeAwayScore: this.readHalfTimeScore(fixture, false),
     };
   }
 
   private static readScore(fixture: FixtureLike, home: boolean): number | null {
-    const direct = home ? fixture.homeScore : fixture.awayScore;
+    const directScore = home ? fixture.homeScore : fixture.awayScore;
 
-    const value = this.toFiniteNumber(direct);
+    const directValue = this.toNonNegativeInteger(directScore);
 
-    if (value !== null) {
-      return Math.max(Math.round(value), 0);
+    if (directValue !== null) {
+      return directValue;
     }
 
-    const nested = home ? fixture.home?.score : fixture.away?.score;
+    const nestedScore = home ? fixture.home?.score : fixture.away?.score;
 
-    const nestedValue = this.toFiniteNumber(nested);
+    const nestedValue = this.toNonNegativeInteger(nestedScore);
 
     if (nestedValue !== null) {
-      return Math.max(Math.round(nestedValue), 0);
+      return nestedValue;
     }
 
     const score = home ? fixture.scores?.home : fixture.scores?.away;
 
-    const scoreValue = this.toFiniteNumber(this.getScoreValue(score));
+    const scoreValue = this.toNonNegativeInteger(this.getScoreValue(score));
 
     if (scoreValue !== null) {
-      return Math.max(Math.round(scoreValue), 0);
+      return scoreValue;
     }
 
-    const raw = fixture.raw;
-
-    return this.findRawCompetitorScore(raw, home);
+    return this.findRawCompetitorScore(fixture.raw, home);
   }
 
   private static readHalfTimeScore(
     fixture: FixtureLike,
     home: boolean,
   ): number | null {
-    const direct = home ? fixture.halfTimeHomeScore : fixture.halfTimeAwayScore;
+    const directScore = home
+      ? fixture.halfTimeHomeScore
+      : fixture.halfTimeAwayScore;
 
-    const directValue = this.toFiniteNumber(direct);
+    const directValue = this.toNonNegativeInteger(directScore);
 
     if (directValue !== null) {
-      return Math.max(Math.round(directValue), 0);
+      return directValue;
     }
 
-    const nested = home
+    const nestedScore = home
       ? (fixture.halfTime?.homeScore ?? fixture.ht?.homeScore)
       : (fixture.halfTime?.awayScore ?? fixture.ht?.awayScore);
 
-    const nestedValue = this.toFiniteNumber(nested);
+    const nestedValue = this.toNonNegativeInteger(nestedScore);
 
     if (nestedValue !== null) {
-      return Math.max(Math.round(nestedValue), 0);
+      return nestedValue;
     }
 
-    const raw = fixture.raw;
-
-    if (!this.isRawFixtureLike(raw)) {
-      return null;
-    }
-
-    const competitions = this.toArray<CompetitionLike>(raw.competitions);
-
-    for (const competition of competitions) {
-      const competitors = this.toArray<CompetitorLike>(competition.competitors);
-
-      for (const competitor of competitors) {
-        const isHome = competitor.homeAway === 'home';
-
-        if (isHome !== home) {
-          continue;
-        }
-
-        const lines = this.toArray<LineScoreLike>(competitor.linescores);
-
-        if (lines.length < 1) {
-          continue;
-        }
-
-        /*
-         * Most ESPN soccer payloads expose period/linescore
-         * information. We only use a half-time value when a
-         * clearly identifiable period exists.
-         */
-        const firstPeriod = lines.find((line) => Number(line.period) === 1);
-
-        const half = this.toFiniteNumber(
-          firstPeriod?.value ?? firstPeriod?.displayValue,
-        );
-
-        if (half !== null) {
-          return Math.max(Math.round(half), 0);
-        }
-      }
-    }
-
-    return null;
+    return this.findRawCompetitorHalfTimeScore(fixture.raw, home);
   }
 
   private static findRawCompetitorScore(
@@ -196,10 +152,53 @@ export class EspnSettlementUtil {
         continue;
       }
 
-      const score = this.toFiniteNumber(competitor.score);
+      const score = this.toNonNegativeInteger(
+        this.getScoreValue(competitor.score),
+      );
 
       if (score !== null) {
-        return Math.max(Math.round(score), 0);
+        return score;
+      }
+    }
+
+    return null;
+  }
+
+  private static findRawCompetitorHalfTimeScore(
+    raw: unknown,
+    home: boolean,
+  ): number | null {
+    if (!this.isRawFixtureLike(raw)) {
+      return null;
+    }
+
+    const competitions = this.toArray<CompetitionLike>(raw.competitions);
+
+    for (const competition of competitions) {
+      const competitors = this.toArray<CompetitorLike>(competition.competitors);
+
+      const competitor = competitors.find(
+        (item) => item.homeAway === (home ? 'home' : 'away'),
+      );
+
+      if (!competitor) {
+        continue;
+      }
+
+      const lines = this.toArray<LineScoreLike>(competitor.linescores);
+
+      if (lines.length === 0) {
+        continue;
+      }
+
+      const firstPeriod = lines.find((line) => Number(line.period) === 1);
+
+      const halfTimeScore = this.toNonNegativeInteger(
+        firstPeriod?.value ?? firstPeriod?.displayValue,
+      );
+
+      if (halfTimeScore !== null) {
+        return halfTimeScore;
       }
     }
 
@@ -214,14 +213,18 @@ export class EspnSettlementUtil {
     return value.value ?? value.displayValue;
   }
 
-  private static toFiniteNumber(value: unknown): number | null {
+  private static toNonNegativeInteger(value: unknown): number | null {
     const number = Number(value);
 
     if (!Number.isFinite(number)) {
       return null;
     }
 
-    return number;
+    if (number < 0) {
+      return null;
+    }
+
+    return Math.round(number);
   }
 
   private static toArray<T>(value: unknown): T[] {

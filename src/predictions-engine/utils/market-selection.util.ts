@@ -16,14 +16,10 @@ export class MarketSelectionUtil {
      * MATCH RESULT / 1X2
      * ----------------------------------------------------------
      *
-     * HOME, DRAW and AWAY are mutually exclusive outcomes.
+     * HOME, DRAW and AWAY are mutually exclusive.
      *
-     * The outcome with the highest normalized probability should
-     * be selected.
-     *
-     * Agreement is used only after probability, so DRAW cannot
-     * become the selected result simply because the models happen
-     * to agree more strongly around it.
+     * The normalized 1X2 probability is the primary selection
+     * signal. Supporting evidence is used only as a tie-breaker.
      */
     if (market === PredictionMarket.MATCH_RESULT) {
       return [...candidates].sort((a, b) => {
@@ -32,6 +28,13 @@ export class MarketSelectionUtil {
 
         if (probabilityDifference !== 0) {
           return probabilityDifference;
+        }
+
+        const decisionScoreDifference =
+          Number(b.decisionScore ?? 0) - Number(a.decisionScore ?? 0);
+
+        if (decisionScoreDifference !== 0) {
+          return decisionScoreDifference;
         }
 
         const agreementDifference =
@@ -56,27 +59,22 @@ export class MarketSelectionUtil {
      * ----------------------------------------------------------
      * OTHER MARKETS
      * ----------------------------------------------------------
+     *
+     * The candidate's final decision score is the market-level
+     * representation of probability + supporting evidence.
+     *
+     * Therefore it is the primary selector here.
+     *
+     * Probability is the first tie-breaker so a materially stronger
+     * probability is not discarded because of a small supporting-
+     * evidence difference.
      */
     return [...candidates].sort((a, b) => {
-      const agreementDifference =
-        Number(b.modelAgreement ?? 0) - Number(a.modelAgreement ?? 0);
+      const decisionScoreDifference =
+        Number(b.decisionScore ?? 0) - Number(a.decisionScore ?? 0);
 
-      if (agreementDifference !== 0) {
-        return agreementDifference;
-      }
-
-      const dataQualityDifference =
-        Number(b.dataQuality ?? 0) - Number(a.dataQuality ?? 0);
-
-      if (dataQualityDifference !== 0) {
-        return dataQualityDifference;
-      }
-
-      const confidenceDifference =
-        Number(b.confidence ?? 0) - Number(a.confidence ?? 0);
-
-      if (confidenceDifference !== 0) {
-        return confidenceDifference;
+      if (decisionScoreDifference !== 0) {
+        return decisionScoreDifference;
       }
 
       const probabilityDifference =
@@ -86,7 +84,21 @@ export class MarketSelectionUtil {
         return probabilityDifference;
       }
 
-      return Number(b.decisionScore ?? 0) - Number(a.decisionScore ?? 0);
+      const agreementDifference =
+        Number(b.modelAgreement ?? 0) - Number(a.modelAgreement ?? 0);
+
+      if (agreementDifference !== 0) {
+        return agreementDifference;
+      }
+
+      const confidenceDifference =
+        Number(b.confidence ?? 0) - Number(a.confidence ?? 0);
+
+      if (confidenceDifference !== 0) {
+        return confidenceDifference;
+      }
+
+      return Number(b.dataQuality ?? 0) - Number(a.dataQuality ?? 0);
     })[0];
   }
 }

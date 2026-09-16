@@ -1,3 +1,5 @@
+// src/predictions-engine/engines/value/odds-calculation.service.ts
+
 import { Injectable } from '@nestjs/common';
 
 import { PredictionMarket } from '../../enums/prediction-market.enum';
@@ -25,14 +27,11 @@ export class OddsCalculationService {
      * ASIAN HANDICAP
      * ----------------------------------------------------------
      *
-     * Asian handicap can contain a push/refund outcome.
+     * Asian settlement can contain:
      *
-     * The ProbabilityModelResult from HandicapMarketEngine
-     * exposes:
-     *
-     *   winProbability
-     *   pushProbability
-     *   lossProbability
+     *   - win
+     *   - push/refund
+     *   - loss
      *
      * Fair decimal odds satisfy:
      *
@@ -41,6 +40,10 @@ export class OddsCalculationService {
      * Therefore:
      *
      *   odds = 1 + loss / win
+     *
+     * Quarter-line probabilities supplied by the probability
+     * layer are already split across the two adjacent handicap
+     * lines.
      */
     if (result.market === PredictionMarket.ASIAN_HANDICAP) {
       const winProbability = this.getModelOutput(result, 'winProbability');
@@ -59,14 +62,20 @@ export class OddsCalculationService {
         return {
           market: result.market,
           selection: result.selection,
+
           modelProbability: this.round(probability, 6),
+
           fairOdds: this.round(this.clamp(fairOdds, 1, 1000), 4),
+
           winProbability: this.round(winProbability, 6),
+
           pushProbability:
             pushProbability !== null
               ? this.round(pushProbability, 6)
               : undefined,
+
           lossProbability: this.round(lossProbability, 6),
+
           pricingMethod: 'ASIAN_HANDICAP',
         };
       }
@@ -74,22 +83,32 @@ export class OddsCalculationService {
 
     /*
      * ----------------------------------------------------------
-     * STANDARD FAIR ODDS
+     * EUROPEAN HANDICAP / ORDINARY MARKETS
      * ----------------------------------------------------------
      *
-     * For every ordinary market outcome:
+     * The probability reaching this service has already passed
+     * through:
      *
-     *   fair odds = 1 / probability
+     *   sports-data comparison
+     *   common score matrix
+     *   market model
+     *   model agreement
+     *   reconciliation
+     *   calibration
      *
-     * No bookmaker margin is added.
+     * Pricing must therefore use the final reconciled
+     * probability directly.
      */
     const fairOdds = 1 / probability;
 
     return {
       market: result.market,
       selection: result.selection,
+
       modelProbability: this.round(probability, 6),
+
       fairOdds: this.round(this.clamp(fairOdds, 1, 1000), 4),
+
       pricingMethod: 'PROBABILITY',
     };
   }

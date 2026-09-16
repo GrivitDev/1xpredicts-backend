@@ -5,15 +5,21 @@ import { SettlementStatus } from '../enums/settlement-status.enum';
 
 export interface SettlementEvaluation {
   status: SettlementStatus;
+
   actualOutcome: boolean | null;
+
   actualValue: unknown;
+
   resultLabel: string | null;
 }
 
 export interface SettlementScoreInput {
   finalHomeScore: number;
+
   finalAwayScore: number;
+
   halfTimeHomeScore: number | null;
+
   halfTimeAwayScore: number | null;
 }
 
@@ -23,54 +29,49 @@ export class SettlementOutcomeUtil {
     selection: string,
     score: SettlementScoreInput,
   ): SettlementEvaluation {
-    const finalHome = Math.max(Math.floor(score.finalHomeScore), 0);
-
-    const finalAway = Math.max(Math.floor(score.finalAwayScore), 0);
+    const finalHome = this.normalizeScore(score.finalHomeScore);
+    const finalAway = this.normalizeScore(score.finalAwayScore);
 
     const totalGoals = finalHome + finalAway;
 
+    const normalizedSelection = this.normalizeSelection(selection);
+
     switch (market) {
       case PredictionMarket.MATCH_RESULT:
-        return this.matchResult(selection, finalHome, finalAway);
-
-      case PredictionMarket.DOUBLE_CHANCE:
-        return this.doubleChance(selection, finalHome, finalAway);
-
-      case PredictionMarket.DRAW_NO_BET:
-        return this.drawNoBet(selection, finalHome, finalAway);
+        return this.matchResult(normalizedSelection, finalHome, finalAway);
 
       case PredictionMarket.OVER_UNDER:
-        return this.overUnder(selection, totalGoals);
+        return this.overUnder(normalizedSelection, totalGoals);
 
       case PredictionMarket.BOTH_TEAMS_TO_SCORE:
-        return this.btts(selection, finalHome, finalAway);
+        return this.btts(normalizedSelection, finalHome, finalAway);
 
       case PredictionMarket.GOAL_RANGE:
-        return this.goalRange(selection, totalGoals);
+        return this.goalRange(normalizedSelection, totalGoals);
 
       case PredictionMarket.TEAM_TOTAL_GOALS:
-        return this.teamTotalGoals(selection, finalHome, finalAway);
+        return this.teamTotalGoals(normalizedSelection, finalHome, finalAway);
 
       case PredictionMarket.HALF_TIME_RESULT:
-        return this.halfTimeResult(selection, score);
+        return this.halfTimeResult(normalizedSelection, score);
 
       case PredictionMarket.SECOND_HALF_RESULT:
-        return this.secondHalfResult(selection, score);
+        return this.secondHalfResult(normalizedSelection, score);
 
       case PredictionMarket.FIRST_HALF_GOALS:
-        return this.halfGoals(selection, score, true);
+        return this.firstHalfGoals(normalizedSelection, score);
 
       case PredictionMarket.SECOND_HALF_GOALS:
-        return this.halfGoals(selection, score, false);
+        return this.secondHalfGoals(normalizedSelection, score);
 
       case PredictionMarket.ASIAN_HANDICAP:
-        return this.asianHandicap(selection, finalHome, finalAway);
+        return this.asianHandicap(normalizedSelection, finalHome, finalAway);
 
       case PredictionMarket.EUROPEAN_HANDICAP:
-        return this.europeanHandicap(selection, finalHome, finalAway);
+        return this.europeanHandicap(normalizedSelection, finalHome, finalAway);
 
       default:
-        return this.pending();
+        return this.pending('UNSUPPORTED_MARKET');
     }
   }
 
@@ -79,119 +80,67 @@ export class SettlementOutcomeUtil {
     home: number,
     away: number,
   ): SettlementEvaluation {
-    const result = home > away ? 'HOME' : home < away ? 'AWAY' : 'DRAW';
+    const actual = this.scoreResult(home, away);
 
-    return this.binary(selection, result);
-  }
-
-  private static doubleChance(
-    selection: string,
-    home: number,
-    away: number,
-  ): SettlementEvaluation {
-    const result = home > away ? 'HOME' : home < away ? 'AWAY' : 'DRAW';
-
-    const normalized = selection.trim().toUpperCase();
-
-    let won: boolean;
-
-    let actual: string;
-
-    switch (normalized) {
-      case '1X':
-      case 'HOME_DRAW':
-      case 'HOME_OR_DRAW':
-        won = result === 'HOME' || result === 'DRAW';
-
-        actual = result === 'AWAY' ? 'AWAY' : 'HOME_DRAW';
-
-        break;
-
-      case 'X2':
-      case 'DRAW_AWAY':
-      case 'AWAY_OR_DRAW':
-        won = result === 'DRAW' || result === 'AWAY';
-
-        actual = result === 'HOME' ? 'HOME' : 'DRAW_AWAY';
-
-        break;
-
-      case '12':
-      case 'HOME_AWAY':
-      case 'HOME_OR_AWAY':
-        won = result === 'HOME' || result === 'AWAY';
-
-        actual = result === 'DRAW' ? 'DRAW' : 'HOME_AWAY';
-
-        break;
-
-      default:
-        return this.pending();
+    if (actual !== 'HOME' && actual !== 'DRAW' && actual !== 'AWAY') {
+      return this.pending('INVALID_RESULT');
     }
 
-    return {
-      status: won ? SettlementStatus.WON : SettlementStatus.LOST,
+    const normalized = this.normalizeResult(selection);
 
-      actualOutcome: won,
-
-      actualValue: actual,
-
-      resultLabel: result,
-    };
-  }
-
-  private static drawNoBet(
-    selection: string,
-    home: number,
-    away: number,
-  ): SettlementEvaluation {
-    if (home === away) {
-      return this.void('DRAW');
+    if (
+      normalized !== 'HOME' &&
+      normalized !== 'DRAW' &&
+      normalized !== 'AWAY'
+    ) {
+      return this.pending('INVALID_SELECTION');
     }
 
-    const actual = home > away ? 'HOME' : 'AWAY';
+    const won = normalized === actual;
 
-    return this.binary(selection, actual);
+    return this.evaluation(
+      won ? SettlementStatus.WON : SettlementStatus.LOST,
+      won,
+      actual,
+      actual,
+    );
   }
 
   private static overUnder(
     selection: string,
     totalGoals: number,
   ): SettlementEvaluation {
-    const parsed = selection
-      .trim()
-      .toUpperCase()
-      .match(/^(OVER|UNDER)[:_ -]?(\d+(?:\.\d+)?)$/);
+    const parsed = selection.match(/^(OVER|UNDER)[:_ -]?(\d+(?:\.\d+)?)$/);
 
     if (!parsed) {
-      return this.pending();
+      return this.pending('INVALID_SELECTION');
     }
 
     const side = parsed[1];
 
     const line = Number(parsed[2]);
 
-    if (!Number.isFinite(line)) {
-      return this.pending();
+    if (!Number.isFinite(line) || line < 0) {
+      return this.pending('INVALID_SELECTION');
     }
 
-    const pushed = totalGoals === line;
-
-    if (pushed) {
-      return this.void(`${totalGoals}`);
+    if (totalGoals === line) {
+      return this.evaluation(
+        SettlementStatus.VOID,
+        null,
+        totalGoals,
+        `${side}_${line}_PUSH`,
+      );
     }
 
     const won = side === 'OVER' ? totalGoals > line : totalGoals < line;
 
-    return {
-      status: won ? SettlementStatus.WON : SettlementStatus.LOST,
-
-      actualOutcome: won,
-
-      actualValue: totalGoals,
-
-      resultLabel: `${side}_${line}`,
-    };
+    return this.evaluation(
+      won ? SettlementStatus.WON : SettlementStatus.LOST,
+      won,
+      totalGoals,
+      `${side}_${line}`,
+    );
   }
 
   private static btts(
@@ -199,37 +148,31 @@ export class SettlementOutcomeUtil {
     home: number,
     away: number,
   ): SettlementEvaluation {
-    const yes = home > 0 && away > 0;
+    const normalized = selection
+      .trim()
+      .toUpperCase()
+      .replace(/[\s_-]/g, '');
 
-    const normalized = selection.trim().toUpperCase();
+    const expectsYes =
+      normalized === 'YES' || normalized === 'BTTSYES' || normalized === '1';
 
-    let won: boolean;
+    const expectsNo =
+      normalized === 'NO' || normalized === 'BTTSNO' || normalized === '0';
 
-    if (
-      normalized === 'YES' ||
-      normalized === 'BTTS_YES' ||
-      normalized === '1'
-    ) {
-      won = yes;
-    } else if (
-      normalized === 'NO' ||
-      normalized === 'BTTS_NO' ||
-      normalized === '0'
-    ) {
-      won = !yes;
-    } else {
-      return this.pending();
+    if (!expectsYes && !expectsNo) {
+      return this.pending('INVALID_SELECTION');
     }
 
-    return {
-      status: won ? SettlementStatus.WON : SettlementStatus.LOST,
+    const actual = home > 0 && away > 0;
 
-      actualOutcome: won,
+    const won = expectsYes ? actual : !actual;
 
-      actualValue: yes,
-
-      resultLabel: yes ? 'YES' : 'NO',
-    };
+    return this.evaluation(
+      won ? SettlementStatus.WON : SettlementStatus.LOST,
+      won,
+      actual ? 'YES' : 'NO',
+      actual ? 'YES' : 'NO',
+    );
   }
 
   private static goalRange(
@@ -238,41 +181,55 @@ export class SettlementOutcomeUtil {
   ): SettlementEvaluation {
     const normalized = selection.trim().toUpperCase().replace(/\s+/g, '');
 
-    const match = normalized.match(
-      /^(?:GOALS?|TOTAL_?GOALS?)[_: -]?(\d+)[_-](\d+)$|^(\d+)[_-](\d+)$/,
-    );
+    const value = normalized.replace(/^(?:GOALS?|TOTAL_?GOALS?)[:_-]?/i, '');
 
-    if (!match) {
-      const plusMatch = normalized.match(
-        /^(?:GOALS?|TOTAL_?GOALS?)[_: -]?(\d+)\+$/i,
-      );
+    const exactMatch = value.match(/^\d+$/);
 
-      if (!plusMatch) {
-        return this.pending();
+    if (exactMatch) {
+      const expected = Number(value);
+
+      if (!Number.isFinite(expected) || expected < 0) {
+        return this.pending('INVALID_SELECTION');
       }
 
+      const won = totalGoals === expected;
+
+      return this.evaluation(
+        won ? SettlementStatus.WON : SettlementStatus.LOST,
+        won,
+        totalGoals,
+        `${expected}`,
+      );
+    }
+
+    const plusMatch = value.match(/^(\d+)\+$/);
+
+    if (plusMatch) {
       const minimum = Number(plusMatch[1]);
 
       if (!Number.isFinite(minimum) || minimum < 0) {
-        return this.pending();
+        return this.pending('INVALID_SELECTION');
       }
 
       const won = totalGoals >= minimum;
 
-      return {
-        status: won ? SettlementStatus.WON : SettlementStatus.LOST,
-
-        actualOutcome: won,
-
-        actualValue: totalGoals,
-
-        resultLabel: `${minimum}+`,
-      };
+      return this.evaluation(
+        won ? SettlementStatus.WON : SettlementStatus.LOST,
+        won,
+        totalGoals,
+        `${minimum}+`,
+      );
     }
 
-    const minimum = Number(match[1] ?? match[3]);
+    const rangeMatch = value.match(/^(\d+)-(\d+)$/);
 
-    const maximum = Number(match[2] ?? match[4]);
+    if (!rangeMatch) {
+      return this.pending('INVALID_SELECTION');
+    }
+
+    const minimum = Number(rangeMatch[1]);
+
+    const maximum = Number(rangeMatch[2]);
 
     if (
       !Number.isFinite(minimum) ||
@@ -280,20 +237,17 @@ export class SettlementOutcomeUtil {
       minimum < 0 ||
       maximum < minimum
     ) {
-      return this.pending();
+      return this.pending('INVALID_SELECTION');
     }
 
     const won = totalGoals >= minimum && totalGoals <= maximum;
 
-    return {
-      status: won ? SettlementStatus.WON : SettlementStatus.LOST,
-
-      actualOutcome: won,
-
-      actualValue: totalGoals,
-
-      resultLabel: `${minimum}-${maximum}`,
-    };
+    return this.evaluation(
+      won ? SettlementStatus.WON : SettlementStatus.LOST,
+      won,
+      totalGoals,
+      `${minimum}-${maximum}`,
+    );
   }
 
   private static teamTotalGoals(
@@ -301,13 +255,12 @@ export class SettlementOutcomeUtil {
     home: number,
     away: number,
   ): SettlementEvaluation {
-    const match = selection
-      .trim()
-      .toUpperCase()
-      .match(/^(HOME|AWAY)_(OVER|UNDER)[:_ -]?(\d+(?:\.\d+)?)$/);
+    const match = selection.match(
+      /^(HOME|AWAY)_(OVER|UNDER)[:_ -]?(\d+(?:\.\d+)?)$/,
+    );
 
     if (!match) {
-      return this.pending();
+      return this.pending('INVALID_SELECTION');
     }
 
     const team = match[1];
@@ -316,27 +269,29 @@ export class SettlementOutcomeUtil {
 
     const line = Number(match[3]);
 
-    if (!Number.isFinite(line)) {
-      return this.pending();
+    if (!Number.isFinite(line) || line < 0) {
+      return this.pending('INVALID_SELECTION');
     }
 
     const goals = team === 'HOME' ? home : away;
 
     if (goals === line) {
-      return this.void(`${goals}`);
+      return this.evaluation(
+        SettlementStatus.VOID,
+        null,
+        goals,
+        `${team}_${side}_${line}_PUSH`,
+      );
     }
 
     const won = side === 'OVER' ? goals > line : goals < line;
 
-    return {
-      status: won ? SettlementStatus.WON : SettlementStatus.LOST,
-
-      actualOutcome: won,
-
-      actualValue: goals,
-
-      resultLabel: `${team}_${side}_${line}`,
-    };
+    return this.evaluation(
+      won ? SettlementStatus.WON : SettlementStatus.LOST,
+      won,
+      goals,
+      `${team}_${side}_${line}`,
+    );
   }
 
   private static halfTimeResult(
@@ -344,17 +299,33 @@ export class SettlementOutcomeUtil {
     score: SettlementScoreInput,
   ): SettlementEvaluation {
     if (score.halfTimeHomeScore === null || score.halfTimeAwayScore === null) {
-      return this.pending();
+      return this.pending('HALF_TIME_DATA_UNAVAILABLE');
     }
 
-    const result =
-      score.halfTimeHomeScore > score.halfTimeAwayScore
-        ? 'HOME'
-        : score.halfTimeHomeScore < score.halfTimeAwayScore
-          ? 'AWAY'
-          : 'DRAW';
+    const home = this.normalizeScore(score.halfTimeHomeScore);
 
-    return this.binary(selection, result);
+    const away = this.normalizeScore(score.halfTimeAwayScore);
+
+    const actual = this.scoreResult(home, away);
+
+    const normalized = this.normalizeResult(selection);
+
+    if (
+      normalized !== 'HOME' &&
+      normalized !== 'DRAW' &&
+      normalized !== 'AWAY'
+    ) {
+      return this.pending('INVALID_SELECTION');
+    }
+
+    const won = normalized === actual;
+
+    return this.evaluation(
+      won ? SettlementStatus.WON : SettlementStatus.LOST,
+      won,
+      actual,
+      actual,
+    );
   }
 
   private static secondHalfResult(
@@ -362,40 +333,85 @@ export class SettlementOutcomeUtil {
     score: SettlementScoreInput,
   ): SettlementEvaluation {
     if (score.halfTimeHomeScore === null || score.halfTimeAwayScore === null) {
-      return this.pending();
+      return this.pending('HALF_TIME_DATA_UNAVAILABLE');
     }
 
-    const homeSecondHalf = score.finalHomeScore - score.halfTimeHomeScore;
+    const finalHome = this.normalizeScore(score.finalHomeScore);
 
-    const awaySecondHalf = score.finalAwayScore - score.halfTimeAwayScore;
+    const finalAway = this.normalizeScore(score.finalAwayScore);
 
-    const result =
-      homeSecondHalf > awaySecondHalf
-        ? 'HOME'
-        : homeSecondHalf < awaySecondHalf
-          ? 'AWAY'
-          : 'DRAW';
+    const halfHome = this.normalizeScore(score.halfTimeHomeScore);
 
-    return this.binary(selection, result);
+    const halfAway = this.normalizeScore(score.halfTimeAwayScore);
+
+    const secondHome = Math.max(finalHome - halfHome, 0);
+
+    const secondAway = Math.max(finalAway - halfAway, 0);
+
+    const actual = this.scoreResult(secondHome, secondAway);
+
+    const normalized = this.normalizeResult(selection);
+
+    if (
+      normalized !== 'HOME' &&
+      normalized !== 'DRAW' &&
+      normalized !== 'AWAY'
+    ) {
+      return this.pending('INVALID_SELECTION');
+    }
+
+    const won = normalized === actual;
+
+    return this.evaluation(
+      won ? SettlementStatus.WON : SettlementStatus.LOST,
+      won,
+      actual,
+      actual,
+    );
   }
 
-  private static halfGoals(
+  private static firstHalfGoals(
     selection: string,
     score: SettlementScoreInput,
-    firstHalf: boolean,
   ): SettlementEvaluation {
     if (score.halfTimeHomeScore === null || score.halfTimeAwayScore === null) {
-      return this.pending();
+      return this.pending('HALF_TIME_DATA_UNAVAILABLE');
     }
 
-    const total = firstHalf
-      ? score.halfTimeHomeScore + score.halfTimeAwayScore
-      : score.finalHomeScore -
-        score.halfTimeHomeScore +
-        score.finalAwayScore -
-        score.halfTimeAwayScore;
+    const total =
+      this.normalizeScore(score.halfTimeHomeScore) +
+      this.normalizeScore(score.halfTimeAwayScore);
 
-    return this.overUnder(selection, total);
+    return this.evaluateGoalLine(selection, total);
+  }
+
+  private static secondHalfGoals(
+    selection: string,
+    score: SettlementScoreInput,
+  ): SettlementEvaluation {
+    if (score.halfTimeHomeScore === null || score.halfTimeAwayScore === null) {
+      return this.pending('HALF_TIME_DATA_UNAVAILABLE');
+    }
+
+    const finalHome = this.normalizeScore(score.finalHomeScore);
+
+    const finalAway = this.normalizeScore(score.finalAwayScore);
+
+    const halfHome = this.normalizeScore(score.halfTimeHomeScore);
+
+    const halfAway = this.normalizeScore(score.halfTimeAwayScore);
+
+    const total =
+      Math.max(finalHome - halfHome, 0) + Math.max(finalAway - halfAway, 0);
+
+    return this.evaluateGoalLine(selection, total);
+  }
+
+  private static evaluateGoalLine(
+    selection: string,
+    totalGoals: number,
+  ): SettlementEvaluation {
+    return this.overUnder(selection, totalGoals);
   }
 
   private static asianHandicap(
@@ -403,38 +419,41 @@ export class SettlementOutcomeUtil {
     home: number,
     away: number,
   ): SettlementEvaluation {
-    const match = selection
-      .trim()
-      .toUpperCase()
-      .match(/^(?:HOME|1)[:_ -]?([+-]?\d+(?:\.\d+)?)$/);
+    const match = selection.match(
+      /^(HOME|AWAY|1|2)[:_ -]?([+-]?\d+(?:\.\d+)?)$/,
+    );
 
     if (!match) {
-      return this.pending();
+      return this.pending('INVALID_SELECTION');
     }
 
-    const line = Number(match[1]);
+    const side = match[1] === 'HOME' || match[1] === '1' ? 'HOME' : 'AWAY';
+
+    const line = Number(match[2]);
 
     if (!Number.isFinite(line)) {
-      return this.pending();
+      return this.pending('INVALID_SELECTION');
     }
 
-    const adjusted = home + line - away;
+    const adjusted = side === 'HOME' ? home + line - away : away + line - home;
 
     if (adjusted === 0) {
-      return this.void(`${home}-${away}`);
+      return this.evaluation(
+        SettlementStatus.VOID,
+        null,
+        adjusted,
+        `${side}_${line}_PUSH`,
+      );
     }
 
     const won = adjusted > 0;
 
-    return {
-      status: won ? SettlementStatus.WON : SettlementStatus.LOST,
-
-      actualOutcome: won,
-
-      actualValue: adjusted,
-
-      resultLabel: `${home}-${away}`,
-    };
+    return this.evaluation(
+      won ? SettlementStatus.WON : SettlementStatus.LOST,
+      won,
+      adjusted,
+      `${side}_${line}_${won ? 'WIN' : 'LOSE'}`,
+    );
   }
 
   private static europeanHandicap(
@@ -442,101 +461,108 @@ export class SettlementOutcomeUtil {
     home: number,
     away: number,
   ): SettlementEvaluation {
-    const match = selection
-      .trim()
-      .toUpperCase()
-      .match(/^(HOME|DRAW|AWAY)[:_ -]?([+-]?\d+(?:\.\d+)?)$/);
+    const match = selection.match(/^(HOME|DRAW|AWAY|1|X|2)[:_ -]?([+-]?\d+)$/);
 
     if (!match) {
-      return this.pending();
+      return this.pending('INVALID_SELECTION');
     }
 
-    const outcome = match[1];
+    const side = this.normalizeResult(match[1]);
 
     const line = Number(match[2]);
 
-    if (!Number.isFinite(line)) {
-      return this.pending();
+    if (
+      (side !== 'HOME' && side !== 'DRAW' && side !== 'AWAY') ||
+      !Number.isFinite(line)
+    ) {
+      return this.pending('INVALID_SELECTION');
     }
 
-    const adjusted = home + line - away;
+    const adjusted = home - away + line;
 
     const actual = adjusted > 0 ? 'HOME' : adjusted < 0 ? 'AWAY' : 'DRAW';
 
-    const won = actual === outcome;
+    const won = side === actual;
 
-    return {
-      status: won ? SettlementStatus.WON : SettlementStatus.LOST,
-
-      actualOutcome: won,
-
-      actualValue: actual,
-
-      resultLabel: actual,
-    };
+    return this.evaluation(
+      won ? SettlementStatus.WON : SettlementStatus.LOST,
+      won,
+      actual,
+      actual,
+    );
   }
 
-  private static binary(
-    selection: string,
-    actual: string,
-  ): SettlementEvaluation {
-    const normalized = selection.trim().toUpperCase();
+  private static scoreResult(
+    home: number,
+    away: number,
+  ): 'HOME' | 'DRAW' | 'AWAY' {
+    if (home > away) {
+      return 'HOME';
+    }
 
-    const won = this.normalizeResult(normalized) === actual;
+    if (home < away) {
+      return 'AWAY';
+    }
 
-    return {
-      status: won ? SettlementStatus.WON : SettlementStatus.LOST,
-
-      actualOutcome: won,
-
-      actualValue: actual,
-
-      resultLabel: actual,
-    };
+    return 'DRAW';
   }
 
   private static normalizeResult(value: string): string {
-    switch (value) {
+    switch (value.trim().toUpperCase().replace(/\s+/g, '')) {
       case '1':
       case 'HOME':
-      case 'HOME_WIN':
+      case 'HOMEWIN':
         return 'HOME';
-
-      case '2':
-      case 'AWAY':
-      case 'AWAY_WIN':
-        return 'AWAY';
 
       case 'X':
       case 'DRAW':
         return 'DRAW';
 
+      case '2':
+      case 'AWAY':
+      case 'AWAYWIN':
+        return 'AWAY';
+
       default:
-        return value;
+        return value.trim().toUpperCase();
     }
   }
 
-  private static void(actualValue: unknown): SettlementEvaluation {
+  private static normalizeSelection(value: string): string {
+    return String(value ?? '')
+      .trim()
+      .toUpperCase()
+      .replace(/\s+/g, '_');
+  }
+
+  private static normalizeScore(value: number): number {
+    if (!Number.isFinite(value)) {
+      return 0;
+    }
+
+    return Math.max(Math.floor(value), 0);
+  }
+
+  private static evaluation(
+    status: SettlementStatus,
+    actualOutcome: boolean | null,
+    actualValue: unknown,
+    resultLabel: string | null,
+  ): SettlementEvaluation {
     return {
-      status: SettlementStatus.VOID,
-
-      actualOutcome: null,
-
+      status,
+      actualOutcome,
       actualValue,
-
-      resultLabel: String(actualValue),
+      resultLabel,
     };
   }
 
-  private static pending(): SettlementEvaluation {
+  private static pending(reason: string): SettlementEvaluation {
     return {
       status: SettlementStatus.PENDING,
-
       actualOutcome: null,
-
       actualValue: null,
-
-      resultLabel: null,
+      resultLabel: reason,
     };
   }
 }

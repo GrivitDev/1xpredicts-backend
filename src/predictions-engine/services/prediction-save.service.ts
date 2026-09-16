@@ -38,8 +38,19 @@ export class PredictionSaveService {
     event: PredictionRunInput,
     predictions: PredictionResult[],
   ): Promise<void> {
+    /*
+     * Even when the new engine produces no predictions, reconcile the
+     * event first so previously active/pending predictions that are no
+     * longer accepted are cancelled.
+     */
     if (!predictions.length) {
+      await this.reconcileEvent(event.eventId, []);
+
       await this.savePredictionRun(event, []);
+
+      this.logger.log(
+        `Prediction persistence completed: event=${event.eventId} predictions=0 persisted=0`,
+      );
 
       return;
     }

@@ -1,3 +1,5 @@
+// src/predictions-engine/services/prediction-engine.service.ts
+
 import { Injectable, Logger } from '@nestjs/common';
 
 import { PredictionMarket } from '../enums/prediction-market.enum';
@@ -22,9 +24,7 @@ export class PredictionEngineService {
 
   constructor(
     private readonly rawPredictionDataService: RawPredictionDataService,
-
     private readonly rawPredictionFeatureService: RawPredictionFeatureService,
-
     private readonly marketEvaluationService: MarketEvaluationService,
   ) {}
 
@@ -58,7 +58,9 @@ export class PredictionEngineService {
      * Every enabled market gets the strongest candidate produced
      * by the market evaluator.
      *
-     * Only evidence-supported predictions are published.
+     * A prediction is published only when the final decision
+     * accepts it. Low probability alone is not a rejection reason;
+     * the final decision layer is responsible for evidence conflicts.
      */
     const predictions: PredictionResult[] = [];
 
@@ -87,12 +89,24 @@ export class PredictionEngineService {
         continue;
       }
 
+      /*
+       * MATCH_RESULT is different from every other market.
+       *
+       * The public confidence belongs to the complete HOME/DRAW/AWAY
+       * distribution, not to the selected outcome independently.
+       */
+      const predictionConfidence =
+        decision.market === PredictionMarket.MATCH_RESULT &&
+        typeof evaluation.matchResultConfidence === 'number'
+          ? evaluation.matchResultConfidence
+          : decision.confidence;
+
       const prediction = this.buildPrediction(
         rawData,
         decision.market,
         decision.selection,
         decision.probability,
-        decision.confidence,
+        predictionConfidence,
         decision.safetyScore,
         decision.modelAgreement,
         decision.dataQuality,
@@ -109,9 +123,6 @@ export class PredictionEngineService {
       selectedKeys.add(key);
     }
 
-    /*
-     * Strongest publishable predictions first.
-     */
     predictions.sort((a, b) => b.decisionScore - a.decisionScore);
 
     const accepted = predictions.length;
