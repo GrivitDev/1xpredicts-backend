@@ -1,3 +1,5 @@
+// src/predictions-engine/services/prediction-worker.service.ts
+
 import { Injectable, Logger } from '@nestjs/common';
 
 import { PredictionQueueService } from './prediction-queue.service';
@@ -63,9 +65,14 @@ export class PredictionWorkerService {
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
 
+        const stack = error instanceof Error ? error.stack : undefined;
+
         await this.queueService.fail(item.eventId, message);
 
-        this.logger.error(`Prediction failed for ${item.eventId}: ${message}`);
+        this.logger.error(
+          `Prediction failed for ${item.eventId}: ${message}`,
+          stack,
+        );
       }
     }
 
