@@ -59,8 +59,9 @@ export class PredictionEngineService {
      * by the market evaluator.
      *
      * A prediction is published only when the final decision
-     * accepts it. Low probability alone is not a rejection reason;
-     * the final decision layer is responsible for evidence conflicts.
+     * accepts it.
+     *
+     * Low probability alone is not a rejection condition.
      */
     const predictions: PredictionResult[] = [];
 
@@ -92,8 +93,8 @@ export class PredictionEngineService {
       /*
        * MATCH_RESULT is different from every other market.
        *
-       * The public confidence belongs to the complete HOME/DRAW/AWAY
-       * distribution, not to the selected outcome independently.
+       * Public confidence belongs to the complete HOME/DRAW/AWAY
+       * distribution rather than the selected outcome alone.
        */
       const predictionConfidence =
         decision.market === PredictionMarket.MATCH_RESULT &&

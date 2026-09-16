@@ -85,6 +85,9 @@ export class MarketCoherenceService {
      * ----------------------------------------------------------
      * COMMON SCORE-MATRIX VALIDITY
      * ----------------------------------------------------------
+     *
+     * A structurally invalid probability matrix is a genuine
+     * contradiction. Model disagreement by itself is not.
      */
     if (!input.commonProbability.scoreMatrixCoherent) {
       reasons.push('COMMON_SCORE_MATRIX_CANNOT_PRICE_MARKET');
@@ -114,14 +117,25 @@ export class MarketCoherenceService {
      * PROBABILITY VALIDITY
      * ----------------------------------------------------------
      */
-    if (!Number.isFinite(probability) || probability < 0 || probability > 1) {
+    if (
+      !Number.isFinite(input.probability) ||
+      input.probability < 0 ||
+      input.probability > 1
+    ) {
       reasons.push('INVALID_MARKET_PROBABILITY');
     }
 
     /*
      * ----------------------------------------------------------
-     * MODEL / EVIDENCE COHERENCE
+     * MODEL / EVIDENCE SUPPORT
      * ----------------------------------------------------------
+     *
+     * Probability disagreement with a common model is evidence
+     * for further scoring, not proof that the prediction is wrong.
+     *
+     * A market-specific model can legitimately disagree with a
+     * generic/common market model, especially for handicap and
+     * line-specific goal markets.
      */
     const matrixCoherence = this.calculateMatrixCoherence(
       probabilityDifference,
@@ -161,6 +175,17 @@ export class MarketCoherenceService {
      * ----------------------------------------------------------
      * TRUE CONTRADICTION
      * ----------------------------------------------------------
+     *
+     * Hard contradictions are intentionally restricted to
+     * situations where the underlying evidence directly opposes
+     * the selected outcome.
+     *
+     * We do NOT reject a prediction merely because:
+     * - its probability differs from the common model;
+     * - the comparison is neutral;
+     * - it is a handicap line;
+     * - a broad goal environment points the other way;
+     * - the selected goal line is high/low.
      */
     this.addDirectionalContradiction(
       reasons,
@@ -170,26 +195,19 @@ export class MarketCoherenceService {
       comparisonConfidence,
     );
 
-    this.addGoalContradiction(
+    /*
+     * Goal-market comparison evidence remains part of
+     * evidenceSupport, but broad production/prevention differences
+     * are not strong enough by themselves to invalidate a specific
+     * goal line such as UNDER_4.5 or HOME_OVER_1.5.
+     */
+    this.addBttsContradiction(
       reasons,
       input,
       goalProductionDifference,
       goalPreventionDifference,
       comparisonConfidence,
     );
-
-    /*
-     * A large probability disagreement becomes a contradiction
-     * only when the underlying comparison evidence is also strong
-     * and materially inconsistent.
-     */
-    if (
-      probabilityDifference > 0.18 &&
-      comparisonConfidence >= 0.7 &&
-      (directionalEvidence < 0.2 || goalEvidence < 0.2)
-    ) {
-      reasons.push('PROBABILITY_HAS_UNRESOLVED_EVIDENCE_CONFLICT');
-    }
 
     return {
       coherent: reasons.length === 0,
@@ -237,8 +255,11 @@ export class MarketCoherenceService {
     const upper = selection.trim().toUpperCase();
 
     /*
-     * These markets are goal-direction markets rather than
+     * These markets are goal-direction or line markets rather than
      * direct home-vs-away result markets.
+     *
+     * Their outcome cannot be validated by a simple HOME/AWAY
+     * comparison direction.
      */
     if (
       market === PredictionMarket.BOTH_TEAMS_TO_SCORE ||
@@ -257,11 +278,17 @@ export class MarketCoherenceService {
       return this.clamp((1 - directionStrength) * comparisonConfidence, 0, 1);
     }
 
+    /*
+     * Only exact match-result outcomes are treated as direct
+     * home/away directional selections here.
+     *
+     * Handicap selections such as HOME_0.5 or HOME_-1.5 are not
+     * direct match-result selections and therefore must not inherit
+     * this evidence interpretation.
+     */
     if (
-      upper === 'HOME' ||
-      upper === '1' ||
-      upper === 'HOME_WIN' ||
-      upper.startsWith('HOME_')
+      market === PredictionMarket.MATCH_RESULT &&
+      (upper === 'HOME' || upper === '1' || upper === 'HOME_WIN')
     ) {
       return this.clamp(
         (0.5 + directionalDifference * 0.5) * comparisonConfidence,
@@ -271,10 +298,8 @@ export class MarketCoherenceService {
     }
 
     if (
-      upper === 'AWAY' ||
-      upper === '2' ||
-      upper === 'AWAY_WIN' ||
-      upper.startsWith('AWAY_')
+      market === PredictionMarket.MATCH_RESULT &&
+      (upper === 'AWAY' || upper === '2' || upper === 'AWAY_WIN')
     ) {
       return this.clamp(
         (0.5 - directionalDifference * 0.5) * comparisonConfidence,
@@ -355,9 +380,7 @@ export class MarketCoherenceService {
       /*
        * GOAL_RANGE has no direct OVER/UNDER token.
        *
-       * The comparison layer therefore provides neutral goal
-       * evidence unless the selection can be interpreted as a
-       * high/low range.
+       * Treat the range relationship as soft evidence only.
        */
       if (market === PredictionMarket.GOAL_RANGE) {
         if (upper === '0-1' || upper === '2') {
@@ -419,8 +442,8 @@ export class MarketCoherenceService {
      * ----------------------------------------------------------
      *
      * Use the actual aggregate goal rates already present in the
-     * constructed raw features. No unsupported market-specific
-     * datasets are fabricated here.
+     * constructed raw features. No unsupported datasets are
+     * fabricated here.
      */
     if (
       input.market === PredictionMarket.OVER_UNDER ||
@@ -506,7 +529,17 @@ export class MarketCoherenceService {
     directionalDifference: number,
     comparisonConfidence: number,
   ): void {
-    if (comparisonConfidence < 0.7) {
+    /*
+     * Only direct MATCH_RESULT selections can be contradicted by
+     * the global home/away comparison direction.
+     *
+     * Handicap selections must not be rejected by this test because
+     * a positive or negative handicap changes the actual proposition.
+     */
+    if (
+      input.market !== PredictionMarket.MATCH_RESULT ||
+      comparisonConfidence < 0.75
+    ) {
       return;
     }
 
@@ -515,13 +548,10 @@ export class MarketCoherenceService {
     const upper = input.selection.trim().toUpperCase();
 
     if (
-      (upper === 'HOME' ||
-        upper === '1' ||
-        upper === 'HOME_WIN' ||
-        upper.startsWith('HOME_')) &&
+      (upper === 'HOME' || upper === '1' || upper === 'HOME_WIN') &&
       direction === 'AWAY' &&
-      directionalDifference <= -0.25 &&
-      probability >= 0.65
+      directionalDifference <= -0.3 &&
+      probability >= 0.72
     ) {
       reasons.push('HOME_SELECTION_STRONGLY_CONTRADICTS_TEAM_COMPARISON');
 
@@ -529,19 +559,16 @@ export class MarketCoherenceService {
     }
 
     if (
-      (upper === 'AWAY' ||
-        upper === '2' ||
-        upper === 'AWAY_WIN' ||
-        upper.startsWith('AWAY_')) &&
+      (upper === 'AWAY' || upper === '2' || upper === 'AWAY_WIN') &&
       direction === 'HOME' &&
-      directionalDifference >= 0.25 &&
-      probability >= 0.65
+      directionalDifference >= 0.3 &&
+      probability >= 0.72
     ) {
       reasons.push('AWAY_SELECTION_STRONGLY_CONTRADICTS_TEAM_COMPARISON');
     }
   }
 
-  private addGoalContradiction(
+  private addBttsContradiction(
     reasons: string[],
     input: {
       market: PredictionMarket;
@@ -552,7 +579,10 @@ export class MarketCoherenceService {
     preventionDifference: number,
     comparisonConfidence: number,
   ): void {
-    if (comparisonConfidence < 0.75) {
+    if (
+      input.market !== PredictionMarket.BOTH_TEAMS_TO_SCORE ||
+      comparisonConfidence < 0.8
+    ) {
       return;
     }
 
@@ -566,23 +596,16 @@ export class MarketCoherenceService {
       1,
     );
 
-    const isGoalMarket =
-      input.market === PredictionMarket.OVER_UNDER ||
-      input.market === PredictionMarket.FIRST_HALF_GOALS ||
-      input.market === PredictionMarket.SECOND_HALF_GOALS ||
-      input.market === PredictionMarket.GOAL_RANGE ||
-      input.market === PredictionMarket.TEAM_TOTAL_GOALS;
-
     /*
-     * ----------------------------------------------------------
-     * BTTS
-     * ----------------------------------------------------------
+     * BTTS is the one goal market where a broad scoring environment
+     * can provide a meaningful contradiction, but the thresholds
+     * are deliberately strong so that ordinary disagreement does not
+     * become a hard rejection.
      */
     if (
-      input.market === PredictionMarket.BOTH_TEAMS_TO_SCORE &&
       (upper === 'YES' || upper === 'BTTS_YES' || upper === '1') &&
-      environment < -0.45 &&
-      probability >= 0.72
+      environment <= -0.7 &&
+      probability >= 0.85
     ) {
       reasons.push('BTTS_YES_STRONGLY_CONTRADICTS_GOAL_COMPARISON');
 
@@ -590,39 +613,11 @@ export class MarketCoherenceService {
     }
 
     if (
-      input.market === PredictionMarket.BOTH_TEAMS_TO_SCORE &&
       (upper === 'NO' || upper === 'BTTS_NO' || upper === '0') &&
-      environment > 0.45 &&
-      probability >= 0.72
+      environment >= 0.7 &&
+      probability >= 0.85
     ) {
       reasons.push('BTTS_NO_STRONGLY_CONTRADICTS_GOAL_COMPARISON');
-
-      return;
-    }
-
-    /*
-     * ----------------------------------------------------------
-     * OVER / UNDER
-     * ----------------------------------------------------------
-     */
-    if (
-      isGoalMarket &&
-      upper.includes('OVER') &&
-      environment < -0.45 &&
-      probability >= 0.72
-    ) {
-      reasons.push('OVER_SELECTION_STRONGLY_CONTRADICTS_GOAL_COMPARISON');
-
-      return;
-    }
-
-    if (
-      isGoalMarket &&
-      upper.includes('UNDER') &&
-      environment > 0.45 &&
-      probability >= 0.72
-    ) {
-      reasons.push('UNDER_SELECTION_STRONGLY_CONTRADICTS_GOAL_COMPARISON');
     }
   }
 

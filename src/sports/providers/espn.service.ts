@@ -1,3 +1,5 @@
+// src/sports/providers/espn.service.ts
+
 import {
   BadRequestException,
   Injectable,
@@ -33,10 +35,6 @@ export class EspnService {
   private readonly newsBaseUrl = 'https://now.core.api.espn.com/v1/sports';
 
   private readonly http: AxiosInstance;
-
-  private readonly scoreboardPageSize = 1000;
-
-  private readonly scoreboardMaxPages = 100;
 
   constructor(
     private readonly providerRateLimitService: SportsProviderRateLimitService,
@@ -86,11 +84,9 @@ export class EspnService {
     const pageSize = this.getPageSize(firstPage, 25);
 
     for (let page = 2; page <= pageCount; page += 1) {
-      /**
-       * All catalogue pages use the same "leagues"
-       * endpoint slot.
-       *
-       * Therefore page requests are serialized correctly.
+      /*
+       * League catalogue pagination is retained because this is a
+       * different ESPN endpoint from the soccer scoreboard endpoint.
        */
       const response = await this.getLeaguePage(page, pageSize);
 
@@ -128,125 +124,36 @@ export class EspnService {
 
     this.validateDateRange(dateFrom, dateTo);
 
-    const firstPage = await this.getFixturesPage(league, dateFrom, dateTo, 1);
-
-    const allEvents: EspnEvent[] = [];
-
-    const firstEvents = this.extractEvents(firstPage);
-
-    allEvents.push(...firstEvents);
-
-    const pageSize = this.getPageSize(firstPage, this.scoreboardPageSize);
-
-    const explicitPageCount = this.getPageCount(firstPage);
-
-    let pageCount = explicitPageCount;
-
-    if (pageCount <= 1 && firstEvents.length >= pageSize) {
-      pageCount = this.scoreboardMaxPages;
-    }
-
-    const seenEventIds = new Set<string>();
-
-    for (const event of firstEvents) {
-      const eventId = this.toStringValue(event?.id);
-
-      if (eventId) {
-        seenEventIds.add(eventId);
-      }
-    }
-
-    for (let page = 2; page <= pageCount; page += 1) {
-      const response = await this.getFixturesPage(
-        league,
-        dateFrom,
-        dateTo,
-        page,
-      );
-
-      const events = this.extractEvents(response);
-
-      if (!events.length) {
-        break;
-      }
-
-      let newEvents = 0;
-
-      for (const event of events) {
-        const eventId = this.toStringValue(event?.id);
-
-        if (eventId && seenEventIds.has(eventId)) {
-          continue;
-        }
-
-        if (eventId) {
-          seenEventIds.add(eventId);
-        }
-
-        allEvents.push(event);
-
-        newEvents += 1;
-      }
-
-      if (newEvents === 0) {
-        break;
-      }
-
-      if (explicitPageCount <= 1 && events.length < pageSize) {
-        break;
-      }
-
-      if (page >= this.scoreboardMaxPages) {
-        this.logger.warn(
-          `ESPN scoreboard pagination reached safety limit for ${league}`,
-        );
-
-        break;
-      }
-    }
-
-    return {
-      ...firstPage,
-
-      events: allEvents,
-
-      count: allEvents.length,
-
-      pageIndex: 1,
-
-      pageSize: allEvents.length > 0 ? allEvents.length : pageSize,
-
-      pageCount: 1,
-    };
-  }
-
-  private async getFixturesPage(
-    league: string,
-    dateFrom?: string,
-    dateTo?: string,
-    page = 1,
-  ): Promise<EspnApiResponse> {
-    const params: Record<string, string> = {
-      page: String(page),
-      limit: String(this.scoreboardPageSize),
-    };
-
-    this.applyDateRange(params, dateFrom, dateTo);
-
-    /**
-     * Every scoreboard page uses exactly the same
-     * logical endpoint.
+    /*
+     * ESPN's soccer scoreboard endpoint rejects the forced
+     * page=1 / limit=1000 request pattern.
      *
-     * Therefore page 1, page 2, page 3...
-     * cannot run simultaneously.
+     * The scoreboard endpoint already supports the requested
+     * date range directly, so make exactly one scoreboard request
+     * for the complete range.
      */
     return this.request<EspnApiResponse>(
       `${this.siteBaseUrl}/${encodeURIComponent(
         league.trim().toLowerCase(),
       )}/scoreboard`,
       'scoreboard',
-      params,
+      this.buildScoreboardParams(dateFrom, dateTo),
     );
+  }
+
+  private buildScoreboardParams(
+    dateFrom?: string,
+    dateTo?: string,
+  ): Record<string, string> | undefined {
+    if (!dateFrom && !dateTo) {
+      return undefined;
+    }
+
+    const params: Record<string, string> = {};
+
+    this.applyDateRange(params, dateFrom, dateTo);
+
+    return params;
   }
 
   // ============================================================
@@ -309,10 +216,6 @@ export class EspnService {
       'live-scoreboard',
     );
   }
-
-  // ============================================================
-  // 9. GLOBAL SOCCER NEWS
-  // ============================================================
 
   // ============================================================
   // 9. GLOBAL SOCCER NEWS
@@ -465,18 +368,6 @@ export class EspnService {
   // SCOREBOARD HELPERS
   // ============================================================
 
-  private extractEvents(response: EspnApiResponse): EspnEvent[] {
-    if (Array.isArray(response.events)) {
-      return response.events;
-    }
-
-    if (Array.isArray(response.items)) {
-      return response.items as EspnEvent[];
-    }
-
-    return [];
-  }
-
   private getPageCount(response: EspnApiResponse): number {
     const direct = this.toPositiveInteger(response.pageCount);
 
@@ -509,6 +400,18 @@ export class EspnService {
     ).pagination;
 
     return this.toPositiveInteger(pagination?.pageSize) ?? fallback;
+  }
+
+  private extractEvents(response: EspnApiResponse): EspnEvent[] {
+    if (Array.isArray(response.events)) {
+      return response.events;
+    }
+
+    if (Array.isArray(response.items)) {
+      return response.items as EspnEvent[];
+    }
+
+    return [];
   }
 
   private toPositiveInteger(value: unknown): number | undefined {
@@ -623,7 +526,6 @@ export class EspnService {
 
       this.logger.error(`ESPN request failed: ${endpoint}`, {
         status: axiosError.response?.status,
-
         data: axiosError.response?.data,
       });
 
