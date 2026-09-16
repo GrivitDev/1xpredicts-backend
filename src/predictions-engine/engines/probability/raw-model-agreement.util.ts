@@ -21,7 +21,6 @@ export class RawModelAgreementUtil {
     registeredProbability: number,
   ): RawModelAgreementResult {
     const matrixModel = this.clamp(commonProbability);
-
     const registeredModel = this.clamp(registeredProbability);
 
     const comparisonAvailable = !!features.comparison;
@@ -60,9 +59,7 @@ export class RawModelAgreementUtil {
 
       modelOutputs: {
         matrixModel,
-
         registeredModel,
-
         comparisonModel: comparisonModel ?? matrixModel,
       },
 
@@ -291,16 +288,15 @@ export class RawModelAgreementUtil {
     const values: number[] = [];
 
     this.pushRate(values, features.home, ['bttsRate']);
-
     this.pushRate(values, features.away, ['bttsRate']);
 
-    this.pushRate(values, features.home.recent, ['bttsRate']);
+    this.pushRate(values, features.home?.recent, ['bttsRate']);
 
-    this.pushRate(values, features.away.recent, ['bttsRate']);
+    this.pushRate(values, features.away?.recent, ['bttsRate']);
 
-    this.pushRate(values, features.home.venue, ['bttsRate']);
+    this.pushRate(values, features.home?.venue, ['bttsRate']);
 
-    this.pushRate(values, features.away.venue, ['bttsRate']);
+    this.pushRate(values, features.away?.venue, ['bttsRate']);
 
     this.pushRate(values, features.h2h, ['bttsRate', 'bothTeamsToScoreRate']);
 
@@ -381,7 +377,6 @@ export class RawModelAgreementUtil {
     const upper = selection.trim().toUpperCase();
 
     const isHome = upper.startsWith('HOME_');
-
     const isAway = upper.startsWith('AWAY_');
 
     if (!isHome && !isAway) {
@@ -475,13 +470,13 @@ export class RawModelAgreementUtil {
 
     this.pushRate(values, features.away, ['drawRate']);
 
-    this.pushRate(values, features.home.recent, ['drawRate']);
+    this.pushRate(values, features.home?.recent, ['drawRate']);
 
-    this.pushRate(values, features.away.recent, ['drawRate']);
+    this.pushRate(values, features.away?.recent, ['drawRate']);
 
-    this.pushRate(values, features.home.venue, ['drawRate']);
+    this.pushRate(values, features.home?.venue, ['drawRate']);
 
-    this.pushRate(values, features.away.venue, ['drawRate']);
+    this.pushRate(values, features.away?.venue, ['drawRate']);
 
     this.pushRate(values, features.h2h, ['drawRate']);
 
@@ -502,7 +497,6 @@ export class RawModelAgreementUtil {
 
   private static parseHandicapSelection(selection: string): {
     side: 'HOME' | 'AWAY' | 'DRAW';
-
     line: number;
   } | null {
     const match = selection
@@ -595,7 +589,6 @@ export class RawModelAgreementUtil {
 
       if (normalized >= 0 && normalized <= 1) {
         values.push(normalized);
-
         return;
       }
     }
