@@ -160,8 +160,10 @@ export class MarketProbabilityUtil {
       line,
     );
 
+    const probability = type === 'OVER' ? over : this.clamp(1 - over);
+
     return {
-      probability: type === 'OVER' ? over : this.clamp(1 - over),
+      probability,
       source: 'COMMON_SCORE_MATRIX',
       scoreMatrixCoherent: true,
     };
@@ -174,13 +176,11 @@ export class MarketProbabilityUtil {
     let yes = 0;
 
     for (let homeGoals = 0; homeGoals < goalModel.matrix.length; homeGoals++) {
-      for (
-        let awayGoals = 0;
-        awayGoals < (goalModel.matrix[homeGoals]?.length ?? 0);
-        awayGoals++
-      ) {
+      const row = goalModel.matrix[homeGoals] ?? [];
+
+      for (let awayGoals = 0; awayGoals < row.length; awayGoals++) {
         if (homeGoals > 0 && awayGoals > 0) {
-          yes += goalModel.matrix[homeGoals]?.[awayGoals] ?? 0;
+          yes += row[awayGoals] ?? 0;
         }
       }
     }
@@ -258,6 +258,7 @@ export class MarketProbabilityUtil {
     }
 
     const minimum = Number(rangeMatch[1]);
+
     const maximum = Number(rangeMatch[2]);
 
     if (
@@ -298,7 +299,9 @@ export class MarketProbabilityUtil {
     }
 
     const side = match[1];
+
     const type = match[2];
+
     const line = Number(match[3]);
 
     if (!Number.isFinite(line) || line < 0) {
@@ -318,7 +321,9 @@ export class MarketProbabilityUtil {
 
     return {
       probability: type === 'OVER' ? over : this.clamp(1 - over),
+
       source: 'COMMON_SCORE_MATRIX',
+
       scoreMatrixCoherent: true,
     };
   }
@@ -401,7 +406,9 @@ export class MarketProbabilityUtil {
 
     return {
       probability: match[1] === 'OVER' ? over : this.clamp(1 - over),
+
       source,
+
       scoreMatrixCoherent: true,
     };
   }
@@ -443,11 +450,20 @@ export class MarketProbabilityUtil {
         outcome.push,
         outcome.loss,
       ),
+
       winProbability: outcome.win,
+
       pushProbability: outcome.push,
+
       lossProbability: outcome.loss,
+
       source: 'COMMON_SCORE_MATRIX',
-      scoreMatrixCoherent: true,
+
+      scoreMatrixCoherent: this.settlementProbabilitiesAreCoherent(
+        outcome.win,
+        outcome.push,
+        outcome.loss,
+      ),
     };
   }
 
@@ -491,7 +507,8 @@ export class MarketProbabilityUtil {
       const row = goalModel.matrix[homeGoals] ?? [];
 
       for (let awayGoals = 0; awayGoals < row.length; awayGoals++) {
-        const matrixProbability = row[awayGoals] ?? 0;
+        const matrixProbability = this.clamp(row[awayGoals] ?? 0);
+
         const adjusted = homeGoals - awayGoals + line;
 
         if (side === 'HOME' && adjusted > 0) {
@@ -510,7 +527,9 @@ export class MarketProbabilityUtil {
 
     return {
       probability: this.clamp(probability),
+
       source: 'COMMON_SCORE_MATRIX',
+
       scoreMatrixCoherent: true,
     };
   }
@@ -525,24 +544,22 @@ export class MarketProbabilityUtil {
     loss: number;
   } {
     /*
-     * Standard Asian result settlement for whole/half lines.
-     *
-     * Quarter lines are split across the two adjacent Asian
-     * lines and averaged.
+     * Whole and half Asian lines.
      */
     if (this.isQuarterLine(line)) {
       const lower = Math.floor(line * 2) / 2;
+
       const upper = Math.ceil(line * 2) / 2;
 
       const first = this.calculateAsianSettlement(matrix, side, lower);
 
       const second = this.calculateAsianSettlement(matrix, side, upper);
 
-      return {
-        win: (first.win + second.win) / 2,
-        push: (first.push + second.push) / 2,
-        loss: (first.loss + second.loss) / 2,
-      };
+      return this.normalizeSettlement(
+        (first.win + second.win) / 2,
+        (first.push + second.push) / 2,
+        (first.loss + second.loss) / 2,
+      );
     }
 
     let win = 0;
@@ -553,7 +570,8 @@ export class MarketProbabilityUtil {
       const row = matrix[homeGoals] ?? [];
 
       for (let awayGoals = 0; awayGoals < row.length; awayGoals++) {
-        const probability = row[awayGoals] ?? 0;
+        const probability = this.clamp(row[awayGoals] ?? 0);
+
         const margin = homeGoals - awayGoals;
 
         const adjusted = side === 'HOME' ? margin + line : -margin + line;
@@ -568,11 +586,59 @@ export class MarketProbabilityUtil {
       }
     }
 
+    return this.normalizeSettlement(win, push, loss);
+  }
+
+  private static normalizeSettlement(
+    win: number,
+    push: number,
+    loss: number,
+  ): {
+    win: number;
+    push: number;
+    loss: number;
+  } {
+    const safeWin = this.clamp(win);
+
+    const safePush = this.clamp(push);
+
+    const safeLoss = this.clamp(loss);
+
+    const total = safeWin + safePush + safeLoss;
+
+    if (total <= 0) {
+      return {
+        win: 0,
+        push: 0,
+        loss: 0,
+      };
+    }
+
     return {
-      win: this.clamp(win),
-      push: this.clamp(push),
-      loss: this.clamp(loss),
+      win: safeWin / total,
+
+      push: safePush / total,
+
+      loss: safeLoss / total,
     };
+  }
+
+  private static settlementProbabilitiesAreCoherent(
+    win: number,
+    push: number,
+    loss: number,
+  ): boolean {
+    const total = win + push + loss;
+
+    return (
+      Number.isFinite(win) &&
+      Number.isFinite(push) &&
+      Number.isFinite(loss) &&
+      win >= 0 &&
+      push >= 0 &&
+      loss >= 0 &&
+      Math.abs(total - 1) <= 0.000001
+    );
   }
 
   private static normalizeAsianProbability(
@@ -580,17 +646,13 @@ export class MarketProbabilityUtil {
     push: number,
     loss: number,
   ): number {
-    const safeWin = this.clamp(win);
-    const safePush = this.clamp(push);
-    const safeLoss = this.clamp(loss);
+    const normalized = this.normalizeSettlement(win, push, loss);
 
-    const total = safeWin + safePush + safeLoss;
-
-    if (total <= 0) {
-      return 0;
-    }
-
-    return this.clamp((safeWin + safePush * 0.5) / total);
+    /*
+     * A push is neutral for settlement but is retained at 50%
+     * when representing the outcome as a probability-like score.
+     */
+    return this.clamp(normalized.win + normalized.push * 0.5);
   }
 
   private static probabilityTotalOver(
@@ -601,7 +663,7 @@ export class MarketProbabilityUtil {
 
     for (let goals = 0; goals < probabilities.length; goals++) {
       if (goals > line) {
-        result += probabilities[goals] ?? 0;
+        result += this.clamp(probabilities[goals] ?? 0);
       }
     }
 
@@ -631,7 +693,7 @@ export class MarketProbabilityUtil {
       goals <= maximum && goals < probabilities.length;
       goals++
     ) {
-      result += probabilities[goals] ?? 0;
+      result += this.clamp(probabilities[goals] ?? 0);
     }
 
     return this.clamp(result);
@@ -645,7 +707,7 @@ export class MarketProbabilityUtil {
     let result = 0;
 
     for (let goals = minimum; goals < probabilities.length; goals++) {
-      result += probabilities[goals] ?? 0;
+      result += this.clamp(probabilities[goals] ?? 0);
     }
 
     return this.clamp(result);
@@ -661,7 +723,9 @@ export class MarketProbabilityUtil {
     away: number;
   } {
     const safeHome = this.clamp(home);
+
     const safeDraw = this.clamp(draw);
+
     const safeAway = this.clamp(away);
 
     const total = safeHome + safeDraw + safeAway;
@@ -676,7 +740,9 @@ export class MarketProbabilityUtil {
 
     return {
       home: safeHome / total,
+
       draw: safeDraw / total,
+
       away: safeAway / total,
     };
   }

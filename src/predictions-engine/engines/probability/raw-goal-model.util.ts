@@ -155,10 +155,6 @@ export class RawGoalModelUtil {
       lambda = defence;
     }
 
-    /*
-     * Only use structural priors when no
-     * usable scoring evidence exists.
-     */
     if (!Number.isFinite(lambda) || lambda <= 0) {
       lambda = isHome ? DEFAULT_HOME_GOALS : DEFAULT_AWAY_GOALS;
     }
@@ -167,10 +163,6 @@ export class RawGoalModelUtil {
      * ----------------------------------------------------------
      * TEAM COMPARISON
      * ----------------------------------------------------------
-     *
-     * The comparison layer is not just a winner-direction signal.
-     * Goal production and goal prevention are also incorporated
-     * into the actual expected-goals estimate.
      */
     const comparison = features.comparison;
 
@@ -199,24 +191,25 @@ export class RawGoalModelUtil {
         ? directionalDifference
         : -directionalDifference;
 
-      /*
-       * For the scoring environment:
-       *
-       * - positive production difference means more offensive
-       *   evidence toward the home side;
-       * - positive prevention difference means stronger
-       *   prevention toward the home side.
-       *
-       * For a particular team, offensive strength increases
-       * its lambda while opponent prevention decreases it.
-       */
       const productionSignal = isHome
         ? goalProductionDifference
         : -goalProductionDifference;
 
+      /*
+       * Positive goal-prevention difference means the home
+       * side has stronger prevention evidence.
+       *
+       * Therefore:
+       *
+       *   home lambda  -> decreases
+       *   away lambda  -> also decreases
+       *
+       * The previous away branch incorrectly increased the
+       * away lambda when the home side had stronger prevention.
+       */
       const preventionSignal = isHome
         ? -goalPreventionDifference
-        : goalPreventionDifference;
+        : -goalPreventionDifference;
 
       const directionalAdjustment =
         directionalSignal * comparisonConfidence * 0.08;
@@ -247,22 +240,31 @@ export class RawGoalModelUtil {
     lambda *= 1 + standingAdjustment;
 
     /*
-     * Recent points-per-match difference gives
-     * an additional current-form signal.
+     * Recent points-per-match.
+     *
+     * recentDifference is already:
+     *
+     *   current team's PPM
+     *   -
+     *   opponent's PPM
+     *
+     * Therefore it should not be inverted for away teams.
+     * The previous inversion incorrectly penalized a stronger
+     * away side.
      */
     const recentDifference =
       this.safeNumber(team.recent.pointsPerMatch) -
       this.safeNumber(opponent.recent.pointsPerMatch);
 
     if (Number.isFinite(recentDifference)) {
-      const directionalRecent = isHome ? recentDifference : -recentDifference;
+      const directionalRecent = this.clamp(recentDifference, -3, 3);
 
-      lambda += this.clamp(directionalRecent, -3, 3) * 0.07;
+      lambda += directionalRecent * 0.07;
     }
 
     /*
-     * Venue scoring is directly used against
-     * the team's overall scoring level.
+     * Venue scoring remains directly compared with the team's
+     * overall scoring level.
      */
     const venueScoring = this.safePositive(team.venue.averageGoalsScored);
 
@@ -500,6 +502,12 @@ export class RawGoalModelUtil {
       return 0;
     }
 
+    /*
+     * own is already side-specific.
+     *
+     * A stronger away side must receive a positive adjustment,
+     * not a negative one.
+     */
     const pointShare = ownPoints / total;
 
     return this.clamp((pointShare - 0.5) * 0.1, -0.05, 0.05);
@@ -516,8 +524,7 @@ export class RawGoalModelUtil {
     );
 
     /*
-     * Historical fixtures remain the complete historical sample.
-     * No age or arbitrary recent-history cutoff is applied here.
+     * Complete historical sample.
      */
     for (const match of features.home.historical) {
       const teamWasHome = match.homeTeamId === features.homeTeamId;
@@ -775,11 +782,6 @@ export class RawGoalModelUtil {
       0.46,
     );
 
-    /*
-     * No fabricated half-time evidence.
-     * If period data is unavailable, use the structural
-     * proportion of the full-match scoring estimate.
-     */
     if (lambda === null || !Number.isFinite(lambda) || lambda <= 0) {
       const fullMatch = this.safePositive(team.averageGoalsScored);
 
@@ -815,11 +817,6 @@ export class RawGoalModelUtil {
       0.54,
     );
 
-    /*
-     * No fabricated second-half evidence.
-     * If period data is unavailable, use the structural
-     * proportion of the full-match scoring estimate.
-     */
     if (lambda === null || !Number.isFinite(lambda) || lambda <= 0) {
       const fullMatch = this.safePositive(team.averageGoalsScored);
 
@@ -868,9 +865,6 @@ export class RawGoalModelUtil {
   ): number | null {
     const available: number[] = [];
 
-    /*
-     * Period values are already half-specific.
-     */
     if (scoring !== null && scoring >= 0) {
       available.push(scoring);
     }
@@ -879,10 +873,6 @@ export class RawGoalModelUtil {
       available.push(conceding);
     }
 
-    /*
-     * Full-match scoring is scaled to the period only when
-     * period-specific evidence is incomplete.
-     */
     if (available.length < 2) {
       const overallScoring = this.safePositive(team.averageGoalsScored);
 
@@ -909,53 +899,9 @@ export class RawGoalModelUtil {
       lambda *= 0.9 + venueRatio * 0.1;
     }
 
-    /*
-     * Small structural home/away adjustment.
-     */
     lambda *= isHome ? 1.03 : 0.99;
 
-    /*
-     * Bring comparison evidence into the
-     * period model as well when available.
-     */
-    const comparison = this.getComparisonForTeam(team, isHome);
-
-    if (comparison) {
-      const confidence = this.clamp(comparison.confidence, 0, 1);
-
-      const periodAdjustment =
-        comparison.goalProductionDifference * 0.06 * confidence -
-        comparison.goalPreventionDifference * 0.04 * confidence;
-
-      lambda *= 1 + this.clamp(periodAdjustment, -0.1, 0.1);
-    }
-
     return lambda;
-  }
-
-  private static getComparisonForTeam(
-    team: RawPredictionFeatures['home'],
-    isHome: boolean,
-  ): {
-    confidence: number;
-    goalProductionDifference: number;
-    goalPreventionDifference: number;
-  } | null {
-    /*
-     * Comparison is already attached to the complete feature
-     * object, so this helper is kept intentionally small.
-     *
-     * Period-specific directional inversion is handled by the
-     * caller's home/away orientation.
-     *
-     * The actual comparison object is unavailable from the team
-     * object alone, so period-level comparison adjustment is
-     * deliberately omitted rather than fabricating a mapping.
-     */
-    void team;
-    void isHome;
-
-    return null;
   }
 
   private static getH2HWeight(sampleSize: number): number {

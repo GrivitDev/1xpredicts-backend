@@ -87,10 +87,18 @@ export class MarketEvaluationService {
         sampleSize: probability.sampleSize,
 
         comparisonConfidence: probabilitySignals.comparisonConfidence,
+
         directionalDifference: probabilitySignals.directionalDifference,
+
         goalProductionDifference: probabilitySignals.goalProductionDifference,
+
         goalPreventionDifference: probabilitySignals.goalPreventionDifference,
-        evidenceCoherence: probabilitySignals.evidenceCoherence,
+
+        ...(probabilitySignals.evidenceCoherence !== undefined
+          ? {
+              evidenceCoherence: probabilitySignals.evidenceCoherence,
+            }
+          : {}),
       });
 
       const ensemble = this.ensembleEngine.calculate({
@@ -100,13 +108,42 @@ export class MarketEvaluationService {
         calibrationReliability: calibration?.reliabilityScore ?? 0,
 
         comparisonConfidence: probabilitySignals.comparisonConfidence,
+
         directionalDifference: probabilitySignals.directionalDifference,
+
         goalProductionDifference: probabilitySignals.goalProductionDifference,
+
         goalPreventionDifference: probabilitySignals.goalPreventionDifference,
-        evidenceCoherence: probabilitySignals.evidenceCoherence,
+
+        ...(probabilitySignals.evidenceCoherence !== undefined
+          ? {
+              evidenceCoherence: probabilitySignals.evidenceCoherence,
+            }
+          : {}),
       });
 
-      candidates.push(ensemble);
+      candidates.push({
+        ...ensemble,
+
+        /*
+         * Preserve the signals required later for candidate-to-candidate
+         * comparison. These do not alter probability.
+         */
+        modelSignals: {
+          ...(ensemble.modelSignals ?? {}),
+          comparisonConfidence: probabilitySignals.comparisonConfidence,
+          directionalDifference: probabilitySignals.directionalDifference,
+          goalProductionDifference: probabilitySignals.goalProductionDifference,
+          goalPreventionDifference: probabilitySignals.goalPreventionDifference,
+          ...(probabilitySignals.evidenceCoherence !== undefined
+            ? {
+                evidenceCoherence: probabilitySignals.evidenceCoherence,
+              }
+            : {}),
+        },
+
+        modelOutputs: ensemble.modelOutputs,
+      });
 
       if (market !== PredictionMarket.MATCH_RESULT) {
         const odds = this.oddsCalculationService.calculate(probability);
@@ -135,7 +172,17 @@ export class MarketEvaluationService {
       ? this.calculateMatchResultEvidence(matchResultCandidates)
       : null;
 
-    const selectionCandidates: MarketCandidate[] = candidates.map(
+    /*
+     * ----------------------------------------------------------
+     * FIRST-PASS DECISIONS
+     * ----------------------------------------------------------
+     *
+     * Every candidate is evaluated independently first.
+     *
+     * This is important because candidate comparison must not
+     * contaminate the underlying probability.
+     */
+    const preliminaryCandidates: PreliminaryCandidate[] = candidates.map(
       (candidate) => {
         const normalizedProbability =
           isMatchResult && matchResultProbabilities
@@ -158,13 +205,22 @@ export class MarketEvaluationService {
           calibrationReliability: candidate.calibrationReliability,
 
           comparisonConfidence: candidateSignals.comparisonConfidence,
+
           directionalDifference: candidateSignals.directionalDifference,
+
           goalProductionDifference: candidateSignals.goalProductionDifference,
+
           goalPreventionDifference: candidateSignals.goalPreventionDifference,
-          evidenceCoherence: candidateSignals.evidenceCoherence,
 
           modelSignals: candidate.modelSignals,
+
           modelOutputs: candidate.modelOutputs,
+
+          ...(candidateSignals.evidenceCoherence !== undefined
+            ? {
+                evidenceCoherence: candidateSignals.evidenceCoherence,
+              }
+            : {}),
 
           ...(isMatchResult && matchResultProbabilities && matchResultEvidence
             ? {
@@ -175,6 +231,62 @@ export class MarketEvaluationService {
         });
 
         return {
+          candidate,
+          decision,
+          normalizedProbability,
+          signals: candidateSignals,
+        };
+      },
+    );
+
+    /*
+     * ----------------------------------------------------------
+     * RELATIVE CANDIDATE EVIDENCE
+     * ----------------------------------------------------------
+     *
+     * The engine must not simply select the candidate with the
+     * largest probability.
+     *
+     * We therefore calculate:
+     *
+     *   absolute evidence
+     *   +
+     *   relative evidence against the alternatives
+     *   +
+     *   market-specificity
+     *
+     * Safety is intentionally excluded from the relative evidence
+     * calculation. Otherwise broad/easy selections could win simply
+     * because they are safer.
+     */
+    const relativeCandidates = preliminaryCandidates.map((candidate) => {
+      const relativeEvidenceAdvantage = this.calculateRelativeEvidenceAdvantage(
+        candidate,
+        preliminaryCandidates,
+      );
+
+      const marketSpecificity = this.calculateMarketSpecificity(
+        market,
+        candidate.decision.selection,
+      );
+
+      return {
+        ...candidate,
+        relativeEvidenceAdvantage,
+        marketSpecificity,
+      };
+    });
+
+    /*
+     * ----------------------------------------------------------
+     * FINAL DECISIONS WITH CANDIDATE COMPARISON
+     * ----------------------------------------------------------
+     */
+    const selectionCandidates: MarketCandidate[] = relativeCandidates.map(
+      (candidate) => {
+        const { decision, candidate: ensemble, signals } = candidate;
+
+        const finalDecision = this.finalDecisionEngine.decide({
           market: decision.market,
           selection: decision.selection,
           probability: decision.probability,
@@ -183,11 +295,51 @@ export class MarketEvaluationService {
           modelAgreement: decision.modelAgreement,
           dataQuality: decision.dataQuality,
           calibrationReliability: decision.calibrationReliability,
-          risk: decision.risk,
-          decisionScore: decision.decisionScore,
-          riskScore: candidate.safetyResult.riskScore,
-          eligible: decision.accepted,
-          rejectionReason: decision.rejectionReason,
+
+          comparisonConfidence: signals.comparisonConfidence,
+
+          directionalDifference: signals.directionalDifference,
+
+          goalProductionDifference: signals.goalProductionDifference,
+
+          goalPreventionDifference: signals.goalPreventionDifference,
+
+          modelSignals: ensemble.modelSignals,
+
+          modelOutputs: ensemble.modelOutputs,
+
+          relativeEvidenceAdvantage: candidate.relativeEvidenceAdvantage,
+
+          marketSpecificity: candidate.marketSpecificity,
+
+          ...(signals.evidenceCoherence !== undefined
+            ? {
+                evidenceCoherence: signals.evidenceCoherence,
+              }
+            : {}),
+
+          ...(isMatchResult && matchResultProbabilities && matchResultEvidence
+            ? {
+                matchResultProbabilities,
+                matchResultEvidence,
+              }
+            : {}),
+        });
+
+        return {
+          market: finalDecision.market,
+          selection: finalDecision.selection,
+          probability: finalDecision.probability,
+          confidence: finalDecision.confidence,
+          safetyScore: finalDecision.safetyScore,
+          modelAgreement: finalDecision.modelAgreement,
+          dataQuality: finalDecision.dataQuality,
+          calibrationReliability: finalDecision.calibrationReliability,
+          risk: finalDecision.risk,
+          decisionScore: finalDecision.decisionScore,
+          riskScore: ensemble.safetyResult.riskScore,
+          eligible: finalDecision.accepted,
+          rejectionReason: finalDecision.rejectionReason,
         };
       },
     );
@@ -208,6 +360,12 @@ export class MarketEvaluationService {
         candidate.selection === selected.selection,
     );
 
+    const selectedRelativeCandidate = relativeCandidates.find(
+      (candidate) =>
+        candidate.candidate.market === selected.market &&
+        candidate.candidate.selection === selected.selection,
+    );
+
     const selectedSignals = selectedCandidate
       ? this.getEnsembleSignals(selectedCandidate)
       : {
@@ -215,10 +373,10 @@ export class MarketEvaluationService {
           directionalDifference: 0,
           goalProductionDifference: 0,
           goalPreventionDifference: 0,
-          evidenceCoherence: 0,
+          evidenceCoherence: undefined,
         };
 
-    const finalDecision = this.finalDecisionEngine.decide({
+    const finalDecisionInput = {
       market: selected.market,
       selection: selected.selection,
       probability: selected.probability,
@@ -229,13 +387,27 @@ export class MarketEvaluationService {
       calibrationReliability: selected.calibrationReliability,
 
       comparisonConfidence: selectedSignals.comparisonConfidence,
+
       directionalDifference: selectedSignals.directionalDifference,
+
       goalProductionDifference: selectedSignals.goalProductionDifference,
+
       goalPreventionDifference: selectedSignals.goalPreventionDifference,
-      evidenceCoherence: selectedSignals.evidenceCoherence,
 
       modelSignals: selectedCandidate?.modelSignals,
+
       modelOutputs: selectedCandidate?.modelOutputs,
+
+      relativeEvidenceAdvantage:
+        selectedRelativeCandidate?.relativeEvidenceAdvantage ?? 0,
+
+      marketSpecificity: selectedRelativeCandidate?.marketSpecificity ?? 0.5,
+
+      ...(selectedSignals.evidenceCoherence !== undefined
+        ? {
+            evidenceCoherence: selectedSignals.evidenceCoherence,
+          }
+        : {}),
 
       ...(isMatchResult && matchResultProbabilities && matchResultEvidence
         ? {
@@ -243,7 +415,9 @@ export class MarketEvaluationService {
             matchResultEvidence,
           }
         : {}),
-    });
+    };
+
+    const finalDecision = this.finalDecisionEngine.decide(finalDecisionInput);
 
     let fairOdds: number | undefined;
 
@@ -306,12 +480,240 @@ export class MarketEvaluationService {
     };
   }
 
+  private calculateRelativeEvidenceAdvantage(
+    candidate: PreliminaryCandidate,
+    allCandidates: PreliminaryCandidate[],
+  ): number {
+    if (allCandidates.length <= 1) {
+      return 0.5;
+    }
+
+    const candidateEvidence =
+      this.calculateCandidateEvidenceStrength(candidate);
+
+    const alternatives = allCandidates.filter(
+      (other) => other.candidate.selection !== candidate.candidate.selection,
+    );
+
+    if (!alternatives.length) {
+      return 0.5;
+    }
+
+    const alternativeEvidence = Math.max(
+      ...alternatives.map((other) =>
+        this.calculateCandidateEvidenceStrength(other),
+      ),
+    );
+
+    const difference = candidateEvidence - alternativeEvidence;
+
+    /*
+     * 0.5 means there is no meaningful evidence advantage.
+     *
+     * The result approaches 1 only when this candidate has a
+     * genuine evidence advantage over its strongest alternative.
+     *
+     * A high probability alone cannot generate this value.
+     */
+    return this.clamp(0.5 + difference * 1.5, 0, 1);
+  }
+
+  private calculateCandidateEvidenceStrength(
+    candidate: PreliminaryCandidate,
+  ): number {
+    const signals = candidate.signals;
+
+    const comparisonConfidence = this.clamp(signals.comparisonConfidence, 0, 1);
+
+    const directionalEvidence = this.clamp(
+      Math.abs(signals.directionalDifference),
+      0,
+      1,
+    );
+
+    const productionEvidence = this.clamp(
+      Math.abs(signals.goalProductionDifference),
+      0,
+      1,
+    );
+
+    const preventionEvidence = this.clamp(
+      Math.abs(signals.goalPreventionDifference),
+      0,
+      1,
+    );
+
+    const goalEvidence = this.clamp(
+      (productionEvidence + preventionEvidence) / 2,
+      0,
+      1,
+    );
+
+    const coherence = this.clamp(
+      signals.evidenceCoherence ?? candidate.candidate.modelAgreement,
+      0,
+      1,
+    );
+
+    const agreement = this.clamp(candidate.candidate.modelAgreement, 0, 1);
+
+    const dataQuality = this.clamp(candidate.candidate.dataQuality / 100, 0, 1);
+
+    /*
+     * Safety is deliberately excluded.
+     *
+     * This measures predictive evidence, not ease of settlement.
+     */
+    return this.clamp(
+      comparisonConfidence * 0.28 +
+        directionalEvidence * 0.16 +
+        goalEvidence * 0.16 +
+        coherence * 0.22 +
+        agreement * 0.1 +
+        dataQuality * 0.08,
+      0,
+      1,
+    );
+  }
+
+  private calculateMarketSpecificity(
+    market: PredictionMarket,
+    selection: string,
+  ): number {
+    const upper = selection.trim().toUpperCase();
+
+    /*
+     * Broad lines are deliberately prevented from receiving an
+     * automatic specificity advantage simply because they are
+     * easier to satisfy.
+     *
+     * This does NOT change probability.
+     */
+    if (market === PredictionMarket.OVER_UNDER) {
+      if (upper === 'OVER_1.5' || upper === 'UNDER_1.5') {
+        return 0.7;
+      }
+
+      if (upper === 'OVER_2.5' || upper === 'UNDER_2.5') {
+        return 0.82;
+      }
+
+      if (upper === 'OVER_3.5' || upper === 'UNDER_3.5') {
+        return 0.9;
+      }
+
+      if (upper === 'OVER_4.5' || upper === 'UNDER_4.5') {
+        return 0.78;
+      }
+    }
+
+    if (
+      market === PredictionMarket.FIRST_HALF_GOALS ||
+      market === PredictionMarket.SECOND_HALF_GOALS
+    ) {
+      if (upper === 'OVER_1.5' || upper === 'UNDER_1.5') {
+        return 0.72;
+      }
+
+      if (upper === 'OVER_2.5' || upper === 'UNDER_2.5') {
+        return 0.86;
+      }
+
+      if (upper === 'OVER_3.5' || upper === 'UNDER_3.5') {
+        return 0.9;
+      }
+    }
+
+    if (market === PredictionMarket.TEAM_TOTAL_GOALS) {
+      if (upper.endsWith('_1.5')) {
+        return 0.75;
+      }
+
+      if (upper.endsWith('_2.5')) {
+        return 0.88;
+      }
+
+      if (upper.endsWith('_3.5')) {
+        return 0.92;
+      }
+    }
+
+    if (market === PredictionMarket.GOAL_RANGE) {
+      if (upper === '0-1') {
+        return 0.78;
+      }
+
+      if (upper === '2') {
+        return 0.9;
+      }
+
+      if (upper === '3-4') {
+        return 0.88;
+      }
+
+      if (upper === '5+') {
+        return 0.84;
+      }
+    }
+
+    if (market === PredictionMarket.ASIAN_HANDICAP) {
+      const line = this.extractHandicapLine(upper);
+
+      if (line !== null) {
+        const magnitude = Math.abs(line);
+
+        if (magnitude >= 1.5) {
+          return 0.95;
+        }
+
+        if (magnitude >= 1) {
+          return 0.9;
+        }
+
+        if (magnitude >= 0.5) {
+          return 0.84;
+        }
+      }
+    }
+
+    if (market === PredictionMarket.EUROPEAN_HANDICAP) {
+      const line = this.extractHandicapLine(upper);
+
+      if (line !== null) {
+        if (line === 0) {
+          return 0.76;
+        }
+
+        if (Math.abs(line) === 1) {
+          return 0.88;
+        }
+      }
+    }
+
+    /*
+     * Result markets are already inherently specific.
+     */
+    return 1;
+  }
+
+  private extractHandicapLine(selection: string): number | null {
+    const match = selection.match(/_(\\-?\d+(?:\.\d+)?)$/);
+
+    if (!match) {
+      return null;
+    }
+
+    const value = Number(match[1]);
+
+    return Number.isFinite(value) ? value : null;
+  }
+
   private getProbabilitySignals(probability: unknown): {
     comparisonConfidence: number;
     directionalDifference: number;
     goalProductionDifference: number;
     goalPreventionDifference: number;
-    evidenceCoherence: number;
+    evidenceCoherence?: number;
   } {
     const result = probability as {
       comparisonConfidence?: number;
@@ -319,6 +721,7 @@ export class MarketEvaluationService {
       goalProductionDifference?: number;
       goalPreventionDifference?: number;
       evidenceCoherence?: number;
+
       modelSignals?: {
         comparisonConfidence?: number;
         directionalDifference?: number;
@@ -329,6 +732,9 @@ export class MarketEvaluationService {
     };
 
     const signals = result.modelSignals;
+
+    const rawEvidenceCoherence =
+      result.evidenceCoherence ?? signals?.evidenceCoherence;
 
     return {
       comparisonConfidence: this.clamp(
@@ -359,11 +765,11 @@ export class MarketEvaluationService {
         1,
       ),
 
-      evidenceCoherence: this.clamp(
-        result.evidenceCoherence ?? signals?.evidenceCoherence ?? 0,
-        0,
-        1,
-      ),
+      evidenceCoherence:
+        typeof rawEvidenceCoherence === 'number' &&
+        Number.isFinite(rawEvidenceCoherence)
+          ? this.clamp(rawEvidenceCoherence, 0, 1)
+          : undefined,
     };
   }
 
@@ -372,7 +778,7 @@ export class MarketEvaluationService {
     directionalDifference: number;
     goalProductionDifference: number;
     goalPreventionDifference: number;
-    evidenceCoherence: number;
+    evidenceCoherence?: number;
   } {
     const result = candidate as EnsembleResult & {
       comparisonConfidence?: number;
@@ -381,6 +787,9 @@ export class MarketEvaluationService {
       goalPreventionDifference?: number;
       evidenceCoherence?: number;
     };
+
+    const rawEvidenceCoherence =
+      result.evidenceCoherence ?? candidate.modelSignals?.evidenceCoherence;
 
     return {
       comparisonConfidence: this.clamp(
@@ -415,13 +824,11 @@ export class MarketEvaluationService {
         1,
       ),
 
-      evidenceCoherence: this.clamp(
-        result.evidenceCoherence ??
-          candidate.modelSignals?.evidenceCoherence ??
-          0,
-        0,
-        1,
-      ),
+      evidenceCoherence:
+        typeof rawEvidenceCoherence === 'number' &&
+        Number.isFinite(rawEvidenceCoherence)
+          ? this.clamp(rawEvidenceCoherence, 0, 1)
+          : undefined,
     };
   }
 
@@ -553,4 +960,32 @@ export class MarketEvaluationService {
 
     return Math.min(Math.max(value, minimum), maximum);
   }
+}
+
+interface PreliminaryCandidate {
+  candidate: EnsembleResult;
+  decision: {
+    market: PredictionMarket;
+    selection: string;
+    probability: number;
+    confidence: number;
+    safetyScore: number;
+    modelAgreement: number;
+    dataQuality: number;
+    calibrationReliability: number;
+    risk: unknown;
+    decisionScore: number;
+    accepted: boolean;
+    rejectionReason?: string;
+  };
+  normalizedProbability: number;
+  signals: {
+    comparisonConfidence: number;
+    directionalDifference: number;
+    goalProductionDifference: number;
+    goalPreventionDifference: number;
+    evidenceCoherence?: number;
+  };
+  relativeEvidenceAdvantage?: number;
+  marketSpecificity?: number;
 }

@@ -27,7 +27,7 @@ export class OddsCalculationService {
      * ASIAN HANDICAP
      * ----------------------------------------------------------
      *
-     * Asian settlement can contain:
+     * Asian settlement may contain:
      *
      *   - win
      *   - push/refund
@@ -41,9 +41,12 @@ export class OddsCalculationService {
      *
      *   odds = 1 + loss / win
      *
-     * Quarter-line probabilities supplied by the probability
-     * layer are already split across the two adjacent handicap
-     * lines.
+     * The probability layer must provide the exact settlement
+     * probabilities for the requested handicap.
+     *
+     * We do NOT fall back to 1 / probability here because the
+     * ordinary probability is not sufficient to price an Asian
+     * handicap correctly when push/refund probability exists.
      */
     if (result.market === PredictionMarket.ASIAN_HANDICAP) {
       const winProbability = this.getModelOutput(result, 'winProbability');
@@ -52,20 +55,64 @@ export class OddsCalculationService {
 
       const lossProbability = this.getModelOutput(result, 'lossProbability');
 
-      if (
-        winProbability !== null &&
-        lossProbability !== null &&
-        winProbability > 0
-      ) {
-        const fairOdds = 1 + lossProbability / winProbability;
-
+      if (winProbability === null || lossProbability === null) {
         return {
           market: result.market,
           selection: result.selection,
 
           modelProbability: this.round(probability, 6),
 
-          fairOdds: this.round(this.clamp(fairOdds, 1, 1000), 4),
+          fairOdds: null,
+
+          winProbability:
+            winProbability !== null ? this.round(winProbability, 6) : undefined,
+
+          pushProbability:
+            pushProbability !== null
+              ? this.round(pushProbability, 6)
+              : undefined,
+
+          lossProbability:
+            lossProbability !== null
+              ? this.round(lossProbability, 6)
+              : undefined,
+
+          pricingMethod: 'UNAVAILABLE',
+        };
+      }
+
+      if (winProbability <= 0) {
+        return {
+          market: result.market,
+          selection: result.selection,
+
+          modelProbability: this.round(probability, 6),
+
+          fairOdds: null,
+
+          winProbability: 0,
+
+          pushProbability:
+            pushProbability !== null
+              ? this.round(pushProbability, 6)
+              : undefined,
+
+          lossProbability: this.round(lossProbability, 6),
+
+          pricingMethod: 'UNAVAILABLE',
+        };
+      }
+
+      const fairOdds = 1 + lossProbability / winProbability;
+
+      if (!Number.isFinite(fairOdds) || fairOdds < 1) {
+        return {
+          market: result.market,
+          selection: result.selection,
+
+          modelProbability: this.round(probability, 6),
+
+          fairOdds: null,
 
           winProbability: this.round(winProbability, 6),
 
@@ -76,9 +123,27 @@ export class OddsCalculationService {
 
           lossProbability: this.round(lossProbability, 6),
 
-          pricingMethod: 'ASIAN_HANDICAP',
+          pricingMethod: 'UNAVAILABLE',
         };
       }
+
+      return {
+        market: result.market,
+        selection: result.selection,
+
+        modelProbability: this.round(probability, 6),
+
+        fairOdds: this.round(this.clamp(fairOdds, 1, 1000), 4),
+
+        winProbability: this.round(winProbability, 6),
+
+        pushProbability:
+          pushProbability !== null ? this.round(pushProbability, 6) : undefined,
+
+        lossProbability: this.round(lossProbability, 6),
+
+        pricingMethod: 'ASIAN_HANDICAP',
+      };
     }
 
     /*
@@ -86,18 +151,7 @@ export class OddsCalculationService {
      * EUROPEAN HANDICAP / ORDINARY MARKETS
      * ----------------------------------------------------------
      *
-     * The probability reaching this service has already passed
-     * through:
-     *
-     *   sports-data comparison
-     *   common score matrix
-     *   market model
-     *   model agreement
-     *   reconciliation
-     *   calibration
-     *
-     * Pricing must therefore use the final reconciled
-     * probability directly.
+     * These markets use the final reconciled probability directly.
      */
     const fairOdds = 1 / probability;
 

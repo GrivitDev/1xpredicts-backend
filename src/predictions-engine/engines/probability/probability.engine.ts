@@ -21,17 +21,7 @@ export class ProbabilityEngine {
      * COMMON SPORTS-DATA MODEL
      * ----------------------------------------------------------
      *
-     * RawGoalModelUtil is the common probability foundation.
-     *
-     * It consumes the available:
-     *   - overall historical fixtures
-     *   - recent form
-     *   - home/away venue data
-     *   - competition statistics
-     *   - performance profile
-     *   - standings
-     *   - H2H
-     *   - TeamComparisonService evidence
+     * This is the structural probability foundation.
      *
      * No historical age cutoff is introduced here.
      */
@@ -50,17 +40,30 @@ export class ProbabilityEngine {
      * REGISTERED MARKET MODEL
      * ----------------------------------------------------------
      *
-     * The market-specific model independently challenges the
+     * The registered market model independently challenges the
      * common sports-data probability.
      */
     const model = this.marketModelRegistry.getModel(input.market);
 
+    /*
+     * ----------------------------------------------------------
+     * NO REGISTERED MODEL
+     * ----------------------------------------------------------
+     *
+     * The common score-matrix probability remains usable.
+     *
+     * Do not manufacture artificial agreement from a missing
+     * market model.
+     */
     if (!model) {
       const comparisonConfidence = this.getComparisonConfidence(input);
+
       const dataQuality = this.getDataQuality(input);
 
-      const modelReliability = this.clamp(
-        comparisonConfidence * 0.6 + dataQuality * 0.4,
+      const modelReliability = this.calculateFallbackModelReliability(
+        comparisonConfidence,
+        dataQuality,
+        commonMarketProbability.scoreMatrixCoherent,
       );
 
       return {
@@ -130,13 +133,14 @@ export class ProbabilityEngine {
      * THREE-WAY EVIDENCE COMPARISON
      * ----------------------------------------------------------
      *
-     * 1. Common score-matrix probability.
-     * 2. Registered market-model probability.
-     * 3. Direct team-comparison probability.
+     * 1. Common score matrix
+     * 2. Registered market model
+     * 3. Team-comparison probability
      *
-     * Agreement measures convergence between these evidence
-     * paths. Low probability is not rejected merely for being
-     * low; disagreement is what reduces agreement.
+     * Agreement measures convergence.
+     *
+     * Importantly, the probability itself is never raised merely
+     * because a market has high safety characteristics.
      */
     const agreement = RawModelAgreementUtil.calculate(
       input.features,
@@ -162,28 +166,47 @@ export class ProbabilityEngine {
 
     /*
      * ----------------------------------------------------------
-     * EVIDENCE RECONCILIATION
+     * EVIDENCE AVAILABILITY
      * ----------------------------------------------------------
      *
-     * The common sports-data model remains the structural base.
-     * Independent registered-model and comparison evidence can
-     * move the raw probability toward consensus.
+     * Comparison confidence is kept separate from the actual
+     * comparison probability.
+     *
+     * Missing comparison evidence must not manufacture an
+     * apparent directional signal.
+     */
+    const comparisonConfidence = this.getComparisonConfidence(input);
+
+    const dataQuality = this.getDataQuality(input);
+
+    /*
+     * ----------------------------------------------------------
+     * FIRST RECONCILIATION
+     * ----------------------------------------------------------
+     *
+     * The common score matrix remains the structural anchor.
+     *
+     * Independent evidence gets additional influence only to the
+     * extent that it is actually available and coherent.
      */
     const consensusProbability = this.calculateConsensusProbability(
       matrixModel,
       registeredModel,
       comparisonModel,
       modelAgreement,
-      input,
+      comparisonConfidence,
+      dataQuality,
     );
 
     /*
      * ----------------------------------------------------------
-     * SECOND RECONCILIATION PASS
+     * SECOND RECONCILIATION
      * ----------------------------------------------------------
      *
-     * Prevents one model from overpowering the complete evidence
-     * set when the independent evidence paths diverge.
+     * This is a bounded reconciliation step.
+     *
+     * It cannot create probability merely because the market is
+     * broad or easy to satisfy.
      */
     const recalculatedProbability = this.recalculateProbability(
       consensusProbability,
@@ -191,16 +214,13 @@ export class ProbabilityEngine {
       registeredModel,
       comparisonModel,
       modelAgreement,
-      input,
+      comparisonConfidence,
     );
 
     /*
      * ----------------------------------------------------------
      * CALIBRATION
      * ----------------------------------------------------------
-     *
-     * Calibration is applied only after the raw sports-data
-     * evidence has been reconciled.
      */
     const calibrationAdjustment = this.getCalibrationAdjustment(
       input.calibrationAdjustment,
@@ -211,10 +231,11 @@ export class ProbabilityEngine {
       calibrationAdjustment,
     );
 
-    const comparisonConfidence = this.getComparisonConfidence(input);
-
-    const dataQuality = this.getDataQuality(input);
-
+    /*
+     * ----------------------------------------------------------
+     * MODEL RELIABILITY
+     * ----------------------------------------------------------
+     */
     const modelReliability = this.calculateModelReliability(
       modelAgreement,
       comparisonConfidence,
@@ -313,7 +334,8 @@ export class ProbabilityEngine {
     registeredProbability: number,
     comparisonProbability: number,
     agreement: number,
-    input: MarketModelInput,
+    comparisonConfidence: number,
+    dataQuality: number,
   ): number {
     const matrix = this.clamp(matrixProbability);
 
@@ -321,24 +343,36 @@ export class ProbabilityEngine {
 
     const comparison = this.clamp(comparisonProbability);
 
-    const comparisonConfidence = this.getComparisonConfidence(input);
+    const cleanAgreement = this.clamp(agreement);
 
-    const dataQuality = this.getDataQuality(input);
+    const cleanComparisonConfidence = this.clamp(comparisonConfidence);
+
+    const cleanDataQuality = this.clamp(dataQuality);
 
     /*
-     * Common score matrix remains the largest structural component.
+     * ----------------------------------------------------------
+     * EVIDENCE WEIGHTS
+     * ----------------------------------------------------------
      *
-     * Registered market model and direct comparison evidence can
-     * increase their influence when the corresponding evidence is
-     * coherent and available.
+     * The common model is the structural base.
+     *
+     * The registered model gains influence from actual model
+     * agreement.
+     *
+     * The comparison path gains influence from actual comparison
+     * confidence.
+     *
+     * Data quality scales external evidence rather than inventing
+     * new probability.
      */
     const matrixWeight = 0.5;
 
-    const registeredWeight = 0.2 + agreement * 0.1;
+    const registeredWeight = 0.2 + cleanAgreement * 0.1;
 
-    const comparisonWeight = 0.2 + comparisonConfidence * 0.1;
+    const comparisonWeight =
+      cleanComparisonConfidence > 0 ? 0.2 + cleanComparisonConfidence * 0.1 : 0;
 
-    const qualityAdjustment = 0.75 + dataQuality * 0.25;
+    const qualityAdjustment = 0.75 + cleanDataQuality * 0.25;
 
     const effectiveRegisteredWeight = registeredWeight * qualityAdjustment;
 
@@ -365,7 +399,7 @@ export class ProbabilityEngine {
     registeredProbability: number,
     comparisonProbability: number,
     agreement: number,
-    input: MarketModelInput,
+    comparisonConfidence: number,
   ): number {
     const current = this.clamp(probability);
 
@@ -382,29 +416,54 @@ export class ProbabilityEngine {
       3;
 
     /*
-     * Very close evidence does not require another adjustment.
+     * Close evidence does not need another reconciliation pass.
      */
     if (disagreement <= 0.02) {
       return current;
     }
 
-    const comparisonConfidence = this.getComparisonConfidence(input);
+    const cleanAgreement = this.clamp(agreement);
+
+    const cleanComparisonConfidence = this.clamp(comparisonConfidence);
 
     /*
-     * Strong evidence agreement retains more of the consensus.
-     * Weak agreement moves the result back toward the common
-     * sports-data model.
+     * Strong agreement allows greater movement toward the
+     * reconciled evidence center.
+     *
+     * Weak agreement keeps the original consensus more stable.
      */
     const reconciliationWeight = this.clamp(
-      0.15 + agreement * 0.35 + comparisonConfidence * 0.15,
+      0.15 + cleanAgreement * 0.25 + cleanComparisonConfidence * 0.1,
       0.15,
-      0.65,
+      0.5,
     );
 
+    /*
+     * The common matrix remains the largest reference point,
+     * but independent evidence remains present.
+     */
     const evidenceCenter = matrix * 0.5 + registered * 0.2 + comparison * 0.3;
 
     return this.clamp(
       current + (evidenceCenter - current) * reconciliationWeight,
+    );
+  }
+
+  private calculateFallbackModelReliability(
+    comparisonConfidence: number,
+    dataQuality: number,
+    scoreMatrixCoherent: boolean,
+  ): number {
+    const matrixReliability = scoreMatrixCoherent ? 1 : 0.35;
+
+    /*
+     * Missing registered models should reduce reliability,
+     * rather than being interpreted as strong model agreement.
+     */
+    return this.clamp(
+      matrixReliability * 0.45 +
+        comparisonConfidence * 0.3 +
+        dataQuality * 0.25,
     );
   }
 
@@ -435,9 +494,6 @@ export class ProbabilityEngine {
       return 0;
     }
 
-    /*
-     * TeamComparisonService stores confidence on a 0-1 scale.
-     */
     return this.clamp(confidence);
   }
 
@@ -448,9 +504,6 @@ export class ProbabilityEngine {
       return 0;
     }
 
-    /*
-     * overallDataQuality is represented as a percentage.
-     */
     return this.clamp(quality / 100);
   }
 

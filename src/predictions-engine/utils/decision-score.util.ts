@@ -16,6 +16,9 @@ export class DecisionScoreUtil {
     goalProductionDifference?: number;
     goalPreventionDifference?: number;
     evidenceCoherence?: number;
+
+    relativeEvidenceAdvantage?: number;
+    marketSpecificity?: number;
   }): DecisionScore {
     const probability = this.clamp(input.probability, 0, 1);
 
@@ -56,18 +59,27 @@ export class DecisionScoreUtil {
     const evidenceCoherence = this.clamp(input.evidenceCoherence ?? 0, 0, 1);
 
     /*
-     * ----------------------------------------------------------
-     * COMPARISON EVIDENCE
-     * ----------------------------------------------------------
+     * Relative evidence is centered at 0.50.
      *
-     * Directional evidence is made selection-aware outside this
-     * utility where necessary. Here we measure the strength of
-     * the underlying comparison signal without converting a
-     * neutral comparison into a directional advantage.
-     *
-     * Goal production/prevention are treated as supporting
-     * evidence rather than independent probability estimates.
+     * 0.50 means neither candidate has an evidence advantage.
+     * This means the score does not punish a candidate merely
+     * because the engine cannot distinguish it from alternatives.
      */
+    const relativeEvidenceAdvantage = this.clamp(
+      input.relativeEvidenceAdvantage ?? 0.5,
+      0,
+      1,
+    );
+
+    /*
+     * Specificity is deliberately neutral by default.
+     *
+     * It is included only as a very small descriptive signal.
+     * It cannot overpower probability, evidence, agreement or
+     * confidence.
+     */
+    const marketSpecificity = this.clamp(input.marketSpecificity ?? 0.5, 0, 1);
+
     const directionalStrength = Math.abs(directionalDifference);
 
     const goalStrength =
@@ -84,14 +96,16 @@ export class DecisionScoreUtil {
     );
 
     /*
-     * Probability remains the largest contributor.
+     * ----------------------------------------------------------
+     * FINAL DECISION WEIGHTS
+     * ----------------------------------------------------------
      *
-     * Comparison evidence now participates explicitly in the
-     * decision score, while confidence, safety, agreement and
-     * data quality remain important supporting signals.
+     * Probability is no longer allowed to dominate the final
+     * selection.
      *
-     * Calibration stays advisory because new predictions may
-     * legitimately have little historical calibration data.
+     * Relative evidence is now a first-class signal.
+     *
+     * Safety is supporting evidence, not the objective.
      */
     const probabilityScore = probability;
 
@@ -105,14 +119,20 @@ export class DecisionScoreUtil {
 
     const calibrationScore = calibration;
 
+    const relativeEvidenceScore = relativeEvidenceAdvantage;
+
+    const specificityScore = marketSpecificity;
+
     const total =
-      probabilityScore * 0.3 +
-      confidenceScore * 0.17 +
-      safetyScoreValue * 0.18 +
-      agreementScore * 0.13 +
+      probabilityScore * 0.22 +
+      confidenceScore * 0.2 +
+      relativeEvidenceScore * 0.16 +
+      agreementScore * 0.12 +
       dataQualityScore * 0.1 +
-      comparisonEvidence * 0.08 +
-      calibrationScore * 0.04;
+      safetyScoreValue * 0.08 +
+      comparisonEvidence * 0.07 +
+      calibrationScore * 0.04 +
+      specificityScore * 0.01;
 
     return {
       total: this.clamp(total, 0, 1),

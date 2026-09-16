@@ -47,6 +47,20 @@ export interface FinalDecision {
   evidenceCoherence?: number;
 
   /*
+   * Relative candidate evidence.
+   *
+   * 0.50 = neutral
+   * >0.50 = this candidate has stronger evidence
+   * <0.50 = an alternative has stronger evidence
+   */
+  relativeEvidenceAdvantage?: number;
+
+  /*
+   * Descriptive market-specificity signal.
+   */
+  marketSpecificity?: number;
+
+  /*
    * Independent model evidence retained for downstream inspection.
    */
   modelSignals?: Record<string, number>;

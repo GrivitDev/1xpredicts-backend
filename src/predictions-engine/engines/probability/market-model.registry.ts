@@ -32,24 +32,41 @@ export class MarketModelRegistry {
   }
 
   getModel(market: PredictionMarket): MarketModel | null {
-    return this.models.find((model) => this.supports(model, market)) ?? null;
+    for (const model of this.models) {
+      if (this.supports(model, market)) {
+        return model;
+      }
+    }
+
+    return null;
   }
 
   getModels(market: PredictionMarket): MarketModel[] {
-    return this.models.filter((model) => this.supports(model, market));
+    const matched: MarketModel[] = [];
+
+    for (const model of this.models) {
+      if (this.supports(model, market)) {
+        matched.push(model);
+      }
+    }
+
+    return matched;
   }
 
   supports(model: MarketModel, market: PredictionMarket): boolean {
-    if (typeof model.supports === 'function') {
-      return model.supports(market);
+    if (typeof model.supports === 'function' && model.supports(market)) {
+      return true;
     }
 
-    if (Array.isArray(model.supportedMarkets)) {
-      return model.supportedMarkets.includes(market);
+    if (
+      Array.isArray(model.supportedMarkets) &&
+      model.supportedMarkets.includes(market)
+    ) {
+      return true;
     }
 
-    if (typeof model.market === 'string') {
-      return model.market === market;
+    if (typeof model.market === 'string' && model.market === market) {
+      return true;
     }
 
     return false;

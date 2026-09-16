@@ -129,9 +129,12 @@ export class EnsembleEngine {
      *
      * Probability is preserved exactly.
      *
-     * Ensemble only adjusts confidence so that a high confidence
-     * value cannot survive when the combined evidence package is
-     * materially weak.
+     * Confidence is not allowed to become a proxy for:
+     *
+     *   "This is the safest market available."
+     *
+     * It only represents how strongly the evidence package
+     * supports the probability estimate.
      */
     const comparisonEvidence = this.calculateComparisonSupport(
       comparisonConfidence,
@@ -206,8 +209,11 @@ export class EnsembleEngine {
     );
 
     /*
-     * When explicit coherence is unavailable, comparison
-     * confidence is the neutral fallback.
+     * Explicit coherence remains the strongest comparison
+     * consistency signal.
+     *
+     * When unavailable, comparison confidence is only the
+     * fallback. It does not increase probability.
      */
     const coherence = PredictionMathUtil.clamp(
       evidenceCoherence ?? confidence,
@@ -233,11 +239,18 @@ export class EnsembleEngine {
     calibrationReliability: number,
     comparisonEvidence: number,
   ): number {
+    /*
+     * Confidence remains primarily evidence-driven.
+     *
+     * Safety is deliberately kept below agreement, comparison
+     * evidence and data quality so that "safe" does not become
+     * synonymous with "best prediction".
+     */
     const support =
       modelAgreement * 0.3 +
-      comparisonEvidence * 0.35 +
-      (safetyScore / 100) * 0.12 +
-      (dataQuality / 100) * 0.18 +
+      comparisonEvidence * 0.38 +
+      (safetyScore / 100) * 0.1 +
+      (dataQuality / 100) * 0.17 +
       this.calibrationSupport(calibrationReliability) * 0.05;
 
     /*

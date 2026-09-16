@@ -76,7 +76,7 @@ export class BttsMarketEngine implements MarketModel {
 
       probability,
 
-      supportingProbability: probability,
+      supportingProbability: matrixBttsYes,
 
       sampleSize,
 
@@ -86,12 +86,12 @@ export class BttsMarketEngine implements MarketModel {
 
       modelName: 'raw-btts-model',
 
-      modelVersion: 'raw-btts-v4',
+      modelVersion: 'raw-btts-v5',
 
       modelOutputs: {
         bttsYes,
 
-        bttsNo: 1 - bttsYes,
+        bttsNo: this.clamp(1 - bttsYes),
 
         matrixBttsYes,
 
@@ -105,7 +105,7 @@ export class BttsMarketEngine implements MarketModel {
       modelSignals: {
         bttsYes,
 
-        bttsNo: 1 - bttsYes,
+        bttsNo: this.clamp(1 - bttsYes),
 
         matrixBttsYes,
 
@@ -114,6 +114,8 @@ export class BttsMarketEngine implements MarketModel {
         empiricalEvidenceWeight: empiricalEvidence.weight,
 
         empiricalEvidenceAvailable: empiricalEvidence.available ? 1 : 0,
+
+        empiricalObservationCount: empiricalEvidence.observationCount,
 
         comparisonConfidence,
 
@@ -124,9 +126,11 @@ export class BttsMarketEngine implements MarketModel {
         goalPreventionDifference,
 
         /*
-         * BTTS is fundamentally driven by whether both teams
-         * have evidence of scoring while also considering the
-         * opponent's ability to prevent scoring.
+         * BTTS-specific scoring evidence.
+         *
+         * These are descriptive signals for downstream ensemble
+         * and evidence evaluation. They do not directly overwrite
+         * the score-matrix probability.
          */
         homeScoringSignal: this.calculateScoringSignal(input.features.home),
 
@@ -141,12 +145,10 @@ export class BttsMarketEngine implements MarketModel {
     let probability = 0;
 
     for (let homeGoals = 1; homeGoals < model.matrix.length; homeGoals += 1) {
-      for (
-        let awayGoals = 1;
-        awayGoals < model.matrix[homeGoals].length;
-        awayGoals += 1
-      ) {
-        probability += model.matrix[homeGoals][awayGoals] ?? 0;
+      const row = model.matrix[homeGoals] ?? [];
+
+      for (let awayGoals = 1; awayGoals < row.length; awayGoals += 1) {
+        probability += row[awayGoals] ?? 0;
       }
     }
 
@@ -157,63 +159,112 @@ export class BttsMarketEngine implements MarketModel {
     probability: number;
     weight: number;
     available: boolean;
+    observationCount: number;
   } {
-    const values: number[] = [];
+    const values: Array<{
+      probability: number;
+      observations: number;
+    }> = [];
 
     /*
      * Overall team evidence.
      */
-    this.pushRate(values, input.features.home, ['bttsRate']);
+    this.pushRate(
+      values,
+      input.features.home,
+      ['bttsRate'],
+      this.readPositiveSample(input.features.home, 'sampleSize'),
+    );
 
-    this.pushRate(values, input.features.away, ['bttsRate']);
+    this.pushRate(
+      values,
+      input.features.away,
+      ['bttsRate'],
+      this.readPositiveSample(input.features.away, 'sampleSize'),
+    );
 
     /*
      * Recent evidence.
      */
-    this.pushRate(values, input.features.home?.recent, ['bttsRate']);
+    this.pushRate(
+      values,
+      input.features.home?.recent,
+      ['bttsRate'],
+      this.readPositiveSample(input.features.home?.recent, 'sampleSize'),
+    );
 
-    this.pushRate(values, input.features.away?.recent, ['bttsRate']);
+    this.pushRate(
+      values,
+      input.features.away?.recent,
+      ['bttsRate'],
+      this.readPositiveSample(input.features.away?.recent, 'sampleSize'),
+    );
 
     /*
      * Venue-specific evidence.
      */
-    this.pushRate(values, input.features.home?.venue, ['bttsRate']);
+    this.pushRate(
+      values,
+      input.features.home?.venue,
+      ['bttsRate'],
+      this.readPositiveSample(input.features.home?.venue, 'sampleSize'),
+    );
 
-    this.pushRate(values, input.features.away?.venue, ['bttsRate']);
+    this.pushRate(
+      values,
+      input.features.away?.venue,
+      ['bttsRate'],
+      this.readPositiveSample(input.features.away?.venue, 'sampleSize'),
+    );
 
     /*
-     * H2H is supplementary.
+     * H2H remains supplementary.
      */
-    this.pushRate(values, input.features.h2h, [
-      'bttsRate',
-      'bothTeamsToScoreRate',
-    ]);
+    this.pushRate(
+      values,
+      input.features.h2h,
+      ['bttsRate', 'bothTeamsToScoreRate'],
+      this.readPositiveSample(input.features.h2h, 'sampleSize'),
+    );
 
     /*
-     * The raw historical fixtures themselves do not expose an
-     * aggregate bttsRate. They are already represented through
-     * the feature aggregates above, so they must not be treated
-     * as if they were aggregate objects.
+     * Do not fabricate empirical evidence when no actual BTTS
+     * observations are available.
      */
-
     if (!values.length) {
       return {
         probability: 0,
         weight: 0,
         available: false,
+        observationCount: 0,
       };
     }
 
-    const probability = this.clamp(
-      values.reduce((sum, value) => sum + value, 0) / values.length,
+    const totalObservations = values.reduce(
+      (sum, entry) => sum + entry.observations,
+      0,
     );
 
-    const sampleReliability = this.clamp(
-      1 - Math.exp(-(input.features.overallSampleSize ?? 0) / 20),
+    const weightedProbability =
+      this.calculateWeightedEmpiricalProbability(values);
+
+    const probability = this.clamp(weightedProbability);
+
+    /*
+     * Reliability is based on the actual BTTS observations rather
+     * than assuming that overallSampleSize represents every
+     * aggregate source equally.
+     */
+    const observationReliability = this.clamp(
+      1 - Math.exp(-totalObservations / 25),
+      0,
+      1,
     );
 
     const dataReliability = this.clamp(
       (input.features.overallDataQuality ?? 0) / 100,
+      0,
+      1,
     );
 
     const comparisonConfidence = this.clamp(
@@ -222,39 +273,71 @@ export class BttsMarketEngine implements MarketModel {
       1,
     );
 
+    const goalProductionDifference = this.clamp(
+      input.features.comparison?.goalProduction?.difference ?? 0,
+      -1,
+      1,
+    );
+
+    const goalPreventionDifference = this.clamp(
+      input.features.comparison?.goalPrevention?.difference ?? 0,
+      -1,
+      1,
+    );
+
     /*
-     * Comparison evidence is part of the weighting because the
-     * team-comparison layer specifically measures the relationship
-     * between the two teams rather than one team in isolation.
+     * For BTTS:
+     *
+     *   stronger production on both sides supports YES
+     *   stronger prevention suppresses YES
+     *
+     * Neutral comparison evidence must remain neutral.
      */
-    const goalProductionEvidence = this.clamp(
-      0.5 + (input.features.comparison?.goalProduction?.difference ?? 0) * 0.5,
+    const productionEvidence = this.clamp(
+      0.5 + goalProductionDifference * 0.5,
       0,
       1,
     );
 
-    const goalPreventionEvidence = this.clamp(
-      0.5 - (input.features.comparison?.goalPrevention?.difference ?? 0) * 0.5,
+    const preventionEvidence = this.clamp(
+      0.5 - goalPreventionDifference * 0.5,
       0,
       1,
     );
 
     const comparisonGoalEvidence = this.clamp(
-      goalProductionEvidence * 0.5 + goalPreventionEvidence * 0.5,
+      productionEvidence * 0.5 + preventionEvidence * 0.5,
       0,
       1,
     );
 
-    const evidenceStrength = this.clamp(
-      sampleReliability * 0.3 +
-        dataReliability * 0.3 +
-        comparisonConfidence * 0.2 +
-        comparisonGoalEvidence * 0.2,
+    /*
+     * Comparison evidence is allowed to increase the empirical
+     * weight only when it actually provides useful information.
+     *
+     * A neutral 0.5 comparison signal does not produce extra
+     * influence.
+     */
+    const comparisonSupport = this.clamp(
+      (Math.abs(productionEvidence - 0.5) +
+        Math.abs(preventionEvidence - 0.5)) /
+        1,
       0,
       1,
     );
 
-    const weight = this.clamp(evidenceStrength * 0.35, 0, 0.35);
+    const evidenceStrength =
+      observationReliability * 0.5 +
+      dataReliability * 0.25 +
+      comparisonConfidence * comparisonSupport * 0.15 +
+      comparisonGoalEvidence * 0.1;
+
+    /*
+     * Empirical evidence remains secondary to the score matrix.
+     *
+     * Maximum influence = 30%.
+     */
+    const weight = this.clamp(evidenceStrength * 0.3, 0, 0.3);
 
     return {
       probability,
@@ -262,6 +345,8 @@ export class BttsMarketEngine implements MarketModel {
       weight,
 
       available: true,
+
+      observationCount: totalObservations,
     };
   }
 
@@ -271,12 +356,13 @@ export class BttsMarketEngine implements MarketModel {
       probability: number;
       weight: number;
       available: boolean;
+      observationCount: number;
     },
     input: MarketModelInput,
   ): number {
     const matrix = this.clamp(matrixProbability);
 
-    if (!empiricalEvidence.available) {
+    if (!empiricalEvidence.available || empiricalEvidence.weight <= 0) {
       return matrix;
     }
 
@@ -305,28 +391,37 @@ export class BttsMarketEngine implements MarketModel {
     );
 
     /*
-     * Strong direct comparison evidence allows the empirical
-     * evidence to challenge the matrix more meaningfully, but
-     * never lets it completely replace the score matrix.
+     * Comparison coherence measures whether the available
+     * production/prevention evidence has a meaningful direction.
+     *
+     * It does NOT reward high probability.
      */
+    const productionDirection = Math.abs(goalProductionDifference);
+
+    const preventionDirection = Math.abs(goalPreventionDifference);
+
+    const directionalSupport = this.clamp(
+      (productionDirection + preventionDirection) / 2,
+      0,
+      1,
+    );
+
     const comparisonCoherence = this.clamp(
-      0.5 + goalProductionDifference * 0.25 - goalPreventionDifference * 0.25,
+      comparisonConfidence * 0.6 + directionalSupport * 0.4,
       0,
       1,
     );
 
-    const coherenceWeight = this.clamp(
-      comparisonConfidence * 0.45 +
-        dataQuality * 0.25 +
-        comparisonCoherence * 0.3,
-      0,
-      1,
-    );
-
+    /*
+     * Empirical evidence can challenge the matrix, but it cannot
+     * completely replace it.
+     */
     const evidenceWeight = this.clamp(
-      empiricalEvidence.weight * (0.7 + coherenceWeight * 0.3),
+      empiricalEvidence.weight *
+        (0.7 + comparisonCoherence * 0.3) *
+        (0.85 + dataQuality * 0.15),
       0,
-      0.35,
+      0.3,
     );
 
     return this.clamp(
@@ -388,10 +483,6 @@ export class BttsMarketEngine implements MarketModel {
       values.push(1 - venueFailedToScore);
     }
 
-    /*
-     * Do not fabricate a scoring probability when the BTTS
-     * evidence is genuinely unavailable.
-     */
     if (!values.length) {
       return 0.5;
     }
@@ -401,8 +492,48 @@ export class BttsMarketEngine implements MarketModel {
     );
   }
 
-  private pushRate(values: number[], source: unknown, keys: string[]): void {
+  private calculateWeightedEmpiricalProbability(
+    values: Array<{
+      probability: number;
+      observations: number;
+    }>,
+  ): number {
+    let weightedProbability = 0;
+    let totalWeight = 0;
+
+    for (const entry of values) {
+      const observations = Math.max(Math.floor(entry.observations), 1);
+
+      const reliability = this.clamp(1 - Math.exp(-observations / 20), 0, 1);
+
+      const weight = Math.max(observations * reliability, 1);
+
+      weightedProbability += entry.probability * weight;
+
+      totalWeight += weight;
+    }
+
+    if (totalWeight <= 0) {
+      return 0.5;
+    }
+
+    return this.clamp(weightedProbability / totalWeight);
+  }
+
+  private pushRate(
+    values: Array<{
+      probability: number;
+      observations: number;
+    }>,
+    source: unknown,
+    keys: string[],
+    observations: number,
+  ): void {
     if (!source || typeof source !== 'object') {
+      return;
+    }
+
+    if (observations <= 0) {
       return;
     }
 
@@ -418,11 +549,29 @@ export class BttsMarketEngine implements MarketModel {
       const normalized = value > 1 && value <= 100 ? value / 100 : value;
 
       if (normalized >= 0 && normalized <= 1) {
-        values.push(normalized);
+        values.push({
+          probability: normalized,
+
+          observations,
+        });
 
         return;
       }
     }
+  }
+
+  private readPositiveSample(source: unknown, key: string): number {
+    if (!source || typeof source !== 'object') {
+      return 0;
+    }
+
+    const value = (source as Record<string, unknown>)[key];
+
+    if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+      return Math.floor(value);
+    }
+
+    return 0;
   }
 
   private readRate(value: number | null | undefined): number | null {

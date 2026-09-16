@@ -64,7 +64,12 @@ export class GoalMarketEngine implements MarketModel {
 
       probability,
 
-      supportingProbability: probability,
+      /*
+       * Keep the structural score-matrix result available as the
+       * supporting probability. The reconciled probability above
+       * is the final market probability after empirical evidence.
+       */
+      supportingProbability: matrixProbability,
 
       sampleSize,
 
@@ -74,7 +79,7 @@ export class GoalMarketEngine implements MarketModel {
 
       modelName: 'raw-goal-model',
 
-      modelVersion: 'raw-goal-v3',
+      modelVersion: 'raw-goal-v4',
 
       modelOutputs: {
         expectedHomeGoals: model.expectedHomeGoals,
@@ -214,39 +219,35 @@ export class GoalMarketEngine implements MarketModel {
       };
     }
 
-    const values: number[] = [];
+    const overKey = this.getOverRateKey(line);
 
-    /*
-     * The current raw feature contract exposes OVER rates for
-     * recent/venue/H2H aggregates. UNDER probabilities are derived
-     * as the complement of the corresponding OVER rate rather than
-     * reading unsupported under-rate properties.
-     */
+    if (!overKey) {
+      return {
+        probability: 0,
+        weight: 0,
+        available: false,
+      };
+    }
+
     const sources: unknown[] = [
       input.features.home?.recent,
+
       input.features.away?.recent,
+
       input.features.home?.venue,
+
       input.features.away?.venue,
+
       input.features.h2h,
     ];
 
-    const overKey = this.getOverRateKey(line);
+    const observations = this.collectEmpiricalValues(
+      sources,
+      overKey,
+      side === 'OVER' ? false : true,
+    );
 
-    if (overKey === null) {
-      return this.buildEmpiricalEvidence(values, input);
-    }
-
-    for (const source of sources) {
-      const overRate = this.readRate(source, [overKey]);
-
-      if (overRate === null) {
-        continue;
-      }
-
-      values.push(side === 'OVER' ? overRate : this.clamp(1 - overRate));
-    }
-
-    return this.buildEmpiricalEvidence(values, input);
+    return this.buildEmpiricalEvidence(observations, input);
   }
 
   private calculateGoalRangeEmpiricalEvidence(
@@ -265,31 +266,49 @@ export class GoalMarketEngine implements MarketModel {
 
     const value = prefixed ? prefixed[1] : normalized;
 
-    const values: number[] = [];
+    const values: Array<{
+      probability: number;
+      observations: number;
+    }> = [];
 
     const sources: unknown[] = [
       input.features.home?.recent,
+
       input.features.away?.recent,
+
       input.features.home?.venue,
+
       input.features.away?.venue,
+
       input.features.h2h,
     ];
 
     /*
-     * With the currently exposed OVER rates, the useful enabled
-     * goal ranges can be derived directly:
+     * With the currently exposed OVER rates:
      *
-     * 0-1 = 1 - O1.5
-     * 2   = O1.5 - O2.5
-     * 3-4 = O2.5 - O4.5
-     * 5+  = O4.5
+     *   0-1 = 1 - O1.5
+     *   2   = O1.5 - O2.5
+     *   3-4 = O2.5 - O4.5
+     *   5+  = O4.5
+     *
+     * Range differences are accepted only when the supplied
+     * cumulative rates are internally monotonic.
      */
     for (const source of sources) {
+      const observations = this.readSampleSize(source);
+
+      if (observations <= 0) {
+        continue;
+      }
+
       if (/^0-1$/.test(value)) {
         const over15 = this.readRate(source, ['over15Rate']);
 
         if (over15 !== null) {
-          values.push(this.clamp(1 - over15));
+          values.push({
+            probability: this.clamp(1 - over15),
+            observations,
+          });
         }
 
         continue;
@@ -300,8 +319,11 @@ export class GoalMarketEngine implements MarketModel {
 
         const over25 = this.readRate(source, ['over25Rate']);
 
-        if (over15 !== null && over25 !== null) {
-          values.push(this.clamp(over15 - over25));
+        if (over15 !== null && over25 !== null && over15 >= over25) {
+          values.push({
+            probability: this.clamp(over15 - over25),
+            observations,
+          });
         }
 
         continue;
@@ -312,8 +334,11 @@ export class GoalMarketEngine implements MarketModel {
 
         const over45 = this.readRate(source, ['over45Rate']);
 
-        if (over25 !== null && over45 !== null) {
-          values.push(this.clamp(over25 - over45));
+        if (over25 !== null && over45 !== null && over25 >= over45) {
+          values.push({
+            probability: this.clamp(over25 - over45),
+            observations,
+          });
         }
 
         continue;
@@ -323,7 +348,10 @@ export class GoalMarketEngine implements MarketModel {
         const over45 = this.readRate(source, ['over45Rate']);
 
         if (over45 !== null) {
-          values.push(over45);
+          values.push({
+            probability: this.clamp(over45),
+            observations,
+          });
         }
       }
     }
@@ -373,27 +401,28 @@ export class GoalMarketEngine implements MarketModel {
 
     const overKey = this.getOverRateKey(line);
 
-    if (overKey === null) {
-      return this.buildEmpiricalEvidence([], input);
+    if (!overKey) {
+      return {
+        probability: 0,
+        weight: 0,
+        available: false,
+      };
     }
 
-    const values: number[] = [];
+    const observations = this.collectEmpiricalValues(
+      sources,
+      overKey,
+      side === 'OVER' ? false : true,
+    );
 
-    for (const source of sources) {
-      const overRate = this.readRate(source, [overKey]);
-
-      if (overRate === null) {
-        continue;
-      }
-
-      values.push(side === 'OVER' ? overRate : this.clamp(1 - overRate));
-    }
-
-    return this.buildEmpiricalEvidence(values, input);
+    return this.buildEmpiricalEvidence(observations, input);
   }
 
   private buildEmpiricalEvidence(
-    values: number[],
+    values: Array<{
+      probability: number;
+      observations: number;
+    }>,
     input: MarketModelInput,
   ): {
     probability: number;
@@ -408,36 +437,101 @@ export class GoalMarketEngine implements MarketModel {
       };
     }
 
+    let weightedProbability = 0;
+
+    let totalObservationWeight = 0;
+
+    let totalObservations = 0;
+
+    for (const entry of values) {
+      const observations = Math.max(Math.floor(entry.observations), 1);
+
+      const reliability = this.clamp(1 - Math.exp(-observations / 20), 0, 1);
+
+      const effectiveWeight = Math.max(observations * reliability, 1);
+
+      weightedProbability += entry.probability * effectiveWeight;
+
+      totalObservationWeight += effectiveWeight;
+
+      totalObservations += observations;
+    }
+
+    if (totalObservationWeight <= 0) {
+      return {
+        probability: 0,
+        weight: 0,
+        available: false,
+      };
+    }
+
     const probability = this.clamp(
-      values.reduce((sum, value) => sum + value, 0) / values.length,
+      weightedProbability / totalObservationWeight,
     );
 
+    /*
+     * Evidence strength is based on actual empirical observations,
+     * not overallSampleSize copied onto every source.
+     */
     const sampleReliability = this.clamp(
-      1 - Math.exp(-(input.features.overallSampleSize ?? 0) / 20),
+      1 - Math.exp(-totalObservations / 40),
+      0,
+      1,
     );
 
     const dataReliability = this.clamp(
       (input.features.overallDataQuality ?? 0) / 100,
+      0,
+      1,
     );
 
     const comparisonConfidence = this.clamp(
       input.features.comparison?.confidence ?? 0,
+      0,
+      1,
     );
 
-    const weight = this.clamp(
-      (sampleReliability * 0.35 +
-        dataReliability * 0.4 +
-        comparisonConfidence * 0.25) *
-        0.3,
-      0,
-      0.3,
-    );
+    /*
+     * Comparison evidence is a supporting modifier only.
+     * It does not create empirical probability.
+     */
+    const comparisonSupport = this.calculateGoalComparisonSupport(input);
+
+    const evidenceStrength =
+      sampleReliability * 0.5 +
+      dataReliability * 0.3 +
+      comparisonConfidence * comparisonSupport * 0.2;
+
+    /*
+     * Empirical evidence is secondary.
+     *
+     * Maximum influence remains 30%.
+     */
+    const weight = this.clamp(evidenceStrength * 0.3, 0, 0.3);
 
     return {
       probability,
+
       weight,
+
       available: true,
     };
+  }
+
+  private calculateGoalComparisonSupport(input: MarketModelInput): number {
+    const production = this.clamp(
+      input.features.comparison?.goalProduction?.difference ?? 0,
+      -1,
+      1,
+    );
+
+    const prevention = this.clamp(
+      input.features.comparison?.goalPrevention?.difference ?? 0,
+      -1,
+      1,
+    );
+
+    return this.clamp((Math.abs(production) + Math.abs(prevention)) / 2, 0, 1);
   }
 
   private reconcileProbability(
@@ -451,21 +545,35 @@ export class GoalMarketEngine implements MarketModel {
   ): number {
     const matrix = this.clamp(matrixProbability);
 
-    if (!empiricalEvidence.available) {
+    if (!empiricalEvidence.available || empiricalEvidence.weight <= 0) {
       return matrix;
     }
 
     const comparisonConfidence = this.clamp(
       input.features.comparison?.confidence ?? 0,
+      0,
+      1,
     );
 
     const dataQuality = this.clamp(
       (input.features.overallDataQuality ?? 0) / 100,
+      0,
+      1,
+    );
+
+    /*
+     * Empirical evidence can challenge the matrix, but the
+     * structural score matrix remains the primary probability
+     * source.
+     */
+    const coherence = this.clamp(
+      comparisonConfidence * 0.6 + dataQuality * 0.4,
+      0,
+      1,
     );
 
     const evidenceWeight = this.clamp(
-      empiricalEvidence.weight *
-        (0.75 + comparisonConfidence * 0.15 + dataQuality * 0.1),
+      empiricalEvidence.weight * (0.75 + coherence * 0.25),
       0,
       0.3,
     );
@@ -474,6 +582,62 @@ export class GoalMarketEngine implements MarketModel {
       matrix * (1 - evidenceWeight) +
         empiricalEvidence.probability * evidenceWeight,
     );
+  }
+
+  private collectEmpiricalValues(
+    sources: unknown[],
+    rateKey: string,
+    complement: boolean,
+  ): Array<{
+    probability: number;
+    observations: number;
+  }> {
+    const values: Array<{
+      probability: number;
+      observations: number;
+    }> = [];
+
+    for (const source of sources) {
+      const observations = this.readSampleSize(source);
+
+      if (observations <= 0) {
+        continue;
+      }
+
+      const rate = this.readRate(source, [rateKey]);
+
+      if (rate === null) {
+        continue;
+      }
+
+      values.push({
+        probability: complement ? this.clamp(1 - rate) : rate,
+
+        observations,
+      });
+    }
+
+    return values;
+  }
+
+  private readSampleSize(source: unknown): number {
+    if (!source || typeof source !== 'object') {
+      return 0;
+    }
+
+    const record = source as Record<string, unknown>;
+
+    const possibleKeys = ['sampleSize', 'matchesAnalyzed', 'played', 'matches'];
+
+    for (const key of possibleKeys) {
+      const value = record[key];
+
+      if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+        return Math.floor(value);
+      }
+    }
+
+    return 0;
   }
 
   private pushRate(values: number[], source: unknown, keys: string[]): void {
@@ -513,10 +677,6 @@ export class GoalMarketEngine implements MarketModel {
       return null;
     }
 
-    /*
-     * Only rates exposed by the current raw feature contract
-     * are used for empirical evidence.
-     */
     switch (line) {
       case 0.5:
         return 'over05Rate';
@@ -712,6 +872,6 @@ export class GoalMarketEngine implements MarketModel {
       return minimum;
     }
 
-    return Math.min(Math.max(value, minimum), maximum);
+    return Math.min(Math.max(minimum, value), maximum);
   }
 }

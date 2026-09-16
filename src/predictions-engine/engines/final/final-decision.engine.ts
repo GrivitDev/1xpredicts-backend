@@ -42,6 +42,28 @@ export class FinalDecisionEngine {
     goalPreventionDifference?: number;
     evidenceCoherence?: number;
 
+    /*
+     * Candidate comparison.
+     *
+     * 0.50 = no evidence advantage over alternatives
+     * >0.50 = this candidate has stronger supporting evidence
+     * <0.50 = an alternative has stronger supporting evidence
+     */
+    relativeEvidenceAdvantage?: number;
+
+    /*
+     * Specificity is descriptive only.
+     *
+     * It must never be used as a reward for choosing a more
+     * difficult market. Neutral = 0.50.
+     */
+    marketSpecificity?: number;
+
+    /*
+     * Low evidence support is not a contradiction.
+     */
+    hardContradiction?: boolean;
+
     modelSignals?: Record<string, unknown>;
     modelOutputs?: Record<string, unknown>;
   }): FinalDecision {
@@ -58,6 +80,14 @@ export class FinalDecisionEngine {
       0,
       100,
     );
+
+    const relativeEvidenceAdvantage = this.clamp(
+      input.relativeEvidenceAdvantage ?? 0.5,
+      0,
+      1,
+    );
+
+    const marketSpecificity = this.clamp(input.marketSpecificity ?? 0.5, 0, 1);
 
     const isMatchResult =
       input.market === PredictionMarket.MATCH_RESULT &&
@@ -97,11 +127,6 @@ export class FinalDecisionEngine {
           calibrationReliability,
         };
 
-    /*
-     * ----------------------------------------------------------
-     * SHARED COMPARISON EVIDENCE
-     * ----------------------------------------------------------
-     */
     const comparisonConfidence = this.clamp(
       input.comparisonConfidence ??
         this.readSignal(input, 'comparisonConfidence') ??
@@ -146,14 +171,6 @@ export class FinalDecisionEngine {
             goalPreventionDifference,
           );
 
-    /*
-     * ----------------------------------------------------------
-     * FINAL CONFIDENCE
-     * ----------------------------------------------------------
-     *
-     * MATCH_RESULT uses one shared confidence for the complete
-     * 1X2 distribution.
-     */
     const confidence = this.calculateFinalConfidence(
       input,
       effectiveEvidence,
@@ -170,46 +187,27 @@ export class FinalDecisionEngine {
       calibrationReliability: effectiveEvidence.calibrationReliability,
     });
 
-    /*
-     * ----------------------------------------------------------
-     * DECISION SCORE
-     * ----------------------------------------------------------
-     *
-     * Comparison evidence participates in the descriptive score,
-     * but the score does not independently decide acceptance.
-     */
     const score = DecisionScoreUtil.calculate({
       probability,
       confidence,
-      safetyScore,
+      safetyScore: effectiveEvidence.safetyScore,
       modelAgreement: effectiveEvidence.modelAgreement,
       dataQuality: effectiveEvidence.dataQuality,
       calibrationReliability: effectiveEvidence.calibrationReliability,
 
       comparisonConfidence,
-
       directionalDifference,
-
       goalProductionDifference,
-
       goalPreventionDifference,
-
       evidenceCoherence,
+
+      relativeEvidenceAdvantage,
+      marketSpecificity,
     });
 
-    /*
-     * ----------------------------------------------------------
-     * REJECTION
-     * ----------------------------------------------------------
-     *
-     * Low probability, low confidence, high risk or modest data
-     * quality are not rejection conditions.
-     *
-     * Rejection is reserved for genuine evidence incoherence.
-     */
     let rejectionReason: string | null = null;
 
-    if (evidenceCoherence < 0.35) {
+    if (input.hardContradiction === true) {
       rejectionReason = 'PREDICTION_CONTRADICTS_UNDERLYING_EVIDENCE';
     } else if (
       isMatchResult &&
@@ -228,15 +226,41 @@ export class FinalDecisionEngine {
 
       probability,
 
+      ...(isMatchResult && input.matchResultProbabilities
+        ? {
+            matchResultProbabilities: this.normalize1X2Probabilities(
+              input.matchResultProbabilities,
+            ),
+          }
+        : {}),
+
       confidence,
 
-      safetyScore,
+      safetyScore: effectiveEvidence.safetyScore,
 
       modelAgreement: effectiveEvidence.modelAgreement,
 
       dataQuality: effectiveEvidence.dataQuality,
 
       calibrationReliability: effectiveEvidence.calibrationReliability,
+
+      comparisonConfidence,
+
+      directionalDifference,
+
+      goalProductionDifference,
+
+      goalPreventionDifference,
+
+      evidenceCoherence,
+
+      relativeEvidenceAdvantage,
+
+      marketSpecificity,
+
+      modelSignals: this.normalizeModelRecord(input.modelSignals),
+
+      modelOutputs: this.normalizeModelRecord(input.modelOutputs),
 
       risk,
 
@@ -283,15 +307,7 @@ export class FinalDecisionEngine {
       );
     }
 
-    /*
-     * ConfidenceEngine remains the primary confidence source for
-     * all non-1X2 markets.
-     */
-    const base = this.clamp(input.confidence, 0, 98);
-
-    const coherenceMultiplier = this.getCoherenceMultiplier(evidenceCoherence);
-
-    return this.clamp(base * coherenceMultiplier, 0, 98);
+    return this.clamp(input.confidence, 0, 98);
   }
 
   private calculate1X2Confidence(
@@ -319,10 +335,6 @@ export class FinalDecisionEngine {
 
     const margin = Math.max(maximum - secondHighest, 0);
 
-    /*
-     * Distribution shape contributes to confidence but cannot
-     * override weak underlying evidence.
-     */
     const distributionStrength = this.clamp(0.45 + margin * 1.8, 0.45, 1);
 
     const agreement = this.clamp(evidence.modelAgreement, 0, 1);
@@ -361,6 +373,7 @@ export class FinalDecisionEngine {
       };
 
       modelSignals?: Record<string, unknown>;
+
       modelOutputs?: Record<string, unknown>;
     },
     modelAgreement: number,
@@ -394,42 +407,192 @@ export class FinalDecisionEngine {
       deviations.push(Math.abs(selectedProbability - comparisonProbability));
     }
 
-    const modelPathCoherence =
+    const averageDeviation =
       deviations.length > 0
-        ? this.clamp(
-            1 -
-              (deviations.reduce((sum, value) => sum + value, 0) /
-                deviations.length) *
-                4,
-            0,
-            1,
-          )
-        : modelAgreement;
+        ? deviations.reduce((sum, value) => sum + value, 0) / deviations.length
+        : 0;
 
-    const directionalEvidence = this.clamp(
-      Math.abs(directionalDifference) * comparisonConfidence,
-      0,
-      1,
-    );
+    const modelPathCoherence =
+      this.calculateDeviationCoherence(averageDeviation);
 
-    const goalEvidence = this.clamp(
-      ((Math.abs(goalProductionDifference) +
-        Math.abs(goalPreventionDifference)) /
-        2) *
-        comparisonConfidence,
-      0,
-      1,
+    const selectionAlignment = this.calculateSelectionAlignment(
+      input.market,
+      input.selection,
+      directionalDifference,
+      goalProductionDifference,
+      goalPreventionDifference,
+      comparisonConfidence,
     );
 
     return this.clamp(
-      modelPathCoherence * 0.45 +
-        comparisonConfidence * 0.25 +
-        modelAgreement * 0.15 +
-        directionalEvidence * 0.075 +
-        goalEvidence * 0.075,
+      modelPathCoherence * 0.4 +
+        modelAgreement * 0.2 +
+        comparisonConfidence * 0.15 +
+        selectionAlignment * 0.25,
       0,
       1,
     );
+  }
+
+  private calculateDeviationCoherence(deviation: number): number {
+    if (!Number.isFinite(deviation)) {
+      return 0.5;
+    }
+
+    if (deviation <= 0.08) {
+      return 1;
+    }
+
+    if (deviation >= 0.35) {
+      return 0;
+    }
+
+    return this.clamp(1 - (deviation - 0.08) / 0.27, 0, 1);
+  }
+
+  private calculateSelectionAlignment(
+    market: PredictionMarket,
+    selection: string,
+    directionalDifference: number,
+    goalProductionDifference: number,
+    goalPreventionDifference: number,
+    comparisonConfidence: number,
+  ): number {
+    if (comparisonConfidence <= 0) {
+      return 0.5;
+    }
+
+    const upper = selection.trim().toUpperCase();
+
+    const directional = this.clamp(directionalDifference, -1, 1);
+
+    const production = this.clamp(goalProductionDifference, -1, 1);
+
+    const prevention = this.clamp(goalPreventionDifference, -1, 1);
+
+    const environment = this.clamp(production - prevention, -1, 1);
+
+    if (market === PredictionMarket.MATCH_RESULT) {
+      if (upper === 'HOME' || upper === '1' || upper === 'HOME_WIN') {
+        return this.clamp(
+          (0.5 + directional * 0.5) * comparisonConfidence,
+          0,
+          1,
+        );
+      }
+
+      if (upper === 'AWAY' || upper === '2' || upper === 'AWAY_WIN') {
+        return this.clamp(
+          (0.5 - directional * 0.5) * comparisonConfidence,
+          0,
+          1,
+        );
+      }
+
+      if (upper === 'DRAW' || upper === 'X') {
+        return this.clamp(
+          (1 - Math.abs(directional)) * comparisonConfidence,
+          0,
+          1,
+        );
+      }
+    }
+
+    if (market === PredictionMarket.BOTH_TEAMS_TO_SCORE) {
+      const positiveSignal = this.clamp(0.5 + environment * 0.5, 0, 1);
+
+      if (upper === 'YES' || upper === 'BTTS_YES' || upper === '1') {
+        return this.clamp(positiveSignal * comparisonConfidence, 0, 1);
+      }
+
+      if (upper === 'NO' || upper === 'BTTS_NO' || upper === '0') {
+        return this.clamp((1 - positiveSignal) * comparisonConfidence, 0, 1);
+      }
+    }
+
+    if (
+      market === PredictionMarket.OVER_UNDER ||
+      market === PredictionMarket.FIRST_HALF_GOALS ||
+      market === PredictionMarket.SECOND_HALF_GOALS
+    ) {
+      const positiveSignal = this.clamp(0.5 + environment * 0.5, 0, 1);
+
+      if (upper.startsWith('OVER_')) {
+        return this.clamp(positiveSignal * comparisonConfidence, 0, 1);
+      }
+
+      if (upper.startsWith('UNDER_')) {
+        return this.clamp((1 - positiveSignal) * comparisonConfidence, 0, 1);
+      }
+    }
+
+    if (market === PredictionMarket.TEAM_TOTAL_GOALS) {
+      const isHome = upper.startsWith('HOME_');
+      const isAway = upper.startsWith('AWAY_');
+
+      if (!isHome && !isAway) {
+        return 0.5;
+      }
+
+      const teamDirection = isHome ? production : -prevention;
+
+      const positiveSignal = this.clamp(0.5 + teamDirection * 0.5, 0, 1);
+
+      if (upper.includes('_OVER_')) {
+        return this.clamp(positiveSignal * comparisonConfidence, 0, 1);
+      }
+
+      if (upper.includes('_UNDER_')) {
+        return this.clamp((1 - positiveSignal) * comparisonConfidence, 0, 1);
+      }
+    }
+
+    /*
+     * GOAL_RANGE is a mutually-exclusive distribution.
+     *
+     * Comparison signals do not contain enough information to
+     * safely classify a specific range, so neutral evidence is
+     * returned rather than pretending that broad directional
+     * evidence supports an exact range.
+     */
+    if (market === PredictionMarket.GOAL_RANGE) {
+      return 0.5;
+    }
+
+    if (
+      market === PredictionMarket.ASIAN_HANDICAP ||
+      market === PredictionMarket.EUROPEAN_HANDICAP
+    ) {
+      const homeSelection = upper.startsWith('HOME_');
+
+      const awaySelection = upper.startsWith('AWAY_');
+
+      if (homeSelection) {
+        return this.clamp(
+          (0.5 + directional * 0.5) * comparisonConfidence,
+          0,
+          1,
+        );
+      }
+
+      if (awaySelection) {
+        return this.clamp(
+          (0.5 - directional * 0.5) * comparisonConfidence,
+          0,
+          1,
+        );
+      }
+
+      if (upper.startsWith('DRAW_')) {
+        return this.clamp(
+          (1 - Math.abs(directional)) * comparisonConfidence,
+          0,
+          1,
+        );
+      }
+    }
+
+    return 0.5;
   }
 
   private matchResultDistributionIsCoherent(
@@ -457,9 +620,7 @@ export class FinalDecisionEngine {
 
     const modelDistribution = this.normalize1X2Probabilities({
       home: modelHome ?? normalized.home,
-
       draw: modelDraw ?? normalized.draw,
-
       away: modelAway ?? normalized.away,
     });
 
@@ -470,30 +631,6 @@ export class FinalDecisionEngine {
       3;
 
     return distance <= 0.15;
-  }
-
-  private getCoherenceMultiplier(evidenceCoherence: number): number {
-    if (evidenceCoherence >= 0.85) {
-      return 1;
-    }
-
-    if (evidenceCoherence >= 0.75) {
-      return 0.98;
-    }
-
-    if (evidenceCoherence >= 0.65) {
-      return 0.95;
-    }
-
-    if (evidenceCoherence >= 0.55) {
-      return 0.91;
-    }
-
-    if (evidenceCoherence >= 0.45) {
-      return 0.85;
-    }
-
-    return 0.75;
   }
 
   private normalize1X2Probabilities(probabilities: {
@@ -568,6 +705,24 @@ export class FinalDecisionEngine {
     }
 
     return null;
+  }
+
+  private normalizeModelRecord(
+    input?: Record<string, unknown>,
+  ): Record<string, number> | undefined {
+    if (!input) {
+      return undefined;
+    }
+
+    const result: Record<string, number> = {};
+
+    for (const [key, value] of Object.entries(input)) {
+      if (typeof value === 'number' && Number.isFinite(value)) {
+        result[key] = value;
+      }
+    }
+
+    return Object.keys(result).length > 0 ? result : undefined;
   }
 
   private clamp(value: number, minimum: number, maximum: number): number {

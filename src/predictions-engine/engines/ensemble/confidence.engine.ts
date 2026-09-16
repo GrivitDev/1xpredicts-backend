@@ -106,8 +106,13 @@ export class ConfidenceEngine {
      * PROBABILITY SIGNAL
      * ----------------------------------------------------------
      *
-     * Probability contributes to confidence but cannot by itself
-     * create high confidence.
+     * Probability is an outcome estimate.
+     *
+     * It must NOT dominate confidence merely because the
+     * selection is statistically easier to satisfy.
+     *
+     * Confidence therefore derives primarily from evidence
+     * quality, agreement, comparison support and reliability.
      */
     const probabilityStrength = this.calculateProbabilityStrength(probability);
 
@@ -128,22 +133,28 @@ export class ConfidenceEngine {
      * ----------------------------------------------------------
      * EVIDENCE SCORE
      * ----------------------------------------------------------
+     *
+     * Confidence is primarily evidence-driven.
+     *
+     * Probability contributes only 12% to prevent the engine
+     * from turning naturally high-probability markets into
+     * automatically high-confidence recommendations.
      */
     const evidenceScore =
-      modelReliability * 0.18 +
-      agreement * 0.18 +
-      dataQuality * 0.16 +
-      comparisonEvidence * 0.24 +
-      safety * 0.1 +
-      sampleReliability * 0.09 +
-      this.calibrationSupport(calibrationReliability) * 0.05;
+      modelReliability * 0.2 +
+      agreement * 0.2 +
+      dataQuality * 0.17 +
+      comparisonEvidence * 0.25 +
+      safety * 0.08 +
+      sampleReliability * 0.06 +
+      this.calibrationSupport(calibrationReliability) * 0.04;
 
     /*
      * ----------------------------------------------------------
      * PROBABILITY / EVIDENCE BLEND
      * ----------------------------------------------------------
      */
-    let confidence = evidenceScore * 70 + probabilityStrength * 30;
+    let confidence = evidenceScore * 88 + probabilityStrength * 12;
 
     confidence = this.applyComparisonAdjustment(
       confidence,
@@ -161,7 +172,6 @@ export class ConfidenceEngine {
     confidence = this.applyProbabilityCoherence(
       confidence,
       probability,
-      agreement,
       evidenceScore,
       evidenceCoherence,
     );
@@ -260,8 +270,10 @@ export class ConfidenceEngine {
 
   private calculateProbabilityStrength(probability: number): number {
     /*
-     * Probabilities below 50% do not receive positive
-     * probability-strength credit.
+     * Probability is informative but not a confidence generator.
+     *
+     * A 90% market does not receive 90% confidence merely because
+     * its probability is high.
      */
     const strength = (probability - 0.5) / 0.5;
 
@@ -395,6 +407,10 @@ export class ConfidenceEngine {
       multiplier = 0.76;
     }
 
+    /*
+     * High probability with weak comparison evidence is not
+     * automatically trusted.
+     */
     if (probability >= 0.8 && comparisonConfidence < 0.5) {
       multiplier *= 0.9;
     }
@@ -441,15 +457,15 @@ export class ConfidenceEngine {
   private applyProbabilityCoherence(
     confidence: number,
     probability: number,
-    agreement: number,
     evidenceScore: number,
     evidenceCoherence: number,
   ): number {
     let result = confidence;
 
     /*
-     * Probability establishes the maximum confidence band only
-     * after evidence has been considered.
+     * Probability limits the maximum confidence band.
+     *
+     * It does NOT create a minimum confidence floor.
      */
     if (probability < 0.55) {
       result = Math.min(result, 55);
@@ -469,44 +485,18 @@ export class ConfidenceEngine {
       result = Math.min(result, 94);
     }
 
-    if (
-      probability >= 0.8 &&
-      evidenceScore >= 0.5 &&
-      evidenceCoherence >= 0.55
-    ) {
-      result = Math.max(result, 62);
-    }
-
-    if (
-      probability >= 0.85 &&
-      evidenceScore >= 0.55 &&
-      agreement >= 0.55 &&
-      evidenceCoherence >= 0.6
-    ) {
-      result = Math.max(result, 68);
-    }
-
-    if (
-      probability >= 0.9 &&
-      evidenceScore >= 0.6 &&
-      agreement >= 0.6 &&
-      evidenceCoherence >= 0.65
-    ) {
-      result = Math.max(result, 74);
-    }
-
-    if (
-      probability >= 0.95 &&
-      evidenceScore >= 0.7 &&
-      agreement >= 0.75 &&
-      evidenceCoherence >= 0.75
-    ) {
-      result = Math.max(result, 82);
-    }
+    /*
+     * Removed the previous probability-based confidence floors.
+     *
+     * A 95% probability with weak evidence must remain capable
+     * of producing low/moderate confidence.
+     *
+     * A strong probability + strong evidence naturally earns
+     * higher confidence through the evidence score itself.
+     */
 
     /*
-     * Contradictory evidence limits confidence even when the
-     * raw probability is high.
+     * High probability with weak coherence is explicitly capped.
      */
     if (probability >= 0.8 && evidenceCoherence < 0.45) {
       result = Math.min(result, 62);
@@ -514,6 +504,18 @@ export class ConfidenceEngine {
 
     if (probability >= 0.9 && evidenceCoherence < 0.55) {
       result = Math.min(result, 70);
+    }
+
+    /*
+     * High probability with weak overall evidence cannot become
+     * an automatically high-confidence selection.
+     */
+    if (probability >= 0.9 && evidenceScore < 0.55) {
+      result = Math.min(result, 74);
+    }
+
+    if (probability >= 0.95 && evidenceScore < 0.65) {
+      result = Math.min(result, 80);
     }
 
     return result;

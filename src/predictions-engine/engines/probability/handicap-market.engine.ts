@@ -5,7 +5,9 @@ import { Injectable } from '@nestjs/common';
 import { PredictionMarket } from '../../enums/prediction-market.enum';
 
 import { MarketModel } from '../../interfaces/market-model.interface';
+
 import { MarketModelInput } from '../../interfaces/market-model-input.interface';
+
 import { ProbabilityModelResult } from '../../interfaces/probability-result.interface';
 
 import { RawGoalModelUtil } from './raw-goal-model.util';
@@ -26,6 +28,12 @@ export class HandicapMarketEngine implements MarketModel {
       input.market === PredictionMarket.ASIAN_HANDICAP
         ? this.calculateAsianHandicap(input.selection, model)
         : this.calculateEuropeanHandicap(input.selection, model);
+
+    const comparisonProbability = this.calculateComparisonProbability(
+      input,
+      input.selection,
+      input.market,
+    );
 
     const probability = this.reconcileWithComparison(
       input,
@@ -50,34 +58,24 @@ export class HandicapMarketEngine implements MarketModel {
     return {
       market: input.market,
       selection: input.selection,
-
       probability: outcome.probability,
 
-      supportingProbability: outcome.probability,
+      // Keep this as the structural / raw matrix probability.
+      // The reconciled probability remains the final probability above.
+      supportingProbability: this.clamp(matrixOutcome.probability),
 
       sampleSize,
-
       dataQuality,
-
       modelReliability: this.calculateReliability(sampleSize, dataQuality),
-
       modelName: 'raw-handicap-model',
-
-      modelVersion: 'raw-handicap-v3',
+      modelVersion: 'raw-handicap-v4',
 
       modelOutputs: {
         winProbability: outcome.winProbability,
         pushProbability: outcome.pushProbability,
         lossProbability: outcome.lossProbability,
-
         matrixProbability: matrixOutcome.probability,
-
-        comparisonProbability: this.calculateComparisonProbability(
-          input,
-          input.selection,
-          input.market,
-        ),
-
+        comparisonProbability,
         directionalDifference:
           input.features.comparison?.directionalDifference ?? 0,
       },
@@ -86,29 +84,19 @@ export class HandicapMarketEngine implements MarketModel {
         winProbability: outcome.winProbability,
         pushProbability: outcome.pushProbability,
         lossProbability: outcome.lossProbability,
-
         matrixProbability: matrixOutcome.probability,
-
-        comparisonProbability: this.calculateComparisonProbability(
-          input,
-          input.selection,
-          input.market,
-        ),
-
+        comparisonProbability,
         comparisonConfidence: input.features.comparison?.confidence ?? 0,
-
         directionalDifference:
           input.features.comparison?.directionalDifference ?? 0,
 
         goalProductionHome:
           input.features.comparison?.goalProduction?.home ?? 0,
-
         goalProductionAway:
           input.features.comparison?.goalProduction?.away ?? 0,
 
         goalPreventionHome:
           input.features.comparison?.goalPrevention?.home ?? 0,
-
         goalPreventionAway:
           input.features.comparison?.goalPrevention?.away ?? 0,
       },
@@ -150,12 +138,16 @@ export class HandicapMarketEngine implements MarketModel {
       ) {
         const probability = model.matrix[homeGoals][awayGoals] ?? 0;
 
+        if (probability <= 0) {
+          continue;
+        }
+
         const margin = homeGoals - awayGoals;
 
         const adjusted =
           parsed.outcome === 'HOME'
             ? margin + parsed.line
-            : margin - parsed.line;
+            : -margin + parsed.line;
 
         if (adjusted > 0) {
           win += probability;
@@ -181,7 +173,6 @@ export class HandicapMarketEngine implements MarketModel {
     lossProbability: number;
   } {
     const lowerLine = Math.floor(line * 2) / 2;
-
     const upperLine = Math.ceil(line * 2) / 2;
 
     const first = this.calculateAsianHandicapWholeOrHalf(
@@ -198,12 +189,15 @@ export class HandicapMarketEngine implements MarketModel {
 
     return {
       probability: this.clamp((first.probability + second.probability) / 2),
+
       winProbability: this.clamp(
         (first.winProbability + second.winProbability) / 2,
       ),
+
       pushProbability: this.clamp(
         (first.pushProbability + second.pushProbability) / 2,
       ),
+
       lossProbability: this.clamp(
         (first.lossProbability + second.lossProbability) / 2,
       ),
@@ -232,9 +226,13 @@ export class HandicapMarketEngine implements MarketModel {
       ) {
         const probability = model.matrix[homeGoals][awayGoals] ?? 0;
 
+        if (probability <= 0) {
+          continue;
+        }
+
         const margin = homeGoals - awayGoals;
 
-        const adjusted = outcome === 'HOME' ? margin + line : margin - line;
+        const adjusted = outcome === 'HOME' ? margin + line : -margin + line;
 
         if (adjusted > 0) {
           win += probability;
@@ -276,7 +274,21 @@ export class HandicapMarketEngine implements MarketModel {
       ) {
         const probability = model.matrix[homeGoals][awayGoals] ?? 0;
 
-        const difference = homeGoals + parsed.line - awayGoals;
+        if (probability <= 0) {
+          continue;
+        }
+
+        const margin = homeGoals - awayGoals;
+
+        let difference: number;
+
+        if (parsed.outcome === 'HOME') {
+          difference = margin + parsed.line;
+        } else if (parsed.outcome === 'AWAY') {
+          difference = -margin + parsed.line;
+        } else {
+          difference = margin + parsed.line;
+        }
 
         if (difference > 0) {
           home += probability;
@@ -437,7 +449,9 @@ export class HandicapMarketEngine implements MarketModel {
 
     const target = this.clamp(reconciledProbability);
 
-    const decisiveAdjustment = target - originalWin / originalDecisive;
+    const originalWinRate = originalWin / originalDecisive;
+
+    const decisiveAdjustment = target - originalWinRate;
 
     const win = this.clamp(originalWin + decisiveAdjustment * originalDecisive);
 
@@ -449,9 +463,7 @@ export class HandicapMarketEngine implements MarketModel {
       probability: this.clamp(win / Math.max(win + loss, Number.EPSILON)),
 
       winProbability: win,
-
       pushProbability: originalPush,
-
       lossProbability: loss,
     };
   }
@@ -467,9 +479,7 @@ export class HandicapMarketEngine implements MarketModel {
     lossProbability: number;
   } {
     const normalizedWin = this.clamp(win);
-
     const normalizedPush = this.clamp(push);
-
     const normalizedLoss = this.clamp(loss);
 
     const decisive = normalizedWin + normalizedLoss;
@@ -478,9 +488,7 @@ export class HandicapMarketEngine implements MarketModel {
       probability: decisive > 0 ? this.clamp(normalizedWin / decisive) : 0,
 
       winProbability: normalizedWin,
-
       pushProbability: normalizedPush,
-
       lossProbability: normalizedLoss,
     };
   }

@@ -60,6 +60,18 @@ export class ResultMarketEngine implements MarketModel {
       1,
     );
 
+    const goalProductionDifference = this.clamp(
+      input.features.comparison?.goalProduction?.difference ?? 0,
+      -1,
+      1,
+    );
+
+    const goalPreventionDifference = this.clamp(
+      input.features.comparison?.goalPrevention?.difference ?? 0,
+      -1,
+      1,
+    );
+
     const modelReliability = this.calculateReliability(sampleSize, dataQuality);
 
     return {
@@ -114,17 +126,9 @@ export class ResultMarketEngine implements MarketModel {
 
         drawEvidence: this.calculateDrawEvidence(input).value,
 
-        goalProductionDifference: this.clamp(
-          input.features.comparison?.goalProduction?.difference ?? 0,
-          -1,
-          1,
-        ),
+        goalProductionDifference,
 
-        goalPreventionDifference: this.clamp(
-          input.features.comparison?.goalPrevention?.difference ?? 0,
-          -1,
-          1,
-        ),
+        goalPreventionDifference,
       },
     };
   }
@@ -136,6 +140,10 @@ export class ResultMarketEngine implements MarketModel {
   } {
     const comparison = input.features.comparison;
 
+    /*
+     * Without comparison evidence there is no independent
+     * comparison distribution to add.
+     */
     if (!comparison) {
       return {
         home: 1 / 3,
@@ -152,49 +160,124 @@ export class ResultMarketEngine implements MarketModel {
 
     const comparisonConfidence = this.clamp(comparison.confidence ?? 0, 0, 1);
 
-    /*
-     * Direction controls HOME vs AWAY.
-     *
-     * Draw is independent and must come from actual draw evidence.
-     * Similar team strength is not itself treated as proof of a draw.
-     */
-    const drawEvidence = this.calculateDrawEvidence(input);
+    const goalProductionDifference = this.clamp(
+      comparison.goalProduction?.difference ?? 0,
+      -1,
+      1,
+    );
 
-    const directionalStrength = Math.abs(directionalDifference);
-
-    const directionalSignal = this.clamp(
-      directionalStrength * comparisonConfidence,
-      0,
+    const goalPreventionDifference = this.clamp(
+      comparison.goalPrevention?.difference ?? 0,
+      -1,
       1,
     );
 
     /*
-     * Draw share is bounded so the comparison model can express
-     * real draw evidence without allowing it to dominate the
-     * distribution merely because the teams are close.
+     * ----------------------------------------------------------
+     * DRAW EVIDENCE
+     * ----------------------------------------------------------
+     *
+     * Draw evidence must come from actual draw history.
+     * Similar team strength may modify the result slightly, but
+     * similarity itself does not create a draw prediction.
      */
-    const drawWeight = drawEvidence.available
-      ? this.clamp(
-          drawEvidence.value * (0.35 + comparisonConfidence * 0.25),
-          0,
-          0.45,
-        )
-      : 0.25;
-
-    const nonDrawWeight = 1 - drawWeight;
-
-    const homeSignal = this.clamp(0.5 + directionalDifference * 0.5, 0, 1);
+    const drawEvidence = this.calculateDrawEvidence(input);
 
     /*
-     * When directional evidence is weak, HOME/AWAY remain close.
-     * They are not allowed to collapse simply because comparison
-     * confidence exists.
+     * ----------------------------------------------------------
+     * GOAL / RESULT DIRECTION
+     * ----------------------------------------------------------
+     *
+     * Directional difference is the primary result-direction
+     * signal.
+     *
+     * Goal production and prevention provide secondary support:
+     *
+     *   stronger home production
+     *   + weaker home prevention
+     *
+     * supports HOME.
+     *
+     * The corresponding inverse supports AWAY.
      */
-    const directionalFactor = 0.5 + directionalSignal * 0.5;
+    const productionSignal = goalProductionDifference;
 
-    const homeShare = 0.5 + (homeSignal - 0.5) * directionalFactor;
+    const preventionSignal = -goalPreventionDifference;
 
-    const awayShare = 1 - homeShare;
+    const goalDirectionalSignal = this.clamp(
+      (productionSignal + preventionSignal) / 2,
+      -1,
+      1,
+    );
+
+    /*
+     * Blend result direction from the direct result signal and
+     * the actual scoring/prevention evidence.
+     */
+    const directionalEvidence = this.clamp(
+      directionalDifference * 0.6 + goalDirectionalSignal * 0.4,
+      -1,
+      1,
+    );
+
+    /*
+     * Comparison confidence controls how strongly the comparison
+     * model is allowed to move away from 50/50.
+     *
+     * No comparison-confidence inflation occurs here.
+     */
+    const directionalStrength = Math.abs(directionalEvidence);
+
+    const directionalFactor = this.clamp(
+      comparisonConfidence * (0.55 + directionalStrength * 0.45),
+      0,
+      1,
+    );
+
+    const homeSignal = this.clamp(0.5 + directionalEvidence * 0.5, 0, 1);
+
+    const homeShare = this.clamp(
+      0.5 + (homeSignal - 0.5) * directionalFactor,
+      0,
+      1,
+    );
+
+    const awayShare = this.clamp(1 - homeShare, 0, 1);
+
+    /*
+     * ----------------------------------------------------------
+     * DRAW SHARE
+     * ----------------------------------------------------------
+     *
+     * There is NO artificial 25% draw fallback.
+     *
+     * When actual draw evidence is unavailable, the comparison
+     * model keeps only a small neutral draw component instead of
+     * fabricating evidence.
+     */
+    let drawWeight = 0.2;
+
+    if (drawEvidence.available) {
+      const similarity = this.clamp(1 - Math.abs(directionalEvidence), 0, 1);
+
+      /*
+       * Actual draw evidence is dominant.
+       * Similar strength only provides a modest modifier.
+       */
+      const drawEvidenceStrength = this.clamp(
+        drawEvidence.value * 0.85 + similarity * 0.15 * comparisonConfidence,
+        0,
+        1,
+      );
+
+      drawWeight = this.clamp(
+        drawEvidenceStrength * (0.35 + comparisonConfidence * 0.25),
+        0.05,
+        0.45,
+      );
+    }
+
+    const nonDrawWeight = this.clamp(1 - drawWeight, 0, 1);
 
     const home = homeShare * nonDrawWeight;
 
@@ -289,9 +372,10 @@ export class ResultMarketEngine implements MarketModel {
     );
 
     /*
-     * The comparison layer is allowed to challenge the goal
-     * matrix more strongly when the comparison data is genuinely
-     * complete and reliable.
+     * The comparison model can challenge the goal matrix only
+     * when comparison evidence is actually present.
+     *
+     * Maximum comparison influence remains bounded at 40%.
      */
     const evidenceWeight =
       this.clamp(comparisonConfidence * 0.65 + dataQuality * 0.35, 0, 1) * 0.4;
@@ -370,7 +454,9 @@ export class ResultMarketEngine implements MarketModel {
 
     return {
       home: home / total,
+
       draw: draw / total,
+
       away: away / total,
     };
   }
@@ -425,6 +511,6 @@ export class ResultMarketEngine implements MarketModel {
       return minimum;
     }
 
-    return Math.min(Math.max(minimum, value), maximum);
+    return Math.min(Math.max(value, minimum), maximum);
   }
 }

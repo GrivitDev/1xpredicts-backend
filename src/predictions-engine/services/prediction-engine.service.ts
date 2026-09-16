@@ -55,13 +55,17 @@ export class PredictionEngineService {
      * PUBLICATION PASS
      * ----------------------------------------------------------
      *
-     * Every enabled market gets the strongest candidate produced
-     * by the market evaluator.
+     * Each enabled market is evaluated independently.
      *
-     * A prediction is published only when the final decision
-     * accepts it.
+     * At most one accepted prediction is published for each
+     * market because MarketEvaluationService returns the final
+     * selected candidate for that market.
      *
-     * Low probability alone is not a rejection condition.
+     * The service does not collapse all markets into one global
+     * prediction. The strongest prediction is calculated only as
+     * an additional summary value after publication.
+     *
+     * Low probability by itself is not a rejection condition.
      */
     const predictions: PredictionResult[] = [];
 
@@ -91,16 +95,23 @@ export class PredictionEngineService {
       }
 
       /*
-       * MATCH_RESULT is different from every other market.
-       *
-       * Public confidence belongs to the complete HOME/DRAW/AWAY
-       * distribution rather than the selected outcome alone.
+       * MATCH_RESULT confidence is confidence in the complete
+       * HOME/DRAW/AWAY distribution, not confidence in the
+       * selected outcome independently.
        */
       const predictionConfidence =
         decision.market === PredictionMarket.MATCH_RESULT &&
         typeof evaluation.matchResultConfidence === 'number'
           ? evaluation.matchResultConfidence
           : decision.confidence;
+
+      const normalizedMatchResultProbabilities =
+        decision.market === PredictionMarket.MATCH_RESULT &&
+        evaluation.matchResultProbabilities
+          ? this.normalizeMatchResultProbabilities(
+              evaluation.matchResultProbabilities,
+            )
+          : undefined;
 
       const prediction = this.buildPrediction(
         rawData,
@@ -115,7 +126,7 @@ export class PredictionEngineService {
         decision.risk,
         decision.decisionScore,
         decision.source,
-        evaluation.matchResultProbabilities,
+        normalizedMatchResultProbabilities,
         evaluation.fairOdds,
       );
 
@@ -170,7 +181,9 @@ export class PredictionEngineService {
         ...(prediction.market === PredictionMarket.MATCH_RESULT &&
         prediction.matchResultProbabilities
           ? {
-              matchResultProbabilities: prediction.matchResultProbabilities,
+              matchResultProbabilities: this.normalizeMatchResultProbabilities(
+                prediction.matchResultProbabilities,
+              ),
             }
           : {}),
       })),
@@ -298,6 +311,11 @@ export class PredictionEngineService {
 
     fairOdds?: number,
   ): PredictionResult {
+    const normalizedMatchResultProbabilities =
+      market === PredictionMarket.MATCH_RESULT && matchResultProbabilities
+        ? this.normalizeMatchResultProbabilities(matchResultProbabilities)
+        : undefined;
+
     return {
       eventId: rawData.fixture.eventId,
 
@@ -323,15 +341,9 @@ export class PredictionEngineService {
 
       probability: this.clamp(probability, 0, 1),
 
-      ...(market === PredictionMarket.MATCH_RESULT && matchResultProbabilities
+      ...(normalizedMatchResultProbabilities
         ? {
-            matchResultProbabilities: {
-              home: this.clamp(matchResultProbabilities.home, 0, 1),
-
-              draw: this.clamp(matchResultProbabilities.draw, 0, 1),
-
-              away: this.clamp(matchResultProbabilities.away, 0, 1),
-            },
+            matchResultProbabilities: normalizedMatchResultProbabilities,
           }
         : {}),
 
@@ -389,6 +401,38 @@ export class PredictionEngineService {
     selection: string,
   ): string {
     return `${market}:${selection}`;
+  }
+
+  private normalizeMatchResultProbabilities(probabilities: {
+    home: number;
+    draw: number;
+    away: number;
+  }): {
+    home: number;
+    draw: number;
+    away: number;
+  } {
+    const home = this.clamp(probabilities.home, 0, 1);
+
+    const draw = this.clamp(probabilities.draw, 0, 1);
+
+    const away = this.clamp(probabilities.away, 0, 1);
+
+    const total = home + draw + away;
+
+    if (!Number.isFinite(total) || total <= Number.EPSILON) {
+      return {
+        home: 1 / 3,
+        draw: 1 / 3,
+        away: 1 / 3,
+      };
+    }
+
+    return {
+      home: home / total,
+      draw: draw / total,
+      away: away / total,
+    };
   }
 
   private formatNumber(value: number): string {
