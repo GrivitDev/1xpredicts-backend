@@ -71,9 +71,9 @@ export class SportsCollectionService {
 
   private readonly STARTUP_FIXTURE_FORWARD_DAYS = 4;
 
-  private readonly LEAGUE_REFRESH_PAST_DAYS = 1;
+  private readonly LEAGUE_REFRESH_PAST_DAYS = 0;
 
-  private readonly LEAGUE_REFRESH_FORWARD_DAYS = 6;
+  private readonly LEAGUE_REFRESH_FORWARD_DAYS = 8;
 
   constructor(
     private readonly espnService: EspnService,
