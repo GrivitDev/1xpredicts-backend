@@ -124,36 +124,58 @@ export class EspnService {
 
     this.validateDateRange(dateFrom, dateTo);
 
-    /*
-     * ESPN's soccer scoreboard endpoint rejects the forced
-     * page=1 / limit=1000 request pattern.
-     *
-     * The scoreboard endpoint already supports the requested
-     * date range directly, so make exactly one scoreboard request
-     * for the complete range.
-     */
-    return this.request<EspnApiResponse>(
-      `${this.siteBaseUrl}/${encodeURIComponent(
-        league.trim().toLowerCase(),
-      )}/scoreboard`,
-      'scoreboard',
-      this.buildScoreboardParams(dateFrom, dateTo),
-    );
-  }
+    const normalizedLeague = league.trim().toLowerCase();
 
-  private buildScoreboardParams(
-    dateFrom?: string,
-    dateTo?: string,
-  ): Record<string, string> | undefined {
-    if (!dateFrom && !dateTo) {
-      return undefined;
+    /*
+     * ESPN's league-specific soccer scoreboard endpoint currently
+     * accepts a single calendar date but rejects date ranges.
+     *
+     * The requested collection window is therefore split into
+     * individual calendar-day requests. The caller still receives
+     * one combined EspnApiResponse covering the complete range.
+     */
+    if (dateFrom && dateTo) {
+      const events: EspnEvent[] = [];
+
+      let currentDate = dateFrom;
+
+      while (currentDate <= dateTo) {
+        const response = await this.request<EspnApiResponse>(
+          `${this.siteBaseUrl}/${encodeURIComponent(
+            normalizedLeague,
+          )}/scoreboard`,
+          'scoreboard',
+          {
+            dates: this.formatEspnDate(currentDate),
+          },
+        );
+
+        events.push(...this.extractEvents(response));
+
+        currentDate = this.addOneDay(currentDate);
+      }
+
+      return {
+        events: this.deduplicateEvents(events),
+      };
     }
 
-    const params: Record<string, string> = {};
+    if (dateFrom || dateTo) {
+      return this.request<EspnApiResponse>(
+        `${this.siteBaseUrl}/${encodeURIComponent(
+          normalizedLeague,
+        )}/scoreboard`,
+        'scoreboard',
+        {
+          dates: this.formatEspnDate(dateFrom ?? dateTo!),
+        },
+      );
+    }
 
-    this.applyDateRange(params, dateFrom, dateTo);
-
-    return params;
+    return this.request<EspnApiResponse>(
+      `${this.siteBaseUrl}/${encodeURIComponent(normalizedLeague)}/scoreboard`,
+      'scoreboard',
+    );
   }
 
   // ============================================================
@@ -414,6 +436,34 @@ export class EspnService {
     return [];
   }
 
+  private deduplicateEvents(events: EspnEvent[]): EspnEvent[] {
+    const map = new Map<string, EspnEvent>();
+
+    for (const event of events) {
+      const eventId = this.toStringValue(event.id);
+
+      if (!eventId) {
+        continue;
+      }
+
+      map.set(eventId, event);
+    }
+
+    return [...map.values()];
+  }
+
+  private formatEspnDate(value: string): string {
+    return value.replace(/-/g, '');
+  }
+
+  private addOneDay(value: string): string {
+    const date = new Date(`${value}T00:00:00.000Z`);
+
+    date.setUTCDate(date.getUTCDate() + 1);
+
+    return date.toISOString().slice(0, 10);
+  }
+
   private toPositiveInteger(value: unknown): number | undefined {
     const result = typeof value === 'number' ? value : Number(value);
 
@@ -476,32 +526,6 @@ export class EspnService {
     }
 
     return date.toISOString().slice(0, 10) === value;
-  }
-
-  /**
-   * ESPN expects:
-   *
-   * YYYYMMDD-YYYYMMDD
-   */
-  private applyDateRange(
-    params: Record<string, string>,
-    dateFrom?: string,
-    dateTo?: string,
-  ): void {
-    if (!dateFrom && !dateTo) {
-      return;
-    }
-
-    if (dateFrom && dateTo) {
-      params.dates = `${dateFrom.replace(/-/g, '')}-${dateTo.replace(
-        /-/g,
-        '',
-      )}`;
-
-      return;
-    }
-
-    params.dates = (dateFrom ?? dateTo)!.replace(/-/g, '');
   }
 
   // ============================================================
