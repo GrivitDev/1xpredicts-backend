@@ -524,14 +524,19 @@ export class EspnService {
     if (axios.isAxiosError(error)) {
       const axiosError = error as AxiosError;
 
-      this.logger.error(`ESPN request failed: ${endpoint}`, {
-        status: axiosError.response?.status,
-        data: axiosError.response?.data,
-      });
+      this.logger.error(
+        `ESPN request failed: ${endpoint} | ` +
+          `status=${axiosError.response?.status ?? 'unknown'} | ` +
+          `response=${JSON.stringify(axiosError.response?.data ?? null)} | ` +
+          `message=${axiosError.message}`,
+      );
 
       return;
     }
 
-    this.logger.error(`ESPN request failed: ${endpoint}`, error);
+    this.logger.error(
+      `ESPN request failed: ${endpoint} | ` +
+        `${error instanceof Error ? error.message : String(error)}`,
+    );
   }
 }
