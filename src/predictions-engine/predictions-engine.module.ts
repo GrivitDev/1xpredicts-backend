@@ -208,6 +208,8 @@ import { TeamComparisonService } from './services/team-comparison.service';
     ConfidenceEngine,
     FinalDecisionEngine,
 
+    MarketCoherenceService,
+
     TeamComparisonService,
   ],
 
