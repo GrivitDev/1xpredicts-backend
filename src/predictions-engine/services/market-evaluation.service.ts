@@ -11,17 +11,28 @@ import { MarketEvaluation } from '../interfaces/market-evaluation.interface';
 import { MarketModelInput } from '../interfaces/market-model-input.interface';
 import { RawPredictionFeatures } from '../interfaces/raw-prediction-features.interface';
 import { EnsembleResult } from '../interfaces/ensemble-result.interface';
-import { MarketCandidate } from '../interfaces/market-candidate.interface';
 import { ValueResult } from '../interfaces/value-result.interface';
+import { ProbabilityModelResult } from '../interfaces/probability-result.interface';
 
 import { CalibrationService } from '../calibration/calibration.service';
 
+import { RawGoalModelUtil } from '../engines/probability/raw-goal-model.util';
+import { MarketProbabilityUtil } from '../engines/probability/market-probability.util';
 import { ProbabilityEngine } from '../engines/probability/probability.engine';
+
 import { SafetyEngine } from '../engines/safety/safety.engine';
+
 import { EnsembleEngine } from '../engines/ensemble/ensemble.engine';
+
 import { FinalDecisionEngine } from '../engines/final/final-decision.engine';
+
 import { OddsCalculationService } from '../engines/value/odds-calculation.service';
 import { ValueEngine } from '../engines/value/value.engine';
+
+import {
+  MarketCoherenceResult,
+  MarketCoherenceService,
+} from './market-coherence.service';
 
 import { MarketSelectionUtil } from '../utils/market-selection.util';
 
@@ -37,6 +48,7 @@ export class MarketEvaluationService {
     private readonly safetyEngine: SafetyEngine,
     private readonly ensembleEngine: EnsembleEngine,
     private readonly finalDecisionEngine: FinalDecisionEngine,
+    private readonly marketCoherenceService: MarketCoherenceService,
   ) {}
 
   async evaluateMarket(
@@ -48,9 +60,53 @@ export class MarketEvaluationService {
     );
 
     const candidates: EnsembleResult[] = [];
+
     const valueResults: ValueResult[] = [];
 
+    /*
+     * ----------------------------------------------------------
+     * MEANINGFULNESS CONFIGURATION
+     * ----------------------------------------------------------
+     *
+     * Meaningfulness is configuration metadata.
+     *
+     * It does not represent:
+     *
+     *   - probability
+     *   - confidence
+     *   - value
+     *   - fair odds
+     *   - risk
+     *
+     * It describes how specific/actionable the configured
+     * selection is as a product prediction.
+     */
+    const meaningfulnessBySelection = new Map<
+      string,
+      PredictionMeaningfulnessTier
+    >();
+
+    /*
+     * ----------------------------------------------------------
+     * COMMON GOAL MODEL
+     * ----------------------------------------------------------
+     */
+    const goalModel = RawGoalModelUtil.calculate(features);
+
+    /*
+     * ----------------------------------------------------------
+     * MARKET CANDIDATES
+     * ----------------------------------------------------------
+     */
     for (const configuration of marketConfigurations) {
+      const configuredMeaningfulness =
+        this.getConfiguredMeaningfulness(configuration);
+
+      meaningfulnessBySelection.set(
+        this.getCandidateKey(configuration.market, configuration.selection),
+        configuredMeaningfulness,
+      );
+
       const calibration = await this.calibrationService.getCalibration(
         configuration.market,
         configuration.selection,
@@ -73,17 +129,73 @@ export class MarketEvaluationService {
         continue;
       }
 
+      /*
+       * --------------------------------------------------------
+       * COMMON STRUCTURAL MARKET PROBABILITY
+       * --------------------------------------------------------
+       */
+      const commonProbability = MarketProbabilityUtil.calculate(
+        goalModel,
+        input.market,
+        input.selection,
+      );
+
+      const rawProbability =
+        this.readProbabilitySignal(probability, 'rawCommonProbability') ??
+        commonProbability.probability;
+
       const probabilitySignals = this.getProbabilitySignals(probability);
 
+      /*
+       * --------------------------------------------------------
+       * MARKET COHERENCE
+       * --------------------------------------------------------
+       */
+      const coherence = this.marketCoherenceService.validate({
+        features,
+
+        goalModel,
+
+        market: input.market,
+
+        selection: input.selection,
+
+        probability: probability.probability,
+
+        rawProbability,
+
+        commonProbability,
+      });
+
+      const evidenceCoherence = coherence.evidenceSupport;
+
+      /*
+       * --------------------------------------------------------
+       * SAFETY
+       * --------------------------------------------------------
+       *
+       * Safety is upstream structural evidence.
+       *
+       * Confidence is deliberately not supplied here so that
+       * Safety -> Confidence -> Safety circularity is avoided.
+       */
       const safety = this.safetyEngine.calculate({
         market: input.market,
+
         selection: input.selection,
+
         probability: probability.probability,
+
         modelReliability: probability.modelReliability,
+
         dataQuality: probability.dataQuality,
+
         modelAgreement: probability.modelAgreement ?? 0,
+
         calibrationReliability: calibration?.reliabilityScore ?? 0,
+
         calibrationError: calibration?.calibrationError ?? 0,
+
         sampleSize: probability.sampleSize,
 
         comparisonConfidence: probabilitySignals.comparisonConfidence,
@@ -94,17 +206,21 @@ export class MarketEvaluationService {
 
         goalPreventionDifference: probabilitySignals.goalPreventionDifference,
 
-        ...(probabilitySignals.evidenceCoherence !== undefined
-          ? {
-              evidenceCoherence: probabilitySignals.evidenceCoherence,
-            }
-          : {}),
+        evidenceCoherence,
       });
 
+      /*
+       * --------------------------------------------------------
+       * ENSEMBLE / CONFIDENCE
+       * --------------------------------------------------------
+       */
       const ensemble = this.ensembleEngine.calculate({
         probability,
+
         safety,
+
         calibrationAdjustment: calibration?.adjustment ?? 0,
+
         calibrationReliability: calibration?.reliabilityScore ?? 0,
 
         comparisonConfidence: probabilitySignals.comparisonConfidence,
@@ -115,49 +231,64 @@ export class MarketEvaluationService {
 
         goalPreventionDifference: probabilitySignals.goalPreventionDifference,
 
-        ...(probabilitySignals.evidenceCoherence !== undefined
-          ? {
-              evidenceCoherence: probabilitySignals.evidenceCoherence,
-            }
-          : {}),
+        evidenceCoherence,
       });
 
+      /*
+       * --------------------------------------------------------
+       * PRESERVE COHERENCE / SUPPORT SIGNALS
+       * --------------------------------------------------------
+       */
       candidates.push({
         ...ensemble,
 
-        /*
-         * Preserve the signals required later for candidate-to-candidate
-         * comparison. These do not alter probability.
-         */
         modelSignals: {
           ...(ensemble.modelSignals ?? {}),
+
           comparisonConfidence: probabilitySignals.comparisonConfidence,
+
           directionalDifference: probabilitySignals.directionalDifference,
+
           goalProductionDifference: probabilitySignals.goalProductionDifference,
+
           goalPreventionDifference: probabilitySignals.goalPreventionDifference,
-          ...(probabilitySignals.evidenceCoherence !== undefined
-            ? {
-                evidenceCoherence: probabilitySignals.evidenceCoherence,
-              }
-            : {}),
+
+          evidenceCoherence,
+
+          marketCoherent: coherence.coherent ? 1 : 0,
+
+          coherenceProbabilityDifference: coherence.probabilityDifference,
+
+          comparisonDirection:
+            coherence.comparisonDirection === 'HOME'
+              ? 1
+              : coherence.comparisonDirection === 'AWAY'
+                ? -1
+                : 0,
         },
 
         modelOutputs: ensemble.modelOutputs,
       });
 
-      if (market !== PredictionMarket.MATCH_RESULT) {
-        const odds = this.oddsCalculationService.calculate(probability);
+      /*
+       * --------------------------------------------------------
+       * INTERNAL FAIR ODDS / VALUE
+       * --------------------------------------------------------
+       *
+       * ValueEngine owns the internal pricing path.
+       *
+       * No external bookmaker price is involved.
+       */
+      const value = this.valueEngine.calculate(input, probability);
 
-        const value = this.valueEngine.calculate(
-          input,
-          probability.probability,
-          odds.fairOdds,
-        );
-
-        valueResults.push(value);
-      }
+      valueResults.push(value);
     }
 
+    /*
+     * ----------------------------------------------------------
+     * MATCH RESULT
+     * ----------------------------------------------------------
+     */
     const isMatchResult = market === PredictionMarket.MATCH_RESULT;
 
     const matchResultCandidates = isMatchResult
@@ -172,92 +303,89 @@ export class MarketEvaluationService {
       ? this.calculateMatchResultEvidence(matchResultCandidates)
       : null;
 
+    const matchResultConfidence = isMatchResult
+      ? this.calculateMatchResultConfidence(matchResultCandidates)
+      : undefined;
+
     /*
      * ----------------------------------------------------------
      * FIRST-PASS DECISIONS
      * ----------------------------------------------------------
-     *
-     * Every candidate is evaluated independently first.
-     *
-     * This is important because candidate comparison must not
-     * contaminate the underlying probability.
      */
-    const preliminaryCandidates: PreliminaryCandidate[] = candidates.map(
-      (candidate) => {
-        const normalizedProbability =
-          isMatchResult && matchResultProbabilities
-            ? this.getMatchResultSelectionProbability(
-                candidate.selection,
-                matchResultProbabilities,
-              )
-            : candidate.probability;
+    const preliminaryCandidates = candidates.map((candidate) => {
+      const normalizedProbability =
+        isMatchResult && matchResultProbabilities
+          ? this.getMatchResultSelectionProbability(
+              candidate.selection,
+              matchResultProbabilities,
+            )
+          : candidate.probability;
 
-        const candidateSignals = this.getEnsembleSignals(candidate);
+      const candidateSignals = this.getEnsembleSignals(candidate);
 
-        const decision = this.finalDecisionEngine.decide({
-          market: candidate.market,
-          selection: candidate.selection,
-          probability: normalizedProbability,
-          confidence: candidate.confidence,
-          safetyScore: candidate.safetyResult.safetyScore,
-          modelAgreement: candidate.modelAgreement,
-          dataQuality: candidate.dataQuality,
-          calibrationReliability: candidate.calibrationReliability,
+      const confidence =
+        isMatchResult && matchResultConfidence !== undefined
+          ? matchResultConfidence
+          : candidate.confidence;
 
-          comparisonConfidence: candidateSignals.comparisonConfidence,
+      const decision = this.finalDecisionEngine.decide({
+        market: candidate.market,
 
-          directionalDifference: candidateSignals.directionalDifference,
+        selection: candidate.selection,
 
-          goalProductionDifference: candidateSignals.goalProductionDifference,
+        probability: normalizedProbability,
 
-          goalPreventionDifference: candidateSignals.goalPreventionDifference,
+        confidence,
 
-          modelSignals: candidate.modelSignals,
+        safetyScore: candidate.safetyResult.safetyScore,
 
-          modelOutputs: candidate.modelOutputs,
+        modelAgreement: candidate.modelAgreement,
 
-          ...(candidateSignals.evidenceCoherence !== undefined
-            ? {
-                evidenceCoherence: candidateSignals.evidenceCoherence,
-              }
-            : {}),
+        dataQuality: candidate.dataQuality,
 
-          ...(isMatchResult && matchResultProbabilities && matchResultEvidence
-            ? {
-                matchResultProbabilities,
-                matchResultEvidence,
-              }
-            : {}),
-        });
+        calibrationReliability: candidate.calibrationReliability,
 
-        return {
-          candidate,
-          decision,
-          normalizedProbability,
-          signals: candidateSignals,
-        };
-      },
-    );
+        comparisonConfidence: candidateSignals.comparisonConfidence,
+
+        directionalDifference: candidateSignals.directionalDifference,
+
+        goalProductionDifference: candidateSignals.goalProductionDifference,
+
+        goalPreventionDifference: candidateSignals.goalPreventionDifference,
+
+        modelSignals: candidate.modelSignals,
+
+        modelOutputs: candidate.modelOutputs,
+
+        evidenceCoherence: candidateSignals.evidenceCoherence,
+
+        ...(isMatchResult && matchResultProbabilities && matchResultEvidence
+          ? {
+              matchResultProbabilities,
+              matchResultEvidence,
+            }
+          : {}),
+      });
+
+      const coherence = this.getCandidateCoherence(candidate);
+
+      return {
+        candidate,
+
+        decision,
+
+        normalizedProbability,
+
+        signals: candidateSignals,
+
+        coherence,
+      };
+    });
 
     /*
      * ----------------------------------------------------------
      * RELATIVE CANDIDATE EVIDENCE
      * ----------------------------------------------------------
-     *
-     * The engine must not simply select the candidate with the
-     * largest probability.
-     *
-     * We therefore calculate:
-     *
-     *   absolute evidence
-     *   +
-     *   relative evidence against the alternatives
-     *   +
-     *   market-specificity
-     *
-     * Safety is intentionally excluded from the relative evidence
-     * calculation. Otherwise broad/easy selections could win simply
-     * because they are safer.
      */
     const relativeCandidates = preliminaryCandidates.map((candidate) => {
       const relativeEvidenceAdvantage = this.calculateRelativeEvidenceAdvantage(
@@ -265,91 +393,123 @@ export class MarketEvaluationService {
         preliminaryCandidates,
       );
 
-      const marketSpecificity = this.calculateMarketSpecificity(
-        market,
-        candidate.decision.selection,
-      );
+      const meaningfulness =
+        meaningfulnessBySelection.get(
+          this.getCandidateKey(
+            candidate.candidate.market,
+            candidate.candidate.selection,
+          ),
+        ) ?? 'STANDARD';
+
+      /*
+       * Meaningfulness is converted into the existing
+       * marketSpecificity channel.
+       *
+       * This is NOT probability and is NOT confidence.
+       */
+      const marketSpecificity = this.calculateMarketSpecificity(meaningfulness);
 
       return {
         ...candidate,
+
         relativeEvidenceAdvantage,
+
+        meaningfulness,
+
         marketSpecificity,
       };
     });
 
     /*
      * ----------------------------------------------------------
-     * FINAL DECISIONS WITH CANDIDATE COMPARISON
+     * FINAL CANDIDATE DECISIONS
      * ----------------------------------------------------------
      */
-    const selectionCandidates: MarketCandidate[] = relativeCandidates.map(
-      (candidate) => {
-        const { decision, candidate: ensemble, signals } = candidate;
+    const selectionCandidates = relativeCandidates.map((candidate) => {
+      const { decision, candidate: ensemble, signals } = candidate;
 
-        const finalDecision = this.finalDecisionEngine.decide({
-          market: decision.market,
-          selection: decision.selection,
-          probability: decision.probability,
-          confidence: decision.confidence,
-          safetyScore: decision.safetyScore,
-          modelAgreement: decision.modelAgreement,
-          dataQuality: decision.dataQuality,
-          calibrationReliability: decision.calibrationReliability,
+      const finalDecision = this.finalDecisionEngine.decide({
+        market: decision.market,
 
-          comparisonConfidence: signals.comparisonConfidence,
+        selection: decision.selection,
 
-          directionalDifference: signals.directionalDifference,
+        probability: decision.probability,
 
-          goalProductionDifference: signals.goalProductionDifference,
+        confidence: decision.confidence,
 
-          goalPreventionDifference: signals.goalPreventionDifference,
+        safetyScore: decision.safetyScore,
 
-          modelSignals: ensemble.modelSignals,
+        modelAgreement: decision.modelAgreement,
 
-          modelOutputs: ensemble.modelOutputs,
+        dataQuality: decision.dataQuality,
 
-          relativeEvidenceAdvantage: candidate.relativeEvidenceAdvantage,
+        calibrationReliability: decision.calibrationReliability,
 
-          marketSpecificity: candidate.marketSpecificity,
+        comparisonConfidence: signals.comparisonConfidence,
 
-          ...(signals.evidenceCoherence !== undefined
-            ? {
-                evidenceCoherence: signals.evidenceCoherence,
-              }
-            : {}),
+        directionalDifference: signals.directionalDifference,
 
-          ...(isMatchResult && matchResultProbabilities && matchResultEvidence
-            ? {
-                matchResultProbabilities,
-                matchResultEvidence,
-              }
-            : {}),
-        });
+        goalProductionDifference: signals.goalProductionDifference,
 
-        return {
-          market: finalDecision.market,
-          selection: finalDecision.selection,
-          probability: finalDecision.probability,
-          confidence: finalDecision.confidence,
-          safetyScore: finalDecision.safetyScore,
-          modelAgreement: finalDecision.modelAgreement,
-          dataQuality: finalDecision.dataQuality,
-          calibrationReliability: finalDecision.calibrationReliability,
-          risk: finalDecision.risk,
-          decisionScore: finalDecision.decisionScore,
-          riskScore: ensemble.safetyResult.riskScore,
-          eligible: finalDecision.accepted,
-          rejectionReason: finalDecision.rejectionReason,
-        };
-      },
-    );
+        goalPreventionDifference: signals.goalPreventionDifference,
+
+        modelSignals: ensemble.modelSignals,
+
+        modelOutputs: ensemble.modelOutputs,
+
+        relativeEvidenceAdvantage: candidate.relativeEvidenceAdvantage,
+
+        marketSpecificity: candidate.marketSpecificity,
+
+        evidenceCoherence: signals.evidenceCoherence,
+
+        ...(isMatchResult && matchResultProbabilities && matchResultEvidence
+          ? {
+              matchResultProbabilities,
+              matchResultEvidence,
+            }
+          : {}),
+      });
+
+      return {
+        market: finalDecision.market,
+
+        selection: finalDecision.selection,
+
+        probability: finalDecision.probability,
+
+        confidence: finalDecision.confidence,
+
+        safetyScore: finalDecision.safetyScore,
+
+        modelAgreement: finalDecision.modelAgreement,
+
+        dataQuality: finalDecision.dataQuality,
+
+        calibrationReliability: finalDecision.calibrationReliability,
+
+        meaningfulness: candidate.meaningfulness,
+
+        risk: finalDecision.risk,
+
+        decisionScore: finalDecision.decisionScore,
+
+        riskScore: ensemble.safetyResult.riskScore,
+
+        eligible: finalDecision.accepted,
+
+        rejectionReason: finalDecision.rejectionReason,
+      };
+    });
 
     const selected = MarketSelectionUtil.selectBest(selectionCandidates);
 
     if (!selected) {
       return {
         market,
+
         candidates,
+
         valueResults,
       };
     }
@@ -370,20 +530,36 @@ export class MarketEvaluationService {
       ? this.getEnsembleSignals(selectedCandidate)
       : {
           comparisonConfidence: 0,
+
           directionalDifference: 0,
+
           goalProductionDifference: 0,
+
           goalPreventionDifference: 0,
+
           evidenceCoherence: undefined,
         };
 
+    /*
+     * ----------------------------------------------------------
+     * FINAL SELECTED DECISION
+     * ----------------------------------------------------------
+     */
     const finalDecisionInput = {
       market: selected.market,
+
       selection: selected.selection,
+
       probability: selected.probability,
+
       confidence: selected.confidence,
+
       safetyScore: selected.safetyScore,
+
       modelAgreement: selected.modelAgreement,
+
       dataQuality: selected.dataQuality,
+
       calibrationReliability: selected.calibrationReliability,
 
       comparisonConfidence: selectedSignals.comparisonConfidence,
@@ -399,9 +575,15 @@ export class MarketEvaluationService {
       modelOutputs: selectedCandidate?.modelOutputs,
 
       relativeEvidenceAdvantage:
-        selectedRelativeCandidate?.relativeEvidenceAdvantage ?? 0,
+        selectedRelativeCandidate?.relativeEvidenceAdvantage ?? 0.5,
 
-      marketSpecificity: selectedRelativeCandidate?.marketSpecificity ?? 0.5,
+      /*
+       * Preserve the configured meaningfulness of the selected
+       * candidate rather than reverting to the old neutral value.
+       */
+      marketSpecificity:
+        selectedRelativeCandidate?.marketSpecificity ??
+        this.calculateMarketSpecificity(selected.meaningfulness),
 
       ...(selectedSignals.evidenceCoherence !== undefined
         ? {
@@ -419,59 +601,135 @@ export class MarketEvaluationService {
 
     const finalDecision = this.finalDecisionEngine.decide(finalDecisionInput);
 
+    /*
+     * ----------------------------------------------------------
+     * SELECTED FAIR ODDS
+     * ----------------------------------------------------------
+     *
+     * Fair odds are generated exclusively from our internal
+     * probability model.
+     */
     let fairOdds: number | undefined;
 
+    const selectedValue = valueResults.find(
+      (value) =>
+        value.market === selected.market &&
+        value.selection === selected.selection,
+    );
+
+    const selectedFairOdds = selectedValue?.fairOdds;
+
+    if (
+      typeof selectedFairOdds === 'number' &&
+      Number.isFinite(selectedFairOdds) &&
+      selectedFairOdds >= 1
+    ) {
+      fairOdds = this.round(selectedFairOdds, 4);
+    }
+
+    /*
+     * ----------------------------------------------------------
+     * NORMALIZED MATCH-RESULT FAIR ODDS
+     * ----------------------------------------------------------
+     *
+     * Match-result probabilities must form one coherent 1X2
+     * distribution before prices are assigned.
+     */
     if (isMatchResult && matchResultProbabilities) {
       const selectedProbability = this.getMatchResultSelectionProbability(
         selected.selection,
         matchResultProbabilities,
       );
 
-      if (selectedProbability > 0) {
+      if (Number.isFinite(selectedProbability) && selectedProbability > 0) {
         fairOdds = this.round(1 / selectedProbability, 4);
       }
 
+      /*
+       * Preserve normalized fair odds for every 1X2 candidate.
+       */
       for (const candidate of matchResultCandidates) {
         const candidateProbability = this.getMatchResultSelectionProbability(
           candidate.selection,
           matchResultProbabilities,
         );
 
-        if (candidateProbability <= 0) {
+        if (
+          !Number.isFinite(candidateProbability) ||
+          candidateProbability <= 0
+        ) {
           continue;
         }
 
-        valueResults.push({
-          market: PredictionMarket.MATCH_RESULT,
-          selection: candidate.selection,
-          fairOdds: this.round(1 / candidateProbability, 4),
-          modelProbability: candidateProbability,
-          probabilityEdge: 0,
-          valueScore: 0,
-          hasValue: false,
-        });
+        const existing = valueResults.find(
+          (value) =>
+            value.market === PredictionMarket.MATCH_RESULT &&
+            value.selection === candidate.selection,
+        );
+
+        const normalizedFairOdds = this.round(1 / candidateProbability, 4);
+
+        if (existing) {
+          existing.fairOdds = normalizedFairOdds;
+
+          existing.modelProbability = candidateProbability;
+        } else {
+          valueResults.push({
+            market: PredictionMarket.MATCH_RESULT,
+
+            selection: candidate.selection,
+
+            fairOdds: normalizedFairOdds,
+
+            modelProbability: candidateProbability,
+
+            pricingMethod: 'PROBABILITY',
+
+            hasFairOdds:
+              Number.isFinite(normalizedFairOdds) && normalizedFairOdds >= 1,
+          });
+        }
       }
-    } else {
-      const selectedProbabilityResult = selectedCandidate?.probabilityResult;
+    }
+
+    /*
+     * ----------------------------------------------------------
+     * NON-MATCH FAIR ODDS FALLBACK
+     * ----------------------------------------------------------
+     */
+    if (!isMatchResult && fairOdds === undefined && selectedCandidate) {
+      const selectedProbabilityResult = selectedCandidate.probabilityResult;
 
       if (selectedProbabilityResult) {
         const odds = this.oddsCalculationService.calculate(
           selectedProbabilityResult,
         );
 
-        fairOdds = odds.fairOdds ?? undefined;
+        const calculatedFairOdds = odds.fairOdds;
+
+        if (
+          typeof calculatedFairOdds === 'number' &&
+          Number.isFinite(calculatedFairOdds) &&
+          calculatedFairOdds >= 1
+        ) {
+          fairOdds = this.round(calculatedFairOdds, 4);
+        }
       }
     }
 
     return {
       market,
+
       candidates,
+
       valueResults,
+
       decision: finalDecision,
 
       ...(isMatchResult && matchResultProbabilities
         ? {
             matchResultProbabilities,
+
             matchResultConfidence: finalDecision.confidence,
           }
         : {}),
@@ -507,228 +765,101 @@ export class MarketEvaluationService {
 
     const difference = candidateEvidence - alternativeEvidence;
 
-    /*
-     * 0.5 means there is no meaningful evidence advantage.
-     *
-     * The result approaches 1 only when this candidate has a
-     * genuine evidence advantage over its strongest alternative.
-     *
-     * A high probability alone cannot generate this value.
-     */
     return this.clamp(0.5 + difference * 1.5, 0, 1);
   }
 
   private calculateCandidateEvidenceStrength(
     candidate: PreliminaryCandidate,
   ): number {
-    const signals = candidate.signals;
+    if (candidate.coherence) {
+      return this.clamp(candidate.coherence.evidenceSupport, 0, 1);
+    }
 
-    const comparisonConfidence = this.clamp(signals.comparisonConfidence, 0, 1);
-
-    const directionalEvidence = this.clamp(
-      Math.abs(signals.directionalDifference),
-      0,
-      1,
-    );
-
-    const productionEvidence = this.clamp(
-      Math.abs(signals.goalProductionDifference),
-      0,
-      1,
-    );
-
-    const preventionEvidence = this.clamp(
-      Math.abs(signals.goalPreventionDifference),
-      0,
-      1,
-    );
-
-    const goalEvidence = this.clamp(
-      (productionEvidence + preventionEvidence) / 2,
-      0,
-      1,
-    );
-
-    const coherence = this.clamp(
-      signals.evidenceCoherence ?? candidate.candidate.modelAgreement,
-      0,
-      1,
-    );
-
-    const agreement = this.clamp(candidate.candidate.modelAgreement, 0, 1);
-
-    const dataQuality = this.clamp(candidate.candidate.dataQuality / 100, 0, 1);
-
-    /*
-     * Safety is deliberately excluded.
-     *
-     * This measures predictive evidence, not ease of settlement.
-     */
-    return this.clamp(
-      comparisonConfidence * 0.28 +
-        directionalEvidence * 0.16 +
-        goalEvidence * 0.16 +
-        coherence * 0.22 +
-        agreement * 0.1 +
-        dataQuality * 0.08,
-      0,
-      1,
-    );
+    return 0.5;
   }
 
   private calculateMarketSpecificity(
-    market: PredictionMarket,
-    selection: string,
+    meaningfulness: PredictionMeaningfulnessTier,
   ): number {
-    const upper = selection.trim().toUpperCase();
+    switch (meaningfulness) {
+      case 'SPECIFIC':
+        return 0.75;
 
-    /*
-     * Broad lines are deliberately prevented from receiving an
-     * automatic specificity advantage simply because they are
-     * easier to satisfy.
-     *
-     * This does NOT change probability.
-     */
-    if (market === PredictionMarket.OVER_UNDER) {
-      if (upper === 'OVER_1.5' || upper === 'UNDER_1.5') {
-        return 0.7;
-      }
+      case 'STANDARD':
+        return 0.5;
 
-      if (upper === 'OVER_2.5' || upper === 'UNDER_2.5') {
-        return 0.82;
-      }
+      case 'BROAD':
+        return 0.25;
 
-      if (upper === 'OVER_3.5' || upper === 'UNDER_3.5') {
-        return 0.9;
-      }
-
-      if (upper === 'OVER_4.5' || upper === 'UNDER_4.5') {
-        return 0.78;
-      }
+      default:
+        return 0.5;
     }
+  }
+
+  private getConfiguredMeaningfulness(
+    configuration: ConfiguredPredictionMarket,
+  ): PredictionMeaningfulnessTier {
+    const meaningfulness = configuration.meaningfulness;
 
     if (
-      market === PredictionMarket.FIRST_HALF_GOALS ||
-      market === PredictionMarket.SECOND_HALF_GOALS
+      meaningfulness === 'BROAD' ||
+      meaningfulness === 'STANDARD' ||
+      meaningfulness === 'SPECIFIC'
     ) {
-      if (upper === 'OVER_1.5' || upper === 'UNDER_1.5') {
-        return 0.72;
-      }
-
-      if (upper === 'OVER_2.5' || upper === 'UNDER_2.5') {
-        return 0.86;
-      }
-
-      if (upper === 'OVER_3.5' || upper === 'UNDER_3.5') {
-        return 0.9;
-      }
-    }
-
-    if (market === PredictionMarket.TEAM_TOTAL_GOALS) {
-      if (upper.endsWith('_1.5')) {
-        return 0.75;
-      }
-
-      if (upper.endsWith('_2.5')) {
-        return 0.88;
-      }
-
-      if (upper.endsWith('_3.5')) {
-        return 0.92;
-      }
-    }
-
-    if (market === PredictionMarket.GOAL_RANGE) {
-      if (upper === '0-1') {
-        return 0.78;
-      }
-
-      if (upper === '2') {
-        return 0.9;
-      }
-
-      if (upper === '3-4') {
-        return 0.88;
-      }
-
-      if (upper === '5+') {
-        return 0.84;
-      }
-    }
-
-    if (market === PredictionMarket.ASIAN_HANDICAP) {
-      const line = this.extractHandicapLine(upper);
-
-      if (line !== null) {
-        const magnitude = Math.abs(line);
-
-        if (magnitude >= 1.5) {
-          return 0.95;
-        }
-
-        if (magnitude >= 1) {
-          return 0.9;
-        }
-
-        if (magnitude >= 0.5) {
-          return 0.84;
-        }
-      }
-    }
-
-    if (market === PredictionMarket.EUROPEAN_HANDICAP) {
-      const line = this.extractHandicapLine(upper);
-
-      if (line !== null) {
-        if (line === 0) {
-          return 0.76;
-        }
-
-        if (Math.abs(line) === 1) {
-          return 0.88;
-        }
-      }
+      return meaningfulness;
     }
 
     /*
-     * Result markets are already inherently specific.
+     * A missing/invalid configuration should not create a
+     * false specificity advantage.
      */
-    return 1;
+    return 'STANDARD';
   }
 
-  private extractHandicapLine(selection: string): number | null {
-    const match = selection.match(/_(\\-?\d+(?:\.\d+)?)$/);
+  private getCandidateKey(market: PredictionMarket, selection: string): string {
+    return `${market}:${selection.trim().toUpperCase()}`;
+  }
 
-    if (!match) {
-      return null;
+  private readProbabilitySignal(
+    probability: ProbabilityModelResult,
+    key: string,
+  ): number | null {
+    const signal = probability.modelSignals?.[key];
+
+    if (typeof signal === 'number' && Number.isFinite(signal)) {
+      return signal;
     }
 
-    const value = Number(match[1]);
+    const output = probability.modelOutputs?.[key];
 
-    return Number.isFinite(value) ? value : null;
+    if (typeof output === 'number' && Number.isFinite(output)) {
+      return output;
+    }
+
+    return null;
   }
 
-  private getProbabilitySignals(probability: unknown): {
+  private getProbabilitySignals(probability: ProbabilityModelResult): {
     comparisonConfidence: number;
+
     directionalDifference: number;
+
     goalProductionDifference: number;
+
     goalPreventionDifference: number;
+
     evidenceCoherence?: number;
   } {
-    const result = probability as {
+    const result = probability as ProbabilityModelResult & {
       comparisonConfidence?: number;
-      directionalDifference?: number;
-      goalProductionDifference?: number;
-      goalPreventionDifference?: number;
-      evidenceCoherence?: number;
 
-      modelSignals?: {
-        comparisonConfidence?: number;
-        directionalDifference?: number;
-        goalProductionDifference?: number;
-        goalPreventionDifference?: number;
-        evidenceCoherence?: number;
-      };
+      directionalDifference?: number;
+
+      goalProductionDifference?: number;
+
+      goalPreventionDifference?: number;
+
+      evidenceCoherence?: number;
     };
 
     const signals = result.modelSignals;
@@ -775,16 +906,24 @@ export class MarketEvaluationService {
 
   private getEnsembleSignals(candidate: EnsembleResult): {
     comparisonConfidence: number;
+
     directionalDifference: number;
+
     goalProductionDifference: number;
+
     goalPreventionDifference: number;
+
     evidenceCoherence?: number;
   } {
     const result = candidate as EnsembleResult & {
       comparisonConfidence?: number;
+
       directionalDifference?: number;
+
       goalProductionDifference?: number;
+
       goalPreventionDifference?: number;
+
       evidenceCoherence?: number;
     };
 
@@ -832,6 +971,64 @@ export class MarketEvaluationService {
     };
   }
 
+  private getCandidateCoherence(
+    candidate: EnsembleResult,
+  ): MarketCoherenceResult | null {
+    const evidenceSupport = candidate.modelSignals?.evidenceCoherence;
+
+    const probabilityDifference =
+      candidate.modelSignals?.coherenceProbabilityDifference;
+
+    const marketCoherent = candidate.modelSignals?.marketCoherent;
+
+    if (
+      typeof evidenceSupport !== 'number' ||
+      !Number.isFinite(evidenceSupport)
+    ) {
+      return null;
+    }
+
+    return {
+      coherent: marketCoherent === undefined ? true : marketCoherent >= 1,
+
+      reasons: [],
+
+      probabilityDifference:
+        typeof probabilityDifference === 'number' &&
+        Number.isFinite(probabilityDifference)
+          ? probabilityDifference
+          : 0,
+
+      comparisonDirection: 'NEUTRAL',
+
+      evidenceSupport: this.clamp(evidenceSupport, 0, 1),
+
+      comparisonConfidence: this.clamp(
+        candidate.modelSignals?.comparisonConfidence ?? 0,
+        0,
+        1,
+      ),
+
+      directionalDifference: this.clamp(
+        candidate.modelSignals?.directionalDifference ?? 0,
+        -1,
+        1,
+      ),
+
+      goalProductionDifference: this.clamp(
+        candidate.modelSignals?.goalProductionDifference ?? 0,
+        -1,
+        1,
+      ),
+
+      goalPreventionDifference: this.clamp(
+        candidate.modelSignals?.goalPreventionDifference ?? 0,
+        -1,
+        1,
+      ),
+    };
+  }
+
   private getMatchResultCandidates(
     candidates: EnsembleResult[],
   ): EnsembleResult[] {
@@ -844,7 +1041,9 @@ export class MarketEvaluationService {
 
   private normalizeMatchResultProbabilities(candidates: EnsembleResult[]): {
     home: number;
+
     draw: number;
+
     away: number;
   } {
     const home =
@@ -861,17 +1060,21 @@ export class MarketEvaluationService {
 
     const total = home + draw + away;
 
-    if (total <= 0) {
+    if (total <= 0 || !Number.isFinite(total)) {
       return {
         home: 1 / 3,
+
         draw: 1 / 3,
+
         away: 1 / 3,
       };
     }
 
     return {
       home: home / total,
+
       draw: draw / total,
+
       away: away / total,
     };
   }
@@ -880,7 +1083,9 @@ export class MarketEvaluationService {
     selection: string,
     probabilities: {
       home: number;
+
       draw: number;
+
       away: number;
     },
   ): number {
@@ -901,15 +1106,21 @@ export class MarketEvaluationService {
 
   private calculateMatchResultEvidence(candidates: EnsembleResult[]): {
     modelAgreement: number;
+
     dataQuality: number;
+
     safetyScore: number;
+
     calibrationReliability: number;
   } {
     if (!candidates.length) {
       return {
         modelAgreement: 0,
+
         dataQuality: 0,
+
         safetyScore: 0,
+
         calibrationReliability: 0,
       };
     }
@@ -943,6 +1154,26 @@ export class MarketEvaluationService {
     };
   }
 
+  private calculateMatchResultConfidence(candidates: EnsembleResult[]): number {
+    if (!candidates.length) {
+      return 0;
+    }
+
+    const confidenceValues = candidates
+      .map((candidate) => this.clamp(candidate.confidence, 0, 98))
+      .filter((value) => Number.isFinite(value));
+
+    if (!confidenceValues.length) {
+      return 0;
+    }
+
+    const average =
+      confidenceValues.reduce((sum, value) => sum + value, 0) /
+      confidenceValues.length;
+
+    return this.clamp(average, 0, 98);
+  }
+
   private round(value: number, decimals: number): number {
     if (!Number.isFinite(value)) {
       return 0;
@@ -962,30 +1193,61 @@ export class MarketEvaluationService {
   }
 }
 
+type PredictionMeaningfulnessTier = 'BROAD' | 'STANDARD' | 'SPECIFIC';
+
+type ConfiguredPredictionMarket =
+  (typeof ENABLED_PREDICTION_MARKETS)[number] & {
+    meaningfulness: PredictionMeaningfulnessTier;
+  };
+
 interface PreliminaryCandidate {
   candidate: EnsembleResult;
+
   decision: {
     market: PredictionMarket;
+
     selection: string;
+
     probability: number;
+
     confidence: number;
+
     safetyScore: number;
+
     modelAgreement: number;
+
     dataQuality: number;
+
     calibrationReliability: number;
+
     risk: unknown;
+
     decisionScore: number;
+
     accepted: boolean;
+
     rejectionReason?: string;
   };
+
   normalizedProbability: number;
+
   signals: {
     comparisonConfidence: number;
+
     directionalDifference: number;
+
     goalProductionDifference: number;
+
     goalPreventionDifference: number;
+
     evidenceCoherence?: number;
   };
+
+  coherence: MarketCoherenceResult | null;
+
   relativeEvidenceAdvantage?: number;
+
+  meaningfulness?: PredictionMeaningfulnessTier;
+
   marketSpecificity?: number;
 }

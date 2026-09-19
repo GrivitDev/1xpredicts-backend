@@ -76,6 +76,41 @@ export interface RawTeamHalfFeatures {
   averageGoalsConceded: number;
 }
 
+export interface RawTeamOpponentAdjustedFeatures {
+  available: boolean;
+
+  sampleSize: number;
+
+  effectiveSampleSize: number;
+
+  /*
+   * Difficulty of the opponents faced, 0-100.
+   *
+   * 50 = approximately neutral competition strength.
+   */
+  scheduleStrength: number;
+
+  /*
+   * Current-season pre-match competition rating translated
+   * to a 0-100 football-strength scale.
+   */
+  strengthRating: number;
+
+  /*
+   * Historical team output after weighting matches according
+   * to opponent strength and recency.
+   */
+  averageGoalsScored: number;
+
+  averageGoalsConceded: number;
+
+  pointsPerMatch: number;
+
+  winRate: number;
+
+  lossRate: number;
+}
+
 export interface RawTeamSourceData {
   competitionStats: Record<string, unknown>;
 
@@ -127,11 +162,10 @@ export interface RawTeamFeatures {
   venue: RawTeamVenueFeatures;
 
   /*
-   * Sports-module datasets are preserved independently.
-   *
-   * Neither source replaces historical ESPN fixtures.
-   * Neither source is reduced to a fallback-only role.
+   * Opponent-adjusted historical evidence.
    */
+  opponentAdjusted: RawTeamOpponentAdjustedFeatures;
+
   sourceData: RawTeamSourceData;
 
   historical: Array<{
@@ -158,5 +192,7 @@ export interface RawTeamFeatures {
 
     competitionStats: boolean;
     performanceProfile: boolean;
+
+    opponentAdjustedData: boolean;
   };
 }

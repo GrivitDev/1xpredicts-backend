@@ -1,3 +1,4 @@
+import { PredictionMeaningfulnessTier } from '../config/prediction-markets.config';
 import { PredictionMarket } from '../enums/prediction-market.enum';
 import { PredictionRisk } from '../enums/prediction-risk.enum';
 import { PredictionSource } from '../enums/prediction-source.enum';
@@ -37,6 +38,9 @@ export interface PredictionResult {
 
   /*
    * Probability of the selected outcome.
+   *
+   * This is the model-estimated probability and is completely
+   * independent from confidence.
    */
   probability: number;
 
@@ -46,14 +50,32 @@ export interface PredictionResult {
   matchResultProbabilities?: MatchResultProbabilities;
 
   /*
-   * One confidence value.
+   * Confidence in the probability estimate.
    *
-   * For MATCH_RESULT this represents the whole 1X2 market.
+   * Confidence measures how much the system trusts the
+   * probability estimate. It is NOT another probability.
    */
   confidence: number;
 
   /*
+   * Configured informational specificity of the selected
+   * prediction.
+   *
+   * BROAD    = broader outcome
+   * STANDARD = normal prediction specificity
+   * SPECIFIC = more specific/actionable outcome
+   *
+   * This does not mean that SPECIFIC has a higher probability
+   * of winning.
+   */
+  meaningfulness: PredictionMeaningfulnessTier;
+
+  /*
    * Our calculated fair odds for the selected outcome.
+   *
+   * These are derived exclusively from our own model probability.
+   * They are not bookmaker odds and do not represent external
+   * betting value.
    */
   fairOdds?: number;
 

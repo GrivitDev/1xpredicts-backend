@@ -13,25 +13,13 @@ import {
 export class TeamComparisonService {
   build(input: {
     home: RawPredictionFeatures['home'];
+
     away: RawPredictionFeatures['away'];
 
     standings: RawPredictionFeatures['standings'];
 
     h2h: RawPredictionFeatures['h2h'];
   }): TeamComparisonFeatures {
-    /*
-     * ----------------------------------------------------------
-     * TEAM-TO-TEAM EVIDENCE MAP
-     * ----------------------------------------------------------
-     *
-     * Every dimension compares HOME against AWAY using the
-     * underlying sports datasets already assembled by
-     * RawPredictionFeatureService.
-     *
-     * Missing individual values are ignored rather than converted
-     * into zero. No available dataset is replaced by another dataset.
-     */
-
     const attack = this.buildDimension(
       this.attackScore(input.home, true),
       this.attackScore(input.away, false),
@@ -59,6 +47,11 @@ export class TeamComparisonService {
       this.overallStrengthScore(input.away, false),
     );
 
+    const opponentAdjustedStrength = this.buildDimension(
+      this.opponentAdjustedStrengthScore(input.home),
+      this.opponentAdjustedStrengthScore(input.away),
+    );
+
     const goalProduction = this.buildDimension(
       this.goalProductionScore(input.home, true),
       this.goalProductionScore(input.away, false),
@@ -75,9 +68,10 @@ export class TeamComparisonService {
     );
 
     /*
-     * Venue advantage is based on the actual venue performance
-     * datasets. It does not automatically assume that home is
-     * stronger simply because the fixture is at home.
+     * Home/away advantage is retained as a contextual comparison
+     * signal only. Venue performance itself is already represented
+     * by the venue dimension, so this signal has deliberately low
+     * directional weight to avoid double-counting venue evidence.
      */
     const homeVenuePoints = this.readNullableNumber(
       input.home.venue.pointsPerMatch,
@@ -108,38 +102,45 @@ export class TeamComparisonService {
         : 0;
 
     /*
-     * ----------------------------------------------------------
-     * DIRECTIONAL COMPARISON
-     * ----------------------------------------------------------
+     * All directional weights sum to exactly 1.
+     *
+     * Opponent-adjusted strength is kept as an independent dimension,
+     * while overallStrength no longer embeds the same signal heavily.
+     *
+     * This prevents the same opponent-adjusted evidence from being
+     * counted multiple times in the final comparison.
      */
     const directionalHomeScore = this.clamp(
-      attack.home * 0.16 +
-        defence.home * 0.14 +
-        form.home * 0.12 +
-        venue.home * 0.14 +
-        standing.home * 0.1 +
-        overallStrength.home * 0.14 +
-        goalProduction.home * 0.1 +
-        goalPrevention.home * 0.1 +
-        consistency.home * 0.05 +
+      attack.home * 0.14 +
+        defence.home * 0.13 +
+        form.home * 0.11 +
+        venue.home * 0.11 +
+        standing.home * 0.09 +
+        overallStrength.home * 0.12 +
+        opponentAdjustedStrength.home * 0.12 +
+        goalProduction.home * 0.08 +
+        goalPrevention.home * 0.08 +
+        consistency.home * 0.07 +
         this.normalizeAdvantage(homeAdvantage) * 0.05,
     );
 
     const directionalAwayScore = this.clamp(
-      attack.away * 0.16 +
-        defence.away * 0.14 +
-        form.away * 0.12 +
-        venue.away * 0.14 +
-        standing.away * 0.1 +
-        overallStrength.away * 0.14 +
-        goalProduction.away * 0.1 +
-        goalPrevention.away * 0.1 +
-        consistency.away * 0.05 +
+      attack.away * 0.14 +
+        defence.away * 0.13 +
+        form.away * 0.11 +
+        venue.away * 0.11 +
+        standing.away * 0.09 +
+        overallStrength.away * 0.12 +
+        opponentAdjustedStrength.away * 0.12 +
+        goalProduction.away * 0.08 +
+        goalPrevention.away * 0.08 +
+        consistency.away * 0.07 +
         this.normalizeAdvantage(awayAdvantage) * 0.05,
     );
 
     /*
-     * H2H is deliberately supplementary.
+     * H2H is supplementary evidence. It is not allowed to dominate
+     * the comparison and does not replace current team evidence.
      */
     const h2hAdjustment = this.calculateH2HAdjustment(input.h2h);
 
@@ -160,6 +161,8 @@ export class TeamComparisonService {
 
       overallStrength,
 
+      opponentAdjustedStrength,
+
       goalProduction,
 
       goalPrevention,
@@ -176,6 +179,13 @@ export class TeamComparisonService {
 
       directionalDifference: adjustedHome - adjustedAway,
 
+      /*
+       * This is comparison-evidence reliability only.
+       *
+       * It is NOT prediction probability and is NOT the final
+       * prediction confidence. The confidence engine remains the
+       * authority for prediction confidence.
+       */
       confidence: this.calculateComparisonConfidence(input),
     };
   }
@@ -190,25 +200,32 @@ export class TeamComparisonService {
 
     return this.weightedMean([
       {
+        value: this.opponentAdjustedValue(team, (adjusted) =>
+          this.normalizeGoals(adjusted.averageGoalsScored),
+        ),
+        weight: 0.24,
+      },
+
+      {
         value: this.normalizeGoals(team.averageGoalsScored),
-        weight: 0.1,
+        weight: 0.09,
       },
 
       {
         value: this.normalizeGoals(team.recent.averageGoalsScored),
-        weight: 0.08,
+        weight: 0.09,
       },
 
       {
         value: this.normalizeGoals(team.venue.averageGoalsScored),
-        weight: 0.12,
+        weight: 0.1,
       },
 
       {
         value: this.normalizeGoals(
           this.readNullableNumber(stats?.averageGoalsScored),
         ),
-        weight: 0.1,
+        weight: 0.08,
       },
 
       {
@@ -217,14 +234,14 @@ export class TeamComparisonService {
             ? this.readNullableNumber(stats?.homeAverageGoalsScored)
             : this.readNullableNumber(stats?.awayAverageGoalsScored),
         ),
-        weight: 0.16,
+        weight: 0.1,
       },
 
       {
         value: this.normalizeGoals(
           this.readNullableNumber(profile?.averageGoalsScored),
         ),
-        weight: 0.08,
+        weight: 0.06,
       },
 
       {
@@ -233,21 +250,21 @@ export class TeamComparisonService {
             ? this.readNullableNumber(profile?.homeAverageGoalsScored)
             : this.readNullableNumber(profile?.awayAverageGoalsScored),
         ),
-        weight: 0.14,
+        weight: 0.09,
       },
 
       {
         value: this.normalizeExpectedGoals(
           this.readNullableNumber(stats?.averageExpectedGoals),
         ),
-        weight: 0.07,
+        weight: 0.05,
       },
 
       {
         value: this.normalizeScore(
           this.readNullableNumber(profile?.attackingFormScore),
         ),
-        weight: 0.15,
+        weight: 0.1,
       },
     ]);
   }
@@ -260,27 +277,34 @@ export class TeamComparisonService {
 
     const profile = team.sourceData?.performanceProfile;
 
-    const base = this.weightedMean([
+    return this.weightedMean([
+      {
+        value: this.opponentAdjustedValue(team, (adjusted) =>
+          this.normalizeDefence(adjusted.averageGoalsConceded),
+        ),
+        weight: 0.24,
+      },
+
       {
         value: this.normalizeDefence(team.averageGoalsConceded),
-        weight: 0.1,
+        weight: 0.09,
       },
 
       {
         value: this.normalizeDefence(team.recent.averageGoalsConceded),
-        weight: 0.08,
+        weight: 0.09,
       },
 
       {
         value: this.normalizeDefence(team.venue.averageGoalsConceded),
-        weight: 0.12,
+        weight: 0.1,
       },
 
       {
         value: this.normalizeDefence(
           this.readNullableNumber(stats?.averageGoalsConceded),
         ),
-        weight: 0.12,
+        weight: 0.06,
       },
 
       {
@@ -289,14 +313,14 @@ export class TeamComparisonService {
             ? this.readNullableNumber(stats?.homeAverageGoalsConceded)
             : this.readNullableNumber(stats?.awayAverageGoalsConceded),
         ),
-        weight: 0.16,
+        weight: 0.1,
       },
 
       {
         value: this.normalizeDefence(
           this.readNullableNumber(profile?.averageGoalsConceded),
         ),
-        weight: 0.08,
+        weight: 0.06,
       },
 
       {
@@ -305,23 +329,21 @@ export class TeamComparisonService {
             ? this.readNullableNumber(profile?.homeAverageGoalsConceded)
             : this.readNullableNumber(profile?.awayAverageGoalsConceded),
         ),
-        weight: 0.14,
+        weight: 0.09,
       },
 
       {
         value: this.normalizeScore(
           this.readNullableNumber(profile?.defensiveFormScore),
         ),
-        weight: 0.1,
+        weight: 0.08,
       },
 
       {
-        value: this.readNullableNumber(this.readRate(team.cleanSheetRate)),
-        weight: 0.1,
+        value: this.readRate(team.cleanSheetRate),
+        weight: 0.09,
       },
     ]);
-
-    return this.clamp(base, 0, 1);
   }
 
   private formScore(team: RawPredictionFeatures['home']): number {
@@ -330,12 +352,12 @@ export class TeamComparisonService {
     return this.weightedMean([
       {
         value: this.normalizeRate(team.recent.pointsPerMatch, 3),
-        weight: 0.2,
+        weight: 0.22,
       },
 
       {
         value: this.readRate(team.recent.winRate),
-        weight: 0.1,
+        weight: 0.11,
       },
 
       {
@@ -348,28 +370,28 @@ export class TeamComparisonService {
 
       {
         value: this.readRate(this.readNullableNumber(profile?.recentWinRate)),
-        weight: 0.15,
+        weight: 0.14,
       },
 
       {
         value: this.normalizeScore(
           this.readNullableNumber(profile?.recentFormScore),
         ),
-        weight: 0.15,
+        weight: 0.14,
       },
 
       {
         value: this.normalizeScore(
           this.readNullableNumber(profile?.momentumScore),
         ),
-        weight: 0.1,
+        weight: 0.08,
       },
 
       {
         value: this.normalizeScore(
           this.readNullableNumber(profile?.overallPerformanceScore),
         ),
-        weight: 0.1,
+        weight: 0.11,
       },
     ]);
   }
@@ -393,10 +415,6 @@ export class TeamComparisonService {
         weight: 0.15,
       },
 
-      /*
-       * Draw rate is retained as venue evidence but contributes
-       * only a small amount to the directional score.
-       */
       {
         value: this.readRate(team.venue.drawRate),
         weight: 0.05,
@@ -465,10 +483,7 @@ export class TeamComparisonService {
 
     const goalDifference = this.readNumber(standing.goalDifference);
 
-    const values: Array<{
-      value: number | null;
-      weight: number;
-    }> = [
+    return this.weightedMean([
       {
         value: played > 0 ? this.clamp(points / played / 3, 0, 1) : null,
         weight: 0.45,
@@ -486,9 +501,19 @@ export class TeamComparisonService {
             : null,
         weight: 0.3,
       },
-    ];
+    ]);
+  }
 
-    return this.weightedMean(values);
+  private opponentAdjustedStrengthScore(
+    team: RawPredictionFeatures['home'],
+  ): number {
+    const adjusted = team.opponentAdjusted;
+
+    if (!adjusted?.available || !Number.isFinite(adjusted.strengthRating)) {
+      return 0.5;
+    }
+
+    return this.clamp(adjusted.strengthRating / 100, 0, 1);
   }
 
   private overallStrengthScore(
@@ -499,35 +524,40 @@ export class TeamComparisonService {
 
     const profile = team.sourceData?.performanceProfile;
 
+    /*
+     * Overall strength represents the current available strength
+     * evidence. Opponent-adjusted strength is deliberately excluded
+     * here because it has its own explicit comparison dimension.
+     */
     return this.weightedMean([
       {
         value: this.normalizeScore(
-          this.readNullableNumber(
-            isHome ? stats?.homeStrengthScore : stats?.awayStrengthScore,
-          ),
+          isHome
+            ? this.readNullableNumber(stats?.homeStrengthScore)
+            : this.readNullableNumber(stats?.awayStrengthScore),
         ),
-        weight: 0.3,
+        weight: 0.22,
       },
 
       {
         value: this.normalizeScore(
           this.readNullableNumber(stats?.overallStrengthScore),
         ),
-        weight: 0.2,
+        weight: 0.18,
       },
 
       {
         value: this.normalizeScore(
           this.readNullableNumber(profile?.overallPerformanceScore),
         ),
-        weight: 0.2,
+        weight: 0.16,
       },
 
       {
         value: this.normalizeScore(
           this.readNullableNumber(profile?.overallStrengthScore),
         ),
-        weight: 0.1,
+        weight: 0.12,
       },
 
       {
@@ -543,24 +573,24 @@ export class TeamComparisonService {
         value: this.normalizeScore(
           this.readNullableNumber(profile?.recentFormScore),
         ),
-        weight: 0.05,
+        weight: 0.07,
       },
 
       {
         value: this.normalizeScore(
           this.readNullableNumber(profile?.momentumScore),
         ),
-        weight: 0.02,
+        weight: 0.05,
       },
 
       {
         value: this.normalizeGoals(team.averageGoalsScored),
-        weight: 0.025,
+        weight: 0.06,
       },
 
       {
         value: this.normalizeDefence(team.averageGoalsConceded),
-        weight: 0.025,
+        weight: 0.06,
       },
     ]);
   }
@@ -575,13 +605,20 @@ export class TeamComparisonService {
 
     return this.weightedMean([
       {
-        value: this.normalizeGoals(team.averageGoalsScored),
-        weight: 0.1,
+        value: this.opponentAdjustedValue(team, (adjusted) =>
+          this.normalizeGoals(adjusted.averageGoalsScored),
+        ),
+        weight: 0.25,
       },
 
       {
         value: this.normalizeGoals(team.recent.averageGoalsScored),
-        weight: 0.1,
+        weight: 0.11,
+      },
+
+      {
+        value: this.normalizeGoals(team.averageGoalsScored),
+        weight: 0.06,
       },
 
       {
@@ -595,7 +632,7 @@ export class TeamComparisonService {
             ? this.readNullableNumber(stats?.homeAverageGoalsScored)
             : this.readNullableNumber(stats?.awayAverageGoalsScored),
         ),
-        weight: 0.2,
+        weight: 0.14,
       },
 
       {
@@ -604,35 +641,28 @@ export class TeamComparisonService {
             ? this.readNullableNumber(profile?.homeAverageGoalsScored)
             : this.readNullableNumber(profile?.awayAverageGoalsScored),
         ),
-        weight: 0.2,
+        weight: 0.13,
       },
 
       {
         value: this.normalizeGoals(
           this.readNullableNumber(stats?.averageGoalsScored),
         ),
-        weight: 0.1,
+        weight: 0.07,
       },
 
       {
         value: this.normalizeGoals(
           this.readNullableNumber(profile?.averageGoalsScored),
         ),
-        weight: 0.08,
+        weight: 0.06,
       },
 
       {
         value: this.normalizeExpectedGoals(
           this.readNullableNumber(stats?.averageExpectedGoals),
         ),
-        weight: 0.07,
-      },
-
-      {
-        value: this.normalizeScore(
-          this.readNullableNumber(profile?.attackingFormScore),
-        ),
-        weight: 0.05,
+        weight: 0.08,
       },
     ]);
   }
@@ -647,13 +677,20 @@ export class TeamComparisonService {
 
     return this.weightedMean([
       {
-        value: this.normalizeDefence(team.averageGoalsConceded),
-        weight: 0.1,
+        value: this.opponentAdjustedValue(team, (adjusted) =>
+          this.normalizeDefence(adjusted.averageGoalsConceded),
+        ),
+        weight: 0.25,
       },
 
       {
         value: this.normalizeDefence(team.recent.averageGoalsConceded),
-        weight: 0.1,
+        weight: 0.11,
+      },
+
+      {
+        value: this.normalizeDefence(team.averageGoalsConceded),
+        weight: 0.06,
       },
 
       {
@@ -667,7 +704,7 @@ export class TeamComparisonService {
             ? this.readNullableNumber(stats?.homeAverageGoalsConceded)
             : this.readNullableNumber(stats?.awayAverageGoalsConceded),
         ),
-        weight: 0.2,
+        weight: 0.14,
       },
 
       {
@@ -676,12 +713,12 @@ export class TeamComparisonService {
             ? this.readNullableNumber(profile?.homeAverageGoalsConceded)
             : this.readNullableNumber(profile?.awayAverageGoalsConceded),
         ),
-        weight: 0.2,
+        weight: 0.13,
       },
 
       {
         value: this.readRate(team.cleanSheetRate),
-        weight: 0.1,
+        weight: 0.08,
       },
 
       {
@@ -690,14 +727,14 @@ export class TeamComparisonService {
             ? this.readNullableNumber(profile?.homeCleanSheetRate)
             : this.readNullableNumber(profile?.awayCleanSheetRate),
         ),
-        weight: 0.1,
+        weight: 0.07,
       },
 
       {
         value: this.normalizeScore(
           this.readNullableNumber(profile?.defensiveFormScore),
         ),
-        weight: 0.1,
+        weight: 0.06,
       },
     ]);
   }
@@ -767,27 +804,37 @@ export class TeamComparisonService {
       return 0;
     }
 
-    const total = Math.max(h2h.sampleSize, 1);
+    const total = h2h.sampleSize;
 
     const homeWins = this.readNumber(h2h.homeWins);
 
     const awayWins = this.readNumber(h2h.awayWins);
 
-    const homeShare = homeWins / total;
+    const homeShare = this.clamp(homeWins / total, 0, 1);
 
-    const awayShare = awayWins / total;
+    const awayShare = this.clamp(awayWins / total, 0, 1);
+
+    const reliabilityValue = this.readNullableNumber(h2h.dataReliability);
 
     /*
-     * dataReliability may be supplied either as 0-1 or 0-100.
-     * readRate safely supports both representations.
+     * Missing H2H reliability must not become perfect reliability.
+     * When unavailable, sample size provides only a limited reliability
+     * signal.
      */
     const reliability =
-      this.readRate(this.readNullableNumber(h2h.dataReliability)) ?? 0;
+      reliabilityValue !== null
+        ? this.clamp(this.readRate(reliabilityValue) ?? 0, 0, 1)
+        : this.sampleReliability(total);
 
+    /*
+     * H2H is intentionally capped at a small adjustment because it
+     * is supplementary evidence and can contain stale historical
+     * relationships between squads.
+     */
     return this.clamp(
-      (homeShare - awayShare) * reliability * 0.05,
-      -0.05,
-      0.05,
+      (homeShare - awayShare) * reliability * 0.04,
+      -0.04,
+      0.04,
     );
   }
 
@@ -797,58 +844,126 @@ export class TeamComparisonService {
     standings: RawPredictionFeatures['standings'];
     h2h: RawPredictionFeatures['h2h'];
   }): number {
-    const homeCoverage = this.calculateTeamCoverage(input.home);
+    const homeEvidence = this.calculateTeamEvidenceQuality(input.home);
 
-    const awayCoverage = this.calculateTeamCoverage(input.away);
+    const awayEvidence = this.calculateTeamEvidenceQuality(input.away);
 
-    const standingCoverage =
-      input.standings.home && input.standings.away ? 1 : 0;
+    const teamEvidence = (homeEvidence + awayEvidence) / 2;
 
-    const h2hCoverage = input.h2h?.available
-      ? this.clamp(this.readNumber(input.h2h.sampleSize) / 5, 0, 1)
+    const standingEvidence =
+      input.standings.home && input.standings.away
+        ? this.calculateStandingEvidence(
+            input.standings.home,
+            input.standings.away,
+          )
+        : 0;
+
+    const h2hEvidence = input.h2h?.available
+      ? this.calculateH2HEvidence(input.h2h)
       : 0;
 
     /*
-     * All historical fixtures are retained by the data layer.
-     * Confidence only measures how much usable history exists;
-     * it does not discard older matches.
-     */
-    const historicalCoverage = this.clamp(
-      Math.min(input.home.historical.length, input.away.historical.length) / 20,
-      0,
-      1,
-    );
-
-    /*
-     * The comparison confidence itself remains 0-1.
+     * The comparison confidence measures whether the comparison has
+     * enough reliable evidence behind it.
+     *
+     * It does not use directional score, probability, or confidence
+     * thresholds from the prediction layer.
      */
     return this.clamp(
-      homeCoverage * 0.2 +
-        awayCoverage * 0.2 +
-        standingCoverage * 0.1 +
-        historicalCoverage * 0.35 +
-        h2hCoverage * 0.15,
+      teamEvidence * 0.7 + standingEvidence * 0.2 + h2hEvidence * 0.1,
       0,
       1,
     );
   }
 
-  private calculateTeamCoverage(team: RawPredictionFeatures['home']): number {
+  private calculateTeamEvidenceQuality(
+    team: RawPredictionFeatures['home'],
+  ): number {
     const availability = team.dataAvailability;
-
-    const values = [
-      availability?.historicalMatches,
-      availability?.recentForm,
-      availability?.venueMatches,
-      availability?.competitionStats,
-      availability?.performanceProfile,
-    ];
 
     if (!availability) {
       return 0;
     }
 
-    return values.filter(Boolean).length / values.length;
+    const historicalMatches = this.readBoolean(availability.historicalMatches);
+
+    const recentForm = this.readBoolean(availability.recentForm);
+
+    const venueMatches = this.readBoolean(availability.venueMatches);
+
+    const competitionStats = this.readBoolean(availability.competitionStats);
+
+    const performanceProfile = this.readBoolean(
+      availability.performanceProfile,
+    );
+
+    const opponentAdjustedData = this.readBoolean(
+      availability.opponentAdjustedData,
+    );
+
+    const historicalSample = this.clamp(team.historical.length / 20, 0, 1);
+
+    const opponentAdjustedSample =
+      team.opponentAdjusted?.available &&
+      Number.isFinite(team.opponentAdjusted.effectiveSampleSize)
+        ? this.clamp(team.opponentAdjusted.effectiveSampleSize / 12, 0, 1)
+        : 0;
+
+    const sampleQuality =
+      historicalSample * 0.55 + opponentAdjustedSample * 0.45;
+
+    const availabilityQuality =
+      (Number(historicalMatches) +
+        Number(recentForm) +
+        Number(venueMatches) +
+        Number(competitionStats) +
+        Number(performanceProfile) +
+        Number(opponentAdjustedData)) /
+      6;
+
+    return this.clamp(availabilityQuality * 0.55 + sampleQuality * 0.45, 0, 1);
+  }
+
+  private calculateStandingEvidence(
+    home: RawPredictionFeatures['standings']['home'],
+    away: RawPredictionFeatures['standings']['away'],
+  ): number {
+    if (!home || !away) {
+      return 0;
+    }
+
+    const homePlayed = this.readNumber(home.played);
+
+    const awayPlayed = this.readNumber(away.played);
+
+    const homeQuality = this.sampleReliability(homePlayed);
+
+    const awayQuality = this.sampleReliability(awayPlayed);
+
+    return (homeQuality + awayQuality) / 2;
+  }
+
+  private calculateH2HEvidence(
+    h2h: NonNullable<RawPredictionFeatures['h2h']>,
+  ): number {
+    if (
+      !h2h.available ||
+      !Number.isFinite(h2h.sampleSize) ||
+      h2h.sampleSize <= 0
+    ) {
+      return 0;
+    }
+
+    const sampleQuality = this.sampleReliability(h2h.sampleSize);
+
+    const explicitReliability = this.readNullableNumber(h2h.dataReliability);
+
+    const reliability =
+      explicitReliability !== null
+        ? this.clamp(this.readRate(explicitReliability) ?? 0, 0, 1)
+        : sampleQuality;
+
+    return this.clamp(sampleQuality * 0.5 + reliability * 0.5, 0, 1);
   }
 
   private buildDimension(home: number, away: number): TeamComparisonDimension {
@@ -895,11 +1010,6 @@ export class TeamComparisonService {
       denominator += item.weight;
     }
 
-    /*
-     * 0.5 is neutral only when no usable evidence exists for
-     * this particular dimension. It does not replace available
-     * datasets.
-     */
     if (denominator <= 0) {
       return 0.5;
     }
@@ -907,16 +1017,43 @@ export class TeamComparisonService {
     return this.clamp(numerator / denominator, 0, 1);
   }
 
+  private opponentAdjustedValue(
+    team: RawPredictionFeatures['home'],
+    selector: (
+      adjusted: NonNullable<RawPredictionFeatures['home']['opponentAdjusted']>,
+    ) => number | null,
+  ): number | null {
+    const adjusted = team.opponentAdjusted;
+
+    /*
+     * An unavailable opponent-adjusted dataset must be absent from
+     * the weighted mean, not represented by zero or neutral fabricated
+     * evidence.
+     */
+    if (!adjusted?.available) {
+      return null;
+    }
+
+    return selector(adjusted);
+  }
+
+  private sampleReliability(sampleSize: number): number {
+    if (!Number.isFinite(sampleSize) || sampleSize <= 0) {
+      return 0;
+    }
+
+    /*
+     * Smooth evidence accumulation rather than a hard threshold.
+     * This represents diminishing returns from additional matches.
+     */
+    return this.clamp(1 - Math.exp(-sampleSize / 12), 0, 1);
+  }
+
   private normalizeGoals(value: number | null | undefined): number | null {
     if (value === null || value === undefined || !Number.isFinite(value)) {
       return null;
     }
 
-    /*
-     * Three goals represents a strong scoring rate. This converts
-     * actual goal averages to the 0-1 comparison scale without
-     * treating 2.4 goals as 2.4 probability.
-     */
     return this.clamp(value / 3, 0, 1);
   }
 
@@ -925,9 +1062,6 @@ export class TeamComparisonService {
       return null;
     }
 
-    /*
-     * Lower goals conceded = stronger defence.
-     */
     return this.clamp(1 - value / 3, 0, 1);
   }
 
@@ -946,10 +1080,6 @@ export class TeamComparisonService {
       return null;
     }
 
-    /*
-     * Scores from Sports schemas are normally already percentage
-     * style values on a 0-100 scale, but tolerate 0-1 values too.
-     */
     return value > 1 && value <= 100
       ? this.clamp(value / 100, 0, 1)
       : this.clamp(value, 0, 1);
@@ -991,6 +1121,10 @@ export class TeamComparisonService {
     const normalized = this.readRate(value);
 
     return normalized === null ? null : this.clamp(1 - normalized, 0, 1);
+  }
+
+  private readBoolean(value: unknown): boolean {
+    return value === true;
   }
 
   private readNumber(value: unknown): number {

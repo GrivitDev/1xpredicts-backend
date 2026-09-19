@@ -1,6 +1,10 @@
-// src/predictions-engine/services/prediction-engine.service.ts
-
 import { Injectable, Logger } from '@nestjs/common';
+
+import {
+  ENABLED_PREDICTION_MARKETS,
+  PredictionMeaningfulnessTier,
+} from '../config/prediction-markets.config';
+import { PREDICTION_ENGINE_CONFIG } from '../config/prediction-engine.config';
 
 import { PredictionMarket } from '../enums/prediction-market.enum';
 import { PredictionRisk } from '../enums/prediction-risk.enum';
@@ -10,9 +14,6 @@ import { PredictionEngineResult } from '../interfaces/prediction-engine-result.i
 import { PredictionResult } from '../interfaces/prediction-result.interface';
 import { PredictionRunInput } from '../interfaces/prediction-run.interface';
 import { MarketEvaluation } from '../interfaces/market-evaluation.interface';
-
-import { ENABLED_PREDICTION_MARKETS } from '../config/prediction-markets.config';
-import { PREDICTION_ENGINE_CONFIG } from '../config/prediction-engine.config';
 
 import { RawPredictionDataService } from './raw-prediction-data.service';
 import { RawPredictionFeatureService } from './raw-prediction-feature.service';
@@ -61,11 +62,10 @@ export class PredictionEngineService {
      * market because MarketEvaluationService returns the final
      * selected candidate for that market.
      *
-     * The service does not collapse all markets into one global
-     * prediction. The strongest prediction is calculated only as
-     * an additional summary value after publication.
+     * Rejected candidates are never republished or used as a
+     * fallback merely to increase the prediction count.
      *
-     * Low probability by itself is not a rejection condition.
+     * Probability and confidence remain independent.
      */
     const predictions: PredictionResult[] = [];
 
@@ -113,6 +113,17 @@ export class PredictionEngineService {
             )
           : undefined;
 
+      /*
+       * Meaningfulness comes from the enabled market configuration.
+       *
+       * It is informational/product metadata and remains separate
+       * from probability, confidence, risk, and fair odds.
+       */
+      const meaningfulness = this.getMeaningfulness(
+        decision.market,
+        decision.selection,
+      );
+
       const prediction = this.buildPrediction(
         rawData,
         decision.market,
@@ -123,6 +134,7 @@ export class PredictionEngineService {
         decision.modelAgreement,
         decision.dataQuality,
         decision.calibrationReliability,
+        meaningfulness,
         decision.risk,
         decision.decisionScore,
         decision.source,
@@ -297,6 +309,8 @@ export class PredictionEngineService {
 
     calibrationReliability: number,
 
+    meaningfulness: PredictionMeaningfulnessTier,
+
     risk: PredictionRisk,
 
     decisionScore: number,
@@ -347,12 +361,14 @@ export class PredictionEngineService {
           }
         : {}),
 
+      confidence: this.clamp(confidence, 0, 98),
+
+      meaningfulness,
+
       fairOdds:
         typeof fairOdds === 'number' && Number.isFinite(fairOdds)
           ? fairOdds
           : undefined,
-
-      confidence: this.clamp(confidence, 0, 98),
 
       safetyScore: this.clamp(safetyScore, 0, 100),
 
@@ -372,6 +388,21 @@ export class PredictionEngineService {
 
       generatedAt: new Date(),
     };
+  }
+
+  private getMeaningfulness(
+    market: PredictionMarket,
+    selection: string,
+  ): PredictionMeaningfulnessTier {
+    const configuration = ENABLED_PREDICTION_MARKETS.find(
+      (item) =>
+        item.market === market &&
+        item.selection.trim().toUpperCase() ===
+          selection.trim().toUpperCase() &&
+        item.enabled,
+    );
+
+    return configuration?.meaningfulness ?? 'STANDARD';
   }
 
   private getEnabledMarkets(): PredictionMarket[] {

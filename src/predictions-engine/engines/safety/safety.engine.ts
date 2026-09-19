@@ -8,6 +8,7 @@ import { PredictionRisk } from '../../enums/prediction-risk.enum';
 import { SafetyResult } from '../../interfaces/safety-result.interface';
 
 import { CalibrationRiskUtil } from '../../utils/calibration-risk.util';
+import { ConfidenceUtil } from '../../utils/confidence.util';
 import { PredictionRiskUtil } from '../../utils/prediction-risk.util';
 
 @Injectable()
@@ -17,6 +18,8 @@ export class SafetyEngine {
     selection: string;
 
     probability: number;
+    confidence?: number;
+
     modelReliability: number;
 
     dataQuality: number;
@@ -33,7 +36,20 @@ export class SafetyEngine {
     goalPreventionDifference?: number;
     evidenceCoherence?: number;
   }): SafetyResult {
+    /*
+     * ----------------------------------------------------------
+     * NORMALIZED EVIDENCE
+     * ----------------------------------------------------------
+     *
+     * Safety measures robustness of the evidence package.
+     *
+     * Probability is retained for downstream diagnostics/risk
+     * handling, but it does not make a prediction safer merely
+     * because it is numerically high.
+     */
     const probability = this.clamp(input.probability, 0, 1);
+
+    const confidence = this.clamp(input.confidence ?? 0, 0, 98);
 
     const modelReliability = this.clamp(input.modelReliability, 0, 1);
 
@@ -68,50 +84,24 @@ export class SafetyEngine {
       1,
     );
 
-    const explicitCoherence =
-      input.evidenceCoherence === undefined
-        ? null
-        : this.clamp(input.evidenceCoherence, 0, 1);
+    const evidenceCoherence =
+      input.evidenceCoherence !== undefined
+        ? this.clamp(input.evidenceCoherence, 0, 1)
+        : null;
 
     const sampleSize = Math.max(Math.floor(input.sampleSize ?? 0), 0);
 
-    const sampleReliability = 1 - Math.exp(-sampleSize / 25);
+    const sampleReliability = ConfidenceUtil.sampleReliability(sampleSize);
 
     /*
      * ----------------------------------------------------------
-     * EVIDENCE
+     * SELECTION-ALIGNED EVIDENCE
      * ----------------------------------------------------------
      *
-     * Safety measures reliability/uncertainty of the evidence.
+     * Safety should inspect whether the supporting evidence is
+     * appropriate for the selected proposition.
      *
-     * Probability is intentionally NOT treated as a major safety
-     * signal. Otherwise broad, naturally high-probability markets
-     * become artificially "safer" than more specific predictions.
-     */
-
-    const probabilitySupport = this.calculateProbabilitySupport(probability);
-
-    /*
-     * Probability remains diagnostic only.
-     *
-     * It contributes only a very small uncertainty component.
-     */
-    const probabilityRisk = 1 - probabilitySupport;
-
-    const modelRisk = 1 - modelReliability;
-
-    const dataRisk = 1 - dataQuality;
-
-    const agreementRisk = 1 - agreement;
-
-    const sampleRisk = 1 - sampleReliability;
-
-    /*
-     * Selection-aware evidence is critical.
-     *
-     * Absolute team differences alone are insufficient because
-     * both sides of a market would otherwise receive the same
-     * evidence score.
+     * Evidence magnitude alone is not enough.
      */
     const selectionEvidence = this.calculateSelectionEvidence({
       market: input.market,
@@ -120,23 +110,34 @@ export class SafetyEngine {
       directionalDifference,
       goalProductionDifference,
       goalPreventionDifference,
-      evidenceCoherence: explicitCoherence,
+      evidenceCoherence,
     });
 
-    const comparisonEvidence = this.clamp(
-      explicitCoherence !== null
-        ? explicitCoherence * 0.55 + selectionEvidence * 0.45
-        : selectionEvidence,
-      0,
-      1,
-    );
+    /*
+     * Explicit coherence is preferred when available.
+     *
+     * Otherwise the selection-aware comparison evidence becomes
+     * the fallback rather than inventing a separate signal.
+     */
+    const comparisonEvidence =
+      evidenceCoherence !== null
+        ? this.clamp(evidenceCoherence * 0.55 + selectionEvidence * 0.45, 0, 1)
+        : selectionEvidence;
 
-    const comparisonRisk = 1 - comparisonEvidence;
-
+    /*
+     * ----------------------------------------------------------
+     * CALIBRATION RISK
+     * ----------------------------------------------------------
+     *
+     * Calibration risk is evidence-quality risk.
+     *
+     * The current confidence value is passed through when available
+     * instead of forcing confidence = 0.
+     */
     const calibrationRisk =
       sampleSize > 0
         ? CalibrationRiskUtil.calculate({
-            confidence: 0,
+            confidence,
             reliability: calibrationReliability,
             sampleSize,
             calibrationError: input.calibrationError ?? 0,
@@ -144,10 +145,28 @@ export class SafetyEngine {
         : 0;
 
     /*
-     * Structural risk represents general uncertainty in the
-     * evidence package.
+     * ----------------------------------------------------------
+     * EVIDENCE RISKS
+     * ----------------------------------------------------------
+     */
+    const modelRisk = 1 - modelReliability;
+
+    const dataRisk = 1 - dataQuality;
+
+    const agreementRisk = 1 - agreement;
+
+    const sampleRisk = 1 - sampleReliability;
+
+    const comparisonRisk = 1 - comparisonEvidence;
+
+    /*
+     * ----------------------------------------------------------
+     * STRUCTURAL RISK
+     * ----------------------------------------------------------
      *
-     * Probability is deliberately excluded here.
+     * This describes weakness in the supporting evidence package.
+     *
+     * Probability is deliberately excluded.
      */
     const structuralRisk = this.calculateStructuralRisk({
       modelReliability,
@@ -160,30 +179,41 @@ export class SafetyEngine {
 
     /*
      * ----------------------------------------------------------
-     * DYNAMIC RISK
+     * DYNAMIC SAFETY RISK
      * ----------------------------------------------------------
      *
-     * Probability has only a small diagnostic contribution.
+     * Safety is derived from evidence quality rather than from
+     * probability magnitude.
      *
-     * Safety cannot become a duplicate probability score.
+     * Probability is intentionally not used here.
      */
     const riskScore =
-      probabilityRisk * 0.03 +
-      dataRisk * 0.22 +
-      modelRisk * 0.2 +
-      agreementRisk * 0.21 +
-      comparisonRisk * 0.23 +
+      dataRisk * 0.24 +
+      modelRisk * 0.22 +
+      agreementRisk * 0.2 +
+      comparisonRisk * 0.19 +
       sampleRisk * 0.08 +
-      calibrationRisk * 0.02 +
-      structuralRisk * 0.01;
+      calibrationRisk * 0.04 +
+      structuralRisk * 0.03;
 
     const normalizedRisk = this.clamp(riskScore, 0, 1);
 
     const safetyScore = this.clamp((1 - normalizedRisk) * 100, 0, 100);
 
+    /*
+     * ----------------------------------------------------------
+     * RISK CLASSIFICATION
+     * ----------------------------------------------------------
+     *
+     * PredictionRiskUtil remains responsible for converting the
+     * continuous evidence/risk picture into the existing enum.
+     *
+     * The important correction is that confidence is no longer
+     * hard-coded to zero.
+     */
     const risk = PredictionRiskUtil.fromScores({
       probability,
-      confidence: 0,
+      confidence,
       safetyScore,
       modelAgreement: agreement,
       dataQuality: input.dataQuality,
@@ -195,24 +225,20 @@ export class SafetyEngine {
      * SAFETY STATUS
      * ----------------------------------------------------------
      *
-     * Safety is descriptive.
+     * This is a descriptive structural status.
      *
-     * It does not reject predictions merely because:
-     *   - probability is low
-     *   - risk is high
-     *   - confidence is low
-     *
-     * Hard contradiction remains downstream.
+     * It should not become a second candidate-selection system.
      */
     const isSafe =
-      dataQuality >= 0.35 &&
       modelReliability >= 0.35 &&
+      dataQuality >= 0.35 &&
       agreement >= 0.35 &&
       comparisonEvidence >= 0.35 &&
       sampleReliability >= 0.25;
 
     const reasons = this.buildReasons({
       probability,
+      confidence,
       dataQuality,
       modelReliability,
       agreement,
@@ -220,7 +246,6 @@ export class SafetyEngine {
       sampleReliability,
       comparisonEvidence,
       selectionEvidence,
-      probabilitySupport,
       safetyScore,
       risk,
     });
@@ -252,58 +277,6 @@ export class SafetyEngine {
     };
   }
 
-  private calculateProbabilitySupport(probability: number): number {
-    if (probability <= 0.35) {
-      return 0.05;
-    }
-
-    if (probability < 0.45) {
-      return 0.15;
-    }
-
-    if (probability < 0.5) {
-      return 0.25;
-    }
-
-    if (probability < 0.55) {
-      return 0.35;
-    }
-
-    if (probability < 0.6) {
-      return 0.45;
-    }
-
-    if (probability < 0.65) {
-      return 0.55;
-    }
-
-    if (probability < 0.7) {
-      return 0.65;
-    }
-
-    if (probability < 0.75) {
-      return 0.74;
-    }
-
-    if (probability < 0.8) {
-      return 0.81;
-    }
-
-    if (probability < 0.85) {
-      return 0.87;
-    }
-
-    if (probability < 0.9) {
-      return 0.91;
-    }
-
-    if (probability < 0.95) {
-      return 0.94;
-    }
-
-    return 0.96;
-  }
-
   private calculateSelectionEvidence(input: {
     market: PredictionMarket;
     selection: string;
@@ -315,6 +288,10 @@ export class SafetyEngine {
   }): number {
     const comparisonConfidence = this.clamp(input.comparisonConfidence, 0, 1);
 
+    /*
+     * No comparison evidence means we should remain neutral rather
+     * than manufacture positive support.
+     */
     if (comparisonConfidence <= 0) {
       return 0.5;
     }
@@ -327,123 +304,146 @@ export class SafetyEngine {
 
     const prevention = this.clamp(input.goalPreventionDifference, -1, 1);
 
-    const environment = this.clamp(production - prevention, -1, 1);
-
-    let alignment = 0.5;
-
     /*
      * ----------------------------------------------------------
-     * MATCH RESULT
+     * MATCH RESULT / HANDICAP DIRECTION
      * ----------------------------------------------------------
+     *
+     * Positive directionalDifference means the home side has the
+     * stronger directional signal.
+     *
+     * Negative means the away side has the stronger signal.
      */
+    let alignment = 0.5;
+
     if (input.market === PredictionMarket.MATCH_RESULT) {
       if (upper === 'HOME' || upper === '1' || upper === 'HOME_WIN') {
         alignment = 0.5 + directional * 0.5;
       } else if (upper === 'AWAY' || upper === '2' || upper === 'AWAY_WIN') {
         alignment = 0.5 - directional * 0.5;
       } else if (upper === 'DRAW' || upper === 'X') {
+        /*
+         * A strong directional difference is evidence against a
+         * draw. Similar team direction is more compatible with draw.
+         */
+        alignment = 1 - Math.abs(directional);
+      }
+    } else if (
+      input.market === PredictionMarket.ASIAN_HANDICAP ||
+      input.market === PredictionMarket.EUROPEAN_HANDICAP
+    ) {
+      if (upper.startsWith('HOME_') || upper === 'HOME' || upper === '1') {
+        alignment = 0.5 + directional * 0.5;
+      } else if (
+        upper.startsWith('AWAY_') ||
+        upper === 'AWAY' ||
+        upper === '2'
+      ) {
+        alignment = 0.5 - directional * 0.5;
+      } else if (
+        upper.startsWith('DRAW_') ||
+        upper === 'DRAW' ||
+        upper === 'X'
+      ) {
         alignment = 1 - Math.abs(directional);
       }
     } else if (input.market === PredictionMarket.BOTH_TEAMS_TO_SCORE) {
       /*
-       * ----------------------------------------------------------
-       * BTTS
-       * ----------------------------------------------------------
+       * BTTS needs both teams to maintain scoring capability.
+       *
+       * Production supports scoring.
+       * Poor prevention means opponents can score.
+       *
+       * We therefore use the combination as a general scoring
+       * environment rather than treating one side alone as decisive.
        */
-      const positiveSignal = this.clamp(0.5 + environment * 0.5, 0, 1);
+      const scoringEnvironment = this.clamp(
+        0.5 + (production - prevention) * 0.5,
+        0,
+        1,
+      );
 
       if (upper === 'YES' || upper === 'BTTS_YES' || upper === '1') {
-        alignment = positiveSignal;
+        alignment = scoringEnvironment;
       } else if (upper === 'NO' || upper === 'BTTS_NO' || upper === '0') {
-        alignment = 1 - positiveSignal;
+        alignment = 1 - scoringEnvironment;
       }
     } else if (
-      /*
-       * ----------------------------------------------------------
-       * GOAL-DIRECTION MARKETS
-       * ----------------------------------------------------------
-       */
       input.market === PredictionMarket.OVER_UNDER ||
       input.market === PredictionMarket.FIRST_HALF_GOALS ||
       input.market === PredictionMarket.SECOND_HALF_GOALS
     ) {
-      const positiveSignal = this.clamp(0.5 + environment * 0.5, 0, 1);
+      /*
+       * Positive production minus prevention represents a more
+       * goal-friendly environment.
+       */
+      const goalEnvironment = this.clamp(
+        0.5 + (production - prevention) * 0.5,
+        0,
+        1,
+      );
 
-      if (upper.startsWith('OVER_')) {
-        alignment = positiveSignal;
-      } else if (upper.startsWith('UNDER_')) {
-        alignment = 1 - positiveSignal;
+      if (
+        upper.startsWith('OVER_') ||
+        upper.startsWith('OVER:') ||
+        upper.startsWith('OVER ')
+      ) {
+        alignment = goalEnvironment;
+      } else if (
+        upper.startsWith('UNDER_') ||
+        upper.startsWith('UNDER:') ||
+        upper.startsWith('UNDER ')
+      ) {
+        alignment = 1 - goalEnvironment;
       }
     } else if (input.market === PredictionMarket.TEAM_TOTAL_GOALS) {
       /*
-       * ----------------------------------------------------------
-       * TEAM TOTAL GOALS
-       * ----------------------------------------------------------
+       * Team totals should primarily use directional team evidence.
        *
-       * Team totals must use the relevant team's production /
-       * prevention evidence rather than whole-match direction.
+       * For the home team:
+       *   positive production difference supports home scoring.
+       *
+       * For the away team:
+       *   negative production difference means the away side is
+       *   relatively weaker in production.
        */
-      const isHome = upper.startsWith('HOME_');
+      if (upper.startsWith('HOME_')) {
+        const homeProduction = this.clamp(0.5 + production * 0.5, 0, 1);
 
-      const isAway = upper.startsWith('AWAY_');
-
-      if (isHome) {
-        const positiveSignal = this.clamp(0.5 + production * 0.5, 0, 1);
-
-        if (upper.includes('_OVER_')) {
-          alignment = positiveSignal;
-        } else if (upper.includes('_UNDER_')) {
-          alignment = 1 - positiveSignal;
+        if (upper.includes('_OVER_') || upper.includes('_OVER:')) {
+          alignment = homeProduction;
+        } else if (upper.includes('_UNDER_') || upper.includes('_UNDER:')) {
+          alignment = 1 - homeProduction;
         }
-      } else if (isAway) {
-        const positiveSignal = this.clamp(0.5 - prevention * 0.5, 0, 1);
+      } else if (upper.startsWith('AWAY_')) {
+        const awayProduction = this.clamp(0.5 - production * 0.5, 0, 1);
 
-        if (upper.includes('_OVER_')) {
-          alignment = positiveSignal;
-        } else if (upper.includes('_UNDER_')) {
-          alignment = 1 - positiveSignal;
+        if (upper.includes('_OVER_') || upper.includes('_OVER:')) {
+          alignment = awayProduction;
+        } else if (upper.includes('_UNDER_') || upper.includes('_UNDER:')) {
+          alignment = 1 - awayProduction;
         }
       }
     } else if (input.market === PredictionMarket.GOAL_RANGE) {
       /*
-       * ----------------------------------------------------------
-       * GOAL RANGE
-       * ----------------------------------------------------------
+       * Generic team-comparison evidence cannot safely identify
+       * one exact total-goal range.
        *
-       * Generic directional evidence cannot safely distinguish
-       * exact ranges. Keep this neutral rather than pretending
-       * that "over-like" evidence selects a specific range.
+       * Remain neutral rather than inventing precision.
        */
       alignment = 0.5;
-    } else if (
-      /*
-       * ----------------------------------------------------------
-       * HANDICAPS
-       * ----------------------------------------------------------
-       */
-      input.market === PredictionMarket.ASIAN_HANDICAP ||
-      input.market === PredictionMarket.EUROPEAN_HANDICAP
-    ) {
-      if (upper.startsWith('HOME_')) {
-        alignment = 0.5 + directional * 0.5;
-      } else if (upper.startsWith('AWAY_')) {
-        alignment = 0.5 - directional * 0.5;
-      } else if (upper.startsWith('DRAW_')) {
-        alignment = 1 - Math.abs(directional);
-      }
     }
 
+    /*
+     * Evidence coherence is supplementary.
+     *
+     * It never replaces selection-specific alignment.
+     */
     const coherence =
       input.evidenceCoherence !== null
         ? this.clamp(input.evidenceCoherence, 0, 1)
         : 0.5;
 
-    /*
-     * Selection alignment is the principal evidence signal.
-     *
-     * Coherence is supporting evidence rather than a replacement
-     * for market-specific direction.
-     */
     return this.clamp(
       alignment * 0.65 + comparisonConfidence * 0.2 + coherence * 0.15,
       0,
@@ -472,6 +472,7 @@ export class SafetyEngine {
 
   private buildReasons(input: {
     probability: number;
+    confidence: number;
     dataQuality: number;
     modelReliability: number;
     agreement: number;
@@ -479,41 +480,48 @@ export class SafetyEngine {
     sampleReliability: number;
     comparisonEvidence: number;
     selectionEvidence: number;
-    probabilitySupport: number;
     safetyScore: number;
     risk: PredictionRisk;
   }): string[] {
     const reasons: string[] = [];
 
     /*
-     * Probability is deliberately described as diagnostic.
+     * Probability and confidence are described separately.
      */
     if (input.probability < 0.5) {
       reasons.push(
-        'Probability is below 50%, so the raw outcome estimate is weaker.',
-      );
-    } else if (input.probability < 0.65) {
-      reasons.push(
-        'Probability is moderate and must be interpreted with the market-specific evidence.',
+        'Probability is below 50%; safety is assessed independently from that probability magnitude.',
       );
     } else if (input.probability >= 0.9) {
       reasons.push(
-        'Probability is very high, but safety is independently assessed from evidence quality.',
+        'Probability is very high, but safety remains based on evidence quality rather than probability magnitude.',
+      );
+    }
+
+    if (input.confidence < 50) {
+      reasons.push(
+        'Confidence is limited, indicating that the probability estimate has weaker evidence support.',
+      );
+    } else if (input.confidence >= 85) {
+      reasons.push(
+        'Confidence indicates strong trust in the supporting evidence package.',
       );
     }
 
     if (input.dataQuality < 0.5) {
-      reasons.push(
-        'Data quality is not yet strong enough for a high safety assessment.',
-      );
+      reasons.push('Data quality limits the safety assessment.');
     }
 
     if (input.modelReliability < 0.5) {
-      reasons.push('Model reliability is limited by the available evidence.');
+      reasons.push(
+        'Probability-model reliability is limited by the available evidence.',
+      );
     }
 
     if (input.agreement < 0.5) {
-      reasons.push('Independent model signals show meaningful disagreement.');
+      reasons.push(
+        'Probability-producing components show meaningful structural inconsistency.',
+      );
     }
 
     if (input.selectionEvidence < 0.5) {
@@ -524,17 +532,17 @@ export class SafetyEngine {
 
     if (input.comparisonEvidence < 0.5) {
       reasons.push(
-        'Comparison evidence is not yet strongly aligned with the selected proposition.',
+        'Comparison evidence is not strongly aligned with the selected proposition.',
       );
     }
 
     if (input.calibrationReliability < 0.55) {
-      reasons.push('Calibration history is limited or not yet reliable.');
+      reasons.push('Calibration history is limited or still developing.');
     }
 
     if (input.sampleReliability < 0.6) {
       reasons.push(
-        'The historical sample is still limited for a strong safety assessment.',
+        'The historical sample remains limited for a strong safety assessment.',
       );
     }
 
@@ -549,6 +557,10 @@ export class SafetyEngine {
     } else if (input.safetyScore >= 50) {
       reasons.push(
         'The available evidence supports a cautious safety assessment.',
+      );
+    } else {
+      reasons.push(
+        'The evidence package has significant structural uncertainty.',
       );
     }
 

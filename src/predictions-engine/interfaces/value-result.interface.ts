@@ -5,19 +5,43 @@ export interface ValueResult {
 
   selection: string;
 
-  availableOdds?: number;
-
-  impliedProbability?: number;
-
-  fairOdds?: number;
-
+  /**
+   * Final model probability.
+   */
   modelProbability: number;
 
-  probabilityEdge?: number;
+  /**
+   * Fair decimal odds calculated from the model probability.
+   */
+  fairOdds: number | null;
 
-  expectedValue?: number;
+  /**
+   * Pricing method used to derive the internally calculated
+   * fair odds.
+   *
+   * No bookmaker or external market price is involved.
+   */
+  pricingMethod:
+    | 'PROBABILITY'
+    | 'DRAW_NO_BET'
+    | 'ASIAN_HANDICAP'
+    | 'UNAVAILABLE';
 
-  valueScore?: number;
+  /**
+   * Settlement probabilities for markets with WIN,
+   * PUSH/REFUND, and LOSS outcomes.
+   */
+  winProbability?: number;
 
-  hasValue: boolean;
+  pushProbability?: number;
+
+  lossProbability?: number;
+
+  /**
+   * True when a mathematically valid model-derived fair price
+   * was produced.
+   *
+   * This does not indicate positive betting value.
+   */
+  hasFairOdds: boolean;
 }

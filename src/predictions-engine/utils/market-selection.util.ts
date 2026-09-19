@@ -1,6 +1,3 @@
-// src/predictions-engine/utils/market-selection.util.ts
-
-import { PredictionMarket } from '../enums/prediction-market.enum';
 import { MarketCandidate } from '../interfaces/market-candidate.interface';
 
 export class MarketSelectionUtil {
@@ -9,96 +6,130 @@ export class MarketSelectionUtil {
       return null;
     }
 
-    const market = candidates[0].market;
-
     /*
      * ----------------------------------------------------------
-     * MATCH RESULT / 1X2
+     * ELIGIBILITY
      * ----------------------------------------------------------
      *
-     * HOME, DRAW and AWAY are mutually exclusive.
+     * FinalDecisionEngine is the authority that determines
+     * whether a candidate is eligible for publication.
      *
-     * The normalized 1X2 probability is the primary selection
-     * signal. Supporting evidence is used only as a tie-breaker.
+     * A rejected candidate must never be selected.
      */
-    if (market === PredictionMarket.MATCH_RESULT) {
-      return [...candidates].sort((a, b) => {
-        const probabilityDifference =
-          Number(b.probability ?? 0) - Number(a.probability ?? 0);
+    const eligibleCandidates = candidates.filter(
+      (candidate) => candidate.eligible === true,
+    );
 
-        if (probabilityDifference !== 0) {
-          return probabilityDifference;
-        }
-
-        const decisionScoreDifference =
-          Number(b.decisionScore ?? 0) - Number(a.decisionScore ?? 0);
-
-        if (decisionScoreDifference !== 0) {
-          return decisionScoreDifference;
-        }
-
-        const agreementDifference =
-          Number(b.modelAgreement ?? 0) - Number(a.modelAgreement ?? 0);
-
-        if (agreementDifference !== 0) {
-          return agreementDifference;
-        }
-
-        const confidenceDifference =
-          Number(b.confidence ?? 0) - Number(a.confidence ?? 0);
-
-        if (confidenceDifference !== 0) {
-          return confidenceDifference;
-        }
-
-        return Number(b.dataQuality ?? 0) - Number(a.dataQuality ?? 0);
-      })[0];
+    if (!eligibleCandidates.length) {
+      return null;
     }
 
     /*
      * ----------------------------------------------------------
-     * OTHER MARKETS
+     * FINAL DECISION SELECTION
      * ----------------------------------------------------------
      *
-     * The candidate's final decision score is the market-level
-     * representation of probability + supporting evidence.
+     * decisionScore is produced from the final decision inputs:
      *
-     * Therefore it is the primary selector here.
+     *   probability
+     *   confidence
+     *   safety
+     *   model agreement
+     *   data quality
+     *   calibration reliability
+     *   selection-aligned evidence
      *
-     * Probability is the first tie-breaker so a materially stronger
-     * probability is not discarded because of a small supporting-
-     * evidence difference.
+     * Probability must therefore NOT bypass the final decision
+     * architecture by becoming the primary selector here.
+     *
+     * This layer chooses between already-evaluated candidates.
      */
-    return [...candidates].sort((a, b) => {
+    return [...eligibleCandidates].sort((a, b) => {
+      /*
+       * 1. FINAL DECISION SCORE
+       *
+       * Primary ordering signal.
+       */
       const decisionScoreDifference =
-        Number(b.decisionScore ?? 0) - Number(a.decisionScore ?? 0);
+        this.safeNumber(b.decisionScore) - this.safeNumber(a.decisionScore);
 
       if (decisionScoreDifference !== 0) {
         return decisionScoreDifference;
       }
 
-      const probabilityDifference =
-        Number(b.probability ?? 0) - Number(a.probability ?? 0);
+      /*
+       * 2. RISK
+       *
+       * Lower dynamic risk is preferred when final decision
+       * scores are effectively tied.
+       */
+      const riskDifference =
+        this.safeNumber(a.riskScore) - this.safeNumber(b.riskScore);
 
-      if (probabilityDifference !== 0) {
-        return probabilityDifference;
+      if (riskDifference !== 0) {
+        return riskDifference;
       }
 
-      const agreementDifference =
-        Number(b.modelAgreement ?? 0) - Number(a.modelAgreement ?? 0);
-
-      if (agreementDifference !== 0) {
-        return agreementDifference;
-      }
-
+      /*
+       * 3. CONFIDENCE
+       *
+       * Confidence measures trust in the probability estimate.
+       *
+       * It is deliberately NOT combined with probability here.
+       * It is only a tie-breaker because the final decision score
+       * has already incorporated both concepts independently.
+       */
       const confidenceDifference =
-        Number(b.confidence ?? 0) - Number(a.confidence ?? 0);
+        this.safeNumber(b.confidence) - this.safeNumber(a.confidence);
 
       if (confidenceDifference !== 0) {
         return confidenceDifference;
       }
 
-      return Number(b.dataQuality ?? 0) - Number(a.dataQuality ?? 0);
+      /*
+       * 4. MODEL AGREEMENT
+       */
+      const agreementDifference =
+        this.safeNumber(b.modelAgreement) - this.safeNumber(a.modelAgreement);
+
+      if (agreementDifference !== 0) {
+        return agreementDifference;
+      }
+
+      /*
+       * 5. DATA QUALITY
+       */
+      const dataQualityDifference =
+        this.safeNumber(b.dataQuality) - this.safeNumber(a.dataQuality);
+
+      if (dataQualityDifference !== 0) {
+        return dataQualityDifference;
+      }
+
+      /*
+       * 6. PROBABILITY
+       *
+       * Probability is retained as the final deterministic
+       * tie-breaker, not the primary selector.
+       */
+      const probabilityDifference =
+        this.safeNumber(b.probability) - this.safeNumber(a.probability);
+
+      if (probabilityDifference !== 0) {
+        return probabilityDifference;
+      }
+
+      /*
+       * 7. CALIBRATION RELIABILITY
+       */
+      return (
+        this.safeNumber(b.calibrationReliability) -
+        this.safeNumber(a.calibrationReliability)
+      );
     })[0];
+  }
+
+  private static safeNumber(value: number | null | undefined): number {
+    return typeof value === 'number' && Number.isFinite(value) ? value : 0;
   }
 }

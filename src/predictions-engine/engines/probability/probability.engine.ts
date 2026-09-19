@@ -1,5 +1,3 @@
-// src/predictions-engine/engines/probability/probability.engine.ts
-
 import { Injectable } from '@nestjs/common';
 
 import { CalibrationAdjustment } from '../../interfaces/calibration-adjustment.interface';
@@ -18,12 +16,13 @@ export class ProbabilityEngine {
   calculate(input: MarketModelInput): ProbabilityModelResult {
     /*
      * ----------------------------------------------------------
-     * COMMON SPORTS-DATA MODEL
+     * COMMON SCORE-DISTRIBUTION MODEL
      * ----------------------------------------------------------
      *
-     * This is the structural probability foundation.
+     * This is the authoritative probability foundation.
      *
-     * No historical age cutoff is introduced here.
+     * RawGoalModelUtil generates the joint score distribution from
+     * the prepared sports evidence.
      */
     const goalModel = RawGoalModelUtil.calculate(input.features);
 
@@ -36,34 +35,82 @@ export class ProbabilityEngine {
     const commonProbability = this.clamp(commonMarketProbability.probability);
 
     /*
-     * ----------------------------------------------------------
-     * REGISTERED MARKET MODEL
-     * ----------------------------------------------------------
-     *
-     * The registered market model independently challenges the
-     * common sports-data probability.
+     * Settlement probabilities are part of the authoritative
+     * market probability result and must remain available for
+     * markets such as DRAW_NO_BET and ASIAN_HANDICAP.
      */
-    const model = this.marketModelRegistry.getModel(input.market);
+    const settlementModelOutputs: Record<string, number> = {};
+
+    if (
+      typeof commonMarketProbability.winProbability === 'number' &&
+      Number.isFinite(commonMarketProbability.winProbability)
+    ) {
+      settlementModelOutputs.winProbability = this.clamp(
+        commonMarketProbability.winProbability,
+      );
+    }
+
+    if (
+      typeof commonMarketProbability.pushProbability === 'number' &&
+      Number.isFinite(commonMarketProbability.pushProbability)
+    ) {
+      settlementModelOutputs.pushProbability = this.clamp(
+        commonMarketProbability.pushProbability,
+      );
+    }
+
+    if (
+      typeof commonMarketProbability.lossProbability === 'number' &&
+      Number.isFinite(commonMarketProbability.lossProbability)
+    ) {
+      settlementModelOutputs.lossProbability = this.clamp(
+        commonMarketProbability.lossProbability,
+      );
+    }
 
     /*
      * ----------------------------------------------------------
-     * NO REGISTERED MODEL
+     * MARKET-SPECIFIC CALCULATOR
      * ----------------------------------------------------------
      *
-     * The common score-matrix probability remains usable.
+     * The registry provides the market-specific calculator and
+     * additional market diagnostics.
      *
-     * Do not manufacture artificial agreement from a missing
-     * market model.
+     * IMPORTANT:
+     *
+     * The registered market engine is NOT an independent model.
+     *
+     * The engines currently registered here all derive their
+     * probability from RawGoalModelUtil, so their probability must
+     * not be treated as a second statistically independent estimate.
      */
-    if (!model) {
-      const comparisonConfidence = this.getComparisonConfidence(input);
+    const marketModel = this.marketModelRegistry.getModel(input.market);
 
-      const dataQuality = this.getDataQuality(input);
+    const comparisonConfidence = this.getComparisonConfidence(input);
 
+    const dataQuality = this.getDataQuality(input);
+
+    /*
+     * ----------------------------------------------------------
+     * NO MARKET CALCULATOR
+     * ----------------------------------------------------------
+     *
+     * The common market probability is still usable.
+     */
+    if (!marketModel) {
       const modelReliability = this.calculateFallbackModelReliability(
         comparisonConfidence,
         dataQuality,
         commonMarketProbability.scoreMatrixCoherent,
+      );
+
+      const calibrationAdjustment = this.getCalibrationAdjustment(
+        input.calibrationAdjustment,
+      );
+
+      const calibratedProbability = this.applyCalibrationAdjustment(
+        commonProbability,
+        calibrationAdjustment,
       );
 
       return {
@@ -71,11 +118,14 @@ export class ProbabilityEngine {
 
         selection: input.selection,
 
-        probability: commonProbability,
+        probability: calibratedProbability,
 
         supportingProbability: commonProbability,
 
-        modelAgreement: commonMarketProbability.scoreMatrixCoherent ? 1 : 0,
+        /*
+         * No independent model exists.
+         */
+        modelAgreement: 0,
 
         sampleSize: input.features.overallSampleSize,
 
@@ -85,7 +135,7 @@ export class ProbabilityEngine {
 
         modelName: 'common-score-matrix',
 
-        modelVersion: 'common-score-matrix-v2',
+        modelVersion: 'common-score-matrix-v3',
 
         modelSignals: {
           commonScoreMatrix: commonProbability,
@@ -104,6 +154,18 @@ export class ProbabilityEngine {
 
           goalPreventionDifference:
             input.features.comparison?.goalPrevention?.difference ?? 0,
+
+          structuralProbabilityConsistency: 1,
+
+          independentModelAvailable: 0,
+
+          consensusProbability: commonProbability,
+
+          recalculatedProbability: commonProbability,
+
+          calibratedProbability,
+
+          ...settlementModelOutputs,
         },
 
         modelOutputs: {
@@ -120,102 +182,114 @@ export class ProbabilityEngine {
           expectedAwayGoals: goalModel.expectedAwayGoals,
 
           expectedTotalGoals: goalModel.expectedTotalGoals,
+
+          rawCommonProbability: commonProbability,
+
+          consensusProbability: commonProbability,
+
+          recalculatedProbability: commonProbability,
+
+          calibratedProbability,
+
+          calibrationAdjustment,
+
+          /*
+           * Preserve DNB / Asian settlement probabilities.
+           */
+          ...settlementModelOutputs,
         },
       };
     }
 
-    const registeredResult = model.calculate(input);
+    /*
+     * ----------------------------------------------------------
+     * MARKET CALCULATOR RESULT
+     * ----------------------------------------------------------
+     *
+     * This result is used for market-specific output and
+     * diagnostics.
+     *
+     * Its probability is expected to represent the same underlying
+     * score-distribution probability already calculated above.
+     */
+    const marketResult = marketModel.calculate(input);
 
-    const registeredProbability = this.clamp(registeredResult.probability);
+    const marketProbability = this.clamp(marketResult.probability);
 
     /*
      * ----------------------------------------------------------
-     * THREE-WAY EVIDENCE COMPARISON
+     * STRUCTURAL CONSISTENCY
      * ----------------------------------------------------------
      *
-     * 1. Common score matrix
-     * 2. Registered market model
-     * 3. Team-comparison probability
+     * Because the registered engine and common probability utility
+     * currently derive from the same RawGoalModel, their difference
+     * measures implementation/structural consistency rather than
+     * independent statistical agreement.
      *
-     * Agreement measures convergence.
+     * This signal is diagnostic.
+     */
+    const structuralProbabilityConsistency = this.clamp(
+      1 - Math.abs(commonProbability - marketProbability),
+    );
+
+    /*
+     * ----------------------------------------------------------
+     * MODEL AGREEMENT
+     * ----------------------------------------------------------
      *
-     * Importantly, the probability itself is never raised merely
-     * because a market has high safety characteristics.
+     * There is no genuinely independent probability model here.
+     *
+     * Therefore modelAgreement is deliberately NOT calculated as
+     * agreement between independent models.
+     *
+     * It is retained as a compatibility field representing how
+     * consistently the registered market calculator reproduces the
+     * common structural probability.
+     */
+    const modelAgreement = structuralProbabilityConsistency;
+
+    /*
+     * ----------------------------------------------------------
+     * COMPARISON SUPPORT
+     * ----------------------------------------------------------
+     *
+     * RawModelAgreementUtil uses the comparison data only as a
+     * directional consistency signal.
+     *
+     * It does not create a third probability.
      */
     const agreement = RawModelAgreementUtil.calculate(
       input.features,
       input.market,
       input.selection,
       commonProbability,
-      registeredProbability,
+      marketProbability,
     );
 
-    const modelAgreement = this.clamp(agreement.agreement);
-
-    const matrixModel = this.clamp(
-      agreement.modelOutputs.matrixModel ?? commonProbability,
-    );
-
+    /*
+     * Keep the comparison-derived diagnostic outputs, but never use
+     * comparisonModel as a probability input.
+     */
     const comparisonModel = this.clamp(
-      agreement.modelOutputs.comparisonModel ?? commonProbability,
-    );
-
-    const registeredModel = this.clamp(
-      agreement.modelOutputs.registeredModel ?? registeredProbability,
+      agreement.modelOutputs.comparisonModel ?? 0.5,
     );
 
     /*
      * ----------------------------------------------------------
-     * EVIDENCE AVAILABILITY
+     * AUTHORITATIVE PROBABILITY
      * ----------------------------------------------------------
      *
-     * Comparison confidence is kept separate from the actual
-     * comparison probability.
+     * No second probability reconciliation is performed.
      *
-     * Missing comparison evidence must not manufacture an
-     * apparent directional signal.
+     * The common score-distribution probability remains the raw
+     * probability anchor.
+     *
+     * We only fall back to the market calculator probability if the
+     * common probability is structurally unavailable.
      */
-    const comparisonConfidence = this.getComparisonConfidence(input);
-
-    const dataQuality = this.getDataQuality(input);
-
-    /*
-     * ----------------------------------------------------------
-     * FIRST RECONCILIATION
-     * ----------------------------------------------------------
-     *
-     * The common score matrix remains the structural anchor.
-     *
-     * Independent evidence gets additional influence only to the
-     * extent that it is actually available and coherent.
-     */
-    const consensusProbability = this.calculateConsensusProbability(
-      matrixModel,
-      registeredModel,
-      comparisonModel,
-      modelAgreement,
-      comparisonConfidence,
-      dataQuality,
-    );
-
-    /*
-     * ----------------------------------------------------------
-     * SECOND RECONCILIATION
-     * ----------------------------------------------------------
-     *
-     * This is a bounded reconciliation step.
-     *
-     * It cannot create probability merely because the market is
-     * broad or easy to satisfy.
-     */
-    const recalculatedProbability = this.recalculateProbability(
-      consensusProbability,
-      matrixModel,
-      registeredModel,
-      comparisonModel,
-      modelAgreement,
-      comparisonConfidence,
-    );
+    const structuralProbability = commonMarketProbability.scoreMatrixCoherent
+      ? commonProbability
+      : marketProbability;
 
     /*
      * ----------------------------------------------------------
@@ -227,7 +301,7 @@ export class ProbabilityEngine {
     );
 
     const calibratedProbability = this.applyCalibrationAdjustment(
-      recalculatedProbability,
+      structuralProbability,
       calibrationAdjustment,
     );
 
@@ -235,20 +309,35 @@ export class ProbabilityEngine {
      * ----------------------------------------------------------
      * MODEL RELIABILITY
      * ----------------------------------------------------------
+     *
+     * Reliability is separate from probability.
+     *
+     * It considers:
+     * - structural consistency
+     * - comparison evidence confidence
+     * - overall data quality
+     * - market-calculator reliability
      */
     const modelReliability = this.calculateModelReliability(
-      modelAgreement,
+      structuralProbabilityConsistency,
       comparisonConfidence,
       dataQuality,
-      registeredResult.modelReliability,
+      marketResult.modelReliability,
     );
 
     return {
-      ...registeredResult,
+      ...marketResult,
 
+      /*
+       * Final probability is calibration applied to the structural
+       * market probability.
+       */
       probability: calibratedProbability,
 
-      supportingProbability: recalculatedProbability,
+      /*
+       * Pre-calibration probability.
+       */
+      supportingProbability: structuralProbability,
 
       modelAgreement,
 
@@ -258,10 +347,17 @@ export class ProbabilityEngine {
 
       modelReliability,
 
+      /*
+       * Preserve the market engine identity/version.
+       */
       modelSignals: {
-        ...(registeredResult.modelSignals ?? {}),
+        ...(marketResult.modelSignals ?? {}),
 
         ...agreement.modelOutputs,
+
+        commonScoreMatrix: commonProbability,
+
+        registeredMarketProbability: marketProbability,
 
         scoreMatrixCoherent: commonMarketProbability.scoreMatrixCoherent
           ? 1
@@ -278,20 +374,44 @@ export class ProbabilityEngine {
         goalPreventionDifference:
           input.features.comparison?.goalPrevention?.difference ?? 0,
 
-        consensusProbability,
+        /*
+         * Critical architectural diagnostics.
+         */
+        independentModelAvailable: 0,
 
-        recalculatedProbability,
+        structuralProbabilityConsistency,
+
+        /*
+         * Compatibility fields.
+         *
+         * There is no second reconciliation pass.
+         */
+        consensusProbability: structuralProbability,
+
+        recalculatedProbability: structuralProbability,
 
         calibratedProbability,
+
+        /*
+         * Preserve authoritative settlement probabilities for
+         * settlement-based markets.
+         */
+        ...settlementModelOutputs,
       },
 
       modelOutputs: {
-        ...(registeredResult.modelOutputs ?? {}),
+        ...(marketResult.modelOutputs ?? {}),
 
         commonScoreMatrix: commonProbability,
 
-        registeredMarketModel: registeredProbability,
+        registeredMarketModel: marketProbability,
 
+        /*
+         * Diagnostic only.
+         *
+         * This is the comparison-support mapping from
+         * RawModelAgreementUtil and is NOT an independent model.
+         */
         comparisonModel,
 
         homeWin: goalModel.homeWin,
@@ -308,145 +428,36 @@ export class ProbabilityEngine {
 
         rawCommonProbability: commonProbability,
 
-        consensusProbability,
+        structuralProbability,
 
-        recalculatedProbability,
+        /*
+         * Compatibility aliases.
+         */
+        consensusProbability: structuralProbability,
+
+        recalculatedProbability: structuralProbability,
 
         calibratedProbability,
 
         calibrationAdjustment,
 
         registeredModelDifference: Math.abs(
-          registeredProbability - commonProbability,
+          marketProbability - commonProbability,
         ),
 
         comparisonModelDifference: Math.abs(
           comparisonModel - commonProbability,
         ),
 
-        coherenceAdjustment: recalculatedProbability - commonProbability,
+        coherenceAdjustment: structuralProbability - commonProbability,
+
+        /*
+         * Preserve authoritative settlement probabilities for
+         * DRAW_NO_BET and ASIAN_HANDICAP.
+         */
+        ...settlementModelOutputs,
       },
     };
-  }
-
-  private calculateConsensusProbability(
-    matrixProbability: number,
-    registeredProbability: number,
-    comparisonProbability: number,
-    agreement: number,
-    comparisonConfidence: number,
-    dataQuality: number,
-  ): number {
-    const matrix = this.clamp(matrixProbability);
-
-    const registered = this.clamp(registeredProbability);
-
-    const comparison = this.clamp(comparisonProbability);
-
-    const cleanAgreement = this.clamp(agreement);
-
-    const cleanComparisonConfidence = this.clamp(comparisonConfidence);
-
-    const cleanDataQuality = this.clamp(dataQuality);
-
-    /*
-     * ----------------------------------------------------------
-     * EVIDENCE WEIGHTS
-     * ----------------------------------------------------------
-     *
-     * The common model is the structural base.
-     *
-     * The registered model gains influence from actual model
-     * agreement.
-     *
-     * The comparison path gains influence from actual comparison
-     * confidence.
-     *
-     * Data quality scales external evidence rather than inventing
-     * new probability.
-     */
-    const matrixWeight = 0.5;
-
-    const registeredWeight = 0.2 + cleanAgreement * 0.1;
-
-    const comparisonWeight =
-      cleanComparisonConfidence > 0 ? 0.2 + cleanComparisonConfidence * 0.1 : 0;
-
-    const qualityAdjustment = 0.75 + cleanDataQuality * 0.25;
-
-    const effectiveRegisteredWeight = registeredWeight * qualityAdjustment;
-
-    const effectiveComparisonWeight = comparisonWeight * qualityAdjustment;
-
-    const totalWeight =
-      matrixWeight + effectiveRegisteredWeight + effectiveComparisonWeight;
-
-    if (totalWeight <= 0) {
-      return matrix;
-    }
-
-    return this.clamp(
-      (matrix * matrixWeight +
-        registered * effectiveRegisteredWeight +
-        comparison * effectiveComparisonWeight) /
-        totalWeight,
-    );
-  }
-
-  private recalculateProbability(
-    probability: number,
-    matrixProbability: number,
-    registeredProbability: number,
-    comparisonProbability: number,
-    agreement: number,
-    comparisonConfidence: number,
-  ): number {
-    const current = this.clamp(probability);
-
-    const matrix = this.clamp(matrixProbability);
-
-    const registered = this.clamp(registeredProbability);
-
-    const comparison = this.clamp(comparisonProbability);
-
-    const disagreement =
-      (Math.abs(current - matrix) +
-        Math.abs(current - registered) +
-        Math.abs(current - comparison)) /
-      3;
-
-    /*
-     * Close evidence does not need another reconciliation pass.
-     */
-    if (disagreement <= 0.02) {
-      return current;
-    }
-
-    const cleanAgreement = this.clamp(agreement);
-
-    const cleanComparisonConfidence = this.clamp(comparisonConfidence);
-
-    /*
-     * Strong agreement allows greater movement toward the
-     * reconciled evidence center.
-     *
-     * Weak agreement keeps the original consensus more stable.
-     */
-    const reconciliationWeight = this.clamp(
-      0.15 + cleanAgreement * 0.25 + cleanComparisonConfidence * 0.1,
-      0.15,
-      0.5,
-    );
-
-    /*
-     * The common matrix remains the largest reference point,
-     * but independent evidence remains present.
-     */
-    const evidenceCenter = matrix * 0.5 + registered * 0.2 + comparison * 0.3;
-
-    return this.clamp(
-      current + (evidenceCenter - current) * reconciliationWeight,
-    );
   }
 
   private calculateFallbackModelReliability(
@@ -457,8 +468,10 @@ export class ProbabilityEngine {
     const matrixReliability = scoreMatrixCoherent ? 1 : 0.35;
 
     /*
-     * Missing registered models should reduce reliability,
-     * rather than being interpreted as strong model agreement.
+     * No independent market model exists.
+     *
+     * Reliability therefore comes from the quality of the
+     * authoritative structural model and supporting evidence.
      */
     return this.clamp(
       matrixReliability * 0.45 +
@@ -468,22 +481,22 @@ export class ProbabilityEngine {
   }
 
   private calculateModelReliability(
-    modelAgreement: number,
+    structuralConsistency: number,
     comparisonConfidence: number,
     dataQuality: number,
-    registeredReliability?: number,
+    marketModelReliability?: number,
   ): number {
-    const marketModelReliability =
-      typeof registeredReliability === 'number' &&
-      Number.isFinite(registeredReliability)
-        ? this.clamp(registeredReliability)
+    const calculatorReliability =
+      typeof marketModelReliability === 'number' &&
+      Number.isFinite(marketModelReliability)
+        ? this.clamp(marketModelReliability)
         : 0;
 
     return this.clamp(
-      modelAgreement * 0.35 +
+      structuralConsistency * 0.35 +
         comparisonConfidence * 0.35 +
         dataQuality * 0.2 +
-        marketModelReliability * 0.1,
+        calculatorReliability * 0.1,
     );
   }
 

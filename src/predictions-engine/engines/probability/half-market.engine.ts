@@ -26,29 +26,40 @@ export class HalfMarketEngine implements MarketModel {
   calculate(input: MarketModelInput): ProbabilityModelResult {
     const model = RawGoalModelUtil.calculate(input.features);
 
+    const secondHalf =
+      input.market === PredictionMarket.SECOND_HALF_RESULT ||
+      input.market === PredictionMarket.SECOND_HALF_GOALS;
+
+    const timingData = secondHalf ? model.secondHalf : model.halfTime;
+
+    /*
+     * The period score model is authoritative.
+     *
+     * It uses only explicit first-half or second-half data from
+     * RawGoalModelUtil and produces the corresponding period score
+     * distribution.
+     *
+     * We do not reconcile another empirical probability into it because
+     * that would reuse the same period evidence twice.
+     */
     const matrixProbability = this.resolveProbability(
       input.market,
       input.selection,
       model,
     );
 
+    const probability = this.clamp(matrixProbability);
+
+    /*
+     * Empirical timing evidence is retained only as a diagnostic
+     * signal. It can later be used by calibration/audit systems without
+     * changing the raw probability.
+     */
     const timingEvidence = this.calculateTimingEvidence(
       input,
       input.market,
       input.selection,
     );
-
-    const probability = this.reconcileProbability(
-      matrixProbability,
-      timingEvidence,
-      input,
-    );
-
-    const secondHalf =
-      input.market === PredictionMarket.SECOND_HALF_RESULT ||
-      input.market === PredictionMarket.SECOND_HALF_GOALS;
-
-    const timingData = secondHalf ? model.secondHalf : model.halfTime;
 
     const sampleSize = Math.max(input.features.overallSampleSize ?? 0, 0);
 
@@ -69,10 +80,6 @@ export class HalfMarketEngine implements MarketModel {
 
       probability,
 
-      /*
-       * Preserve the raw period score-matrix probability as the
-       * structural supporting probability.
-       */
       supportingProbability: matrixProbability,
 
       sampleSize,
@@ -83,7 +90,11 @@ export class HalfMarketEngine implements MarketModel {
 
       modelName: 'raw-half-model',
 
-      modelVersion: 'raw-half-v4',
+      /*
+       * New version because empirical period reconciliation has been
+       * removed from the raw probability path.
+       */
+      modelVersion: 'raw-half-v5',
 
       modelOutputs: {
         homeWin: timingData.homeWin,
@@ -142,7 +153,13 @@ export class HalfMarketEngine implements MarketModel {
           1,
         ),
 
+        /*
+         * Explicit period availability is important for downstream
+         * confidence/safety logic.
+         */
         timingEvidenceAvailable: timingEvidence.available ? 1 : 0,
+
+        periodModelAvailable: timingData.available ? 1 : 0,
       },
     };
   }
@@ -160,10 +177,10 @@ export class HalfMarketEngine implements MarketModel {
         return this.resolveResult(selection, model.secondHalf);
 
       case PredictionMarket.FIRST_HALF_GOALS:
-        return this.resolveGoals(selection, model.halfTime.totalGoals);
+        return this.resolveGoals(selection, model.halfTime);
 
       case PredictionMarket.SECOND_HALF_GOALS:
-        return this.resolveGoals(selection, model.secondHalf.totalGoals);
+        return this.resolveGoals(selection, model.secondHalf);
 
       default:
         return 0;
@@ -173,11 +190,23 @@ export class HalfMarketEngine implements MarketModel {
   private resolveResult(
     selection: string,
     model: {
+      available: boolean;
+
       homeWin: number;
+
       draw: number;
+
       awayWin: number;
     },
   ): number {
+    /*
+     * Never fabricate a period probability when the period model is
+     * unavailable.
+     */
+    if (!model.available) {
+      return 0;
+    }
+
     switch (selection.trim().toUpperCase()) {
       case 'HOME':
       case '1':
@@ -198,7 +227,21 @@ export class HalfMarketEngine implements MarketModel {
     }
   }
 
-  private resolveGoals(selection: string, probabilities: number[]): number {
+  private resolveGoals(
+    selection: string,
+    model: {
+      available: boolean;
+
+      totalGoals: number[];
+    },
+  ): number {
+    /*
+     * No period data means no defensible period-goal probability.
+     */
+    if (!model.available) {
+      return 0;
+    }
+
     const normalized = selection.trim().toUpperCase();
 
     const match = normalized.match(/^(OVER|UNDER)[:_\s-]?(\d+(?:\.\d+)?)$/);
@@ -217,7 +260,7 @@ export class HalfMarketEngine implements MarketModel {
 
     if (side === 'OVER') {
       return this.clamp(
-        probabilities.reduce(
+        model.totalGoals.reduce(
           (sum, probability, goals) => (goals > line ? sum + probability : sum),
           0,
         ),
@@ -225,7 +268,7 @@ export class HalfMarketEngine implements MarketModel {
     }
 
     return this.clamp(
-      probabilities.reduce(
+      model.totalGoals.reduce(
         (sum, probability, goals) => (goals < line ? sum + probability : sum),
         0,
       ),
@@ -254,9 +297,7 @@ export class HalfMarketEngine implements MarketModel {
     }> = [];
 
     /*
-     * ----------------------------------------------------------
-     * PERIOD RESULT EVIDENCE
-     * ----------------------------------------------------------
+     * Period-result empirical evidence.
      */
     if (
       market === PredictionMarket.HALF_TIME_RESULT ||
@@ -271,7 +312,6 @@ export class HalfMarketEngine implements MarketModel {
 
         const probability = this.readTimingSelectionProbability(
           period,
-          market,
           selection,
         );
 
@@ -293,9 +333,7 @@ export class HalfMarketEngine implements MarketModel {
     }
 
     /*
-     * ----------------------------------------------------------
-     * PERIOD GOAL EVIDENCE
-     * ----------------------------------------------------------
+     * Period-goal empirical evidence.
      */
     if (
       market === PredictionMarket.FIRST_HALF_GOALS ||
@@ -321,7 +359,9 @@ export class HalfMarketEngine implements MarketModel {
     );
 
     /*
-     * Actual timing observations determine sample reliability.
+     * Diagnostic strength only.
+     *
+     * This no longer feeds back into the raw period probability.
      */
     const sampleReliability = this.clamp(
       1 - Math.exp(-observationCount / 30),
@@ -335,21 +375,8 @@ export class HalfMarketEngine implements MarketModel {
       1,
     );
 
-    const comparisonConfidence = this.clamp(
-      input.features.comparison?.confidence ?? 0,
-      0,
-      1,
-    );
-
-    /*
-     * Comparison confidence can increase the confidence in the
-     * timing evidence only when it actually exists.
-     */
     const weight = this.clamp(
-      (sampleReliability * 0.55 +
-        dataReliability * 0.3 +
-        comparisonConfidence * 0.15) *
-        0.3,
+      (sampleReliability * 0.65 + dataReliability * 0.35) * 0.3,
       0,
       0.3,
     );
@@ -372,44 +399,62 @@ export class HalfMarketEngine implements MarketModel {
     const sources: unknown[] = [];
 
     /*
-     * Only the selected period is allowed into the timing model.
+     * Only explicitly exposed period data is allowed as a direct
+     * period source.
+     *
+     * This avoids accidentally treating full-match statistics as
+     * first-half or second-half statistics.
      */
     if (secondHalf) {
-      sources.push(input.features.home?.secondHalf);
+      if (input.features.home?.secondHalf) {
+        sources.push(input.features.home.secondHalf);
+      }
 
-      sources.push(input.features.away?.secondHalf);
+      if (input.features.away?.secondHalf) {
+        sources.push(input.features.away.secondHalf);
+      }
     } else {
-      sources.push(input.features.home?.firstHalf);
+      if (input.features.home?.firstHalf) {
+        sources.push(input.features.home.firstHalf);
+      }
 
-      sources.push(input.features.away?.firstHalf);
+      if (input.features.away?.firstHalf) {
+        sources.push(input.features.away.firstHalf);
+      }
     }
 
     /*
-     * Structured provider datasets may contain the selected
-     * period nested below competition statistics or profiles.
+     * Structured provider datasets are accepted only when they
+     * explicitly contain the requested period as a nested property.
+     *
+     * Generic competition/profile objects themselves are NOT treated
+     * as period data.
      */
-    if (secondHalf) {
-      sources.push(input.features.home?.sourceData?.competitionStats);
+    const periodKey = secondHalf ? 'secondHalf' : 'firstHalf';
 
-      sources.push(input.features.away?.sourceData?.competitionStats);
+    const structuredSources = [
+      input.features.home?.sourceData?.competitionStats,
+      input.features.away?.sourceData?.competitionStats,
+      input.features.home?.sourceData?.performanceProfile,
+      input.features.away?.sourceData?.performanceProfile,
+    ];
 
-      sources.push(input.features.home?.sourceData?.performanceProfile);
+    for (const source of structuredSources) {
+      if (source && typeof source === 'object' && !Array.isArray(source)) {
+        const record = source;
 
-      sources.push(input.features.away?.sourceData?.performanceProfile);
-    } else {
-      sources.push(input.features.home?.sourceData?.competitionStats);
+        const nested = record[periodKey];
 
-      sources.push(input.features.away?.sourceData?.competitionStats);
-
-      sources.push(input.features.home?.sourceData?.performanceProfile);
-
-      sources.push(input.features.away?.sourceData?.performanceProfile);
+        if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
+          sources.push(nested);
+        }
+      }
     }
 
-    if (input.features.h2h) {
-      sources.push(input.features.h2h);
-    }
-
+    /*
+     * H2H is deliberately not added here because its aggregate
+     * statistics are not inherently first-half/second-half data.
+     */
     return sources.filter((source) => source !== null && source !== undefined);
   }
 
@@ -423,25 +468,50 @@ export class HalfMarketEngine implements MarketModel {
 
     const record = source as Record<string, unknown>;
 
-    /*
-     * Direct period feature object.
-     */
-    const directLooksLikePeriod = this.hasAnyKey(record, [
-      'homeWinRate',
-      'awayWinRate',
-      'drawRate',
-      'over15Rate',
-      'under15Rate',
-      'goalsOver15Rate',
-      'goalsUnder15Rate',
-    ]);
-
-    if (directLooksLikePeriod) {
-      return record;
-    }
-
     const periodKey = secondHalf ? 'secondHalf' : 'firstHalf';
 
+    /*
+     * Direct period feature object is accepted only when it carries
+     * period-specific evidence fields.
+     *
+     * Generic full-match source objects are NOT accepted merely
+     * because they contain homeWinRate/drawRate/awayWinRate.
+     */
+    if (
+      this.hasAnyKey(record, [
+        'averageGoalsScored',
+        'averageGoalsConceded',
+        'homeWinRate',
+        'awayWinRate',
+        'drawRate',
+        'over05Rate',
+        'over15Rate',
+        'over25Rate',
+        'over35Rate',
+        'over45Rate',
+        'under05Rate',
+        'under15Rate',
+        'under25Rate',
+        'under35Rate',
+        'under45Rate',
+      ])
+    ) {
+      /*
+       * Direct period objects from RawPredictionFeatures have their
+       * own sampleSize and period statistics. They are safe here.
+       */
+      if (
+        Object.prototype.hasOwnProperty.call(record, 'sampleSize') ||
+        Object.prototype.hasOwnProperty.call(record, 'averageGoalsScored') ||
+        Object.prototype.hasOwnProperty.call(record, 'averageGoalsConceded')
+      ) {
+        return record;
+      }
+    }
+
+    /*
+     * Nested provider-specific period object.
+     */
     const nested = record[periodKey];
 
     if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
@@ -516,6 +586,7 @@ export class HalfMarketEngine implements MarketModel {
 
       values.push({
         probability: value,
+
         observations,
       });
     }
@@ -523,39 +594,32 @@ export class HalfMarketEngine implements MarketModel {
 
   private readTimingSelectionProbability(
     period: Record<string, unknown>,
-    market: PredictionMarket,
     selection: string,
   ): number | null {
     const normalized = selection.trim().toUpperCase();
 
-    if (
-      market === PredictionMarket.HALF_TIME_RESULT ||
-      market === PredictionMarket.SECOND_HALF_RESULT
-    ) {
-      const keys =
-        normalized === 'HOME' || normalized === '1' || normalized === 'HOME_WIN'
-          ? ['homeWinRate', 'homeWinProbability', 'winRate']
-          : normalized === 'DRAW' || normalized === 'X'
-            ? ['drawRate', 'drawProbability']
-            : normalized === 'AWAY' ||
-                normalized === '2' ||
-                normalized === 'AWAY_WIN'
-              ? ['awayWinRate', 'awayWinProbability']
-              : [];
+    const keys =
+      normalized === 'HOME' || normalized === '1' || normalized === 'HOME_WIN'
+        ? ['homeWinRate', 'homeWinProbability', 'winRate']
+        : normalized === 'DRAW' || normalized === 'X'
+          ? ['drawRate', 'drawProbability']
+          : normalized === 'AWAY' ||
+              normalized === '2' ||
+              normalized === 'AWAY_WIN'
+            ? ['awayWinRate', 'awayWinProbability']
+            : [];
 
-      if (!keys.length) {
-        return null;
-      }
-
-      return this.readRate(period, keys);
+    if (!keys.length) {
+      return null;
     }
 
-    return null;
+    return this.readRate(period, keys);
   }
 
   private calculateWeightedProbability(
     values: Array<{
       probability: number;
+
       observations: number;
     }>,
   ): number {
@@ -580,58 +644,6 @@ export class HalfMarketEngine implements MarketModel {
     }
 
     return this.clamp(weightedProbability / totalWeight);
-  }
-
-  private reconcileProbability(
-    matrixProbability: number,
-    timingEvidence: {
-      probability: number;
-      weight: number;
-      available: boolean;
-      observationCount: number;
-    },
-    input: MarketModelInput,
-  ): number {
-    const matrix = this.clamp(matrixProbability);
-
-    if (!timingEvidence.available || timingEvidence.weight <= 0) {
-      return matrix;
-    }
-
-    const comparisonConfidence = this.clamp(
-      input.features.comparison?.confidence ?? 0,
-      0,
-      1,
-    );
-
-    const dataQuality = this.clamp(
-      (input.features.overallDataQuality ?? 0) / 100,
-      0,
-      1,
-    );
-
-    /*
-     * Timing evidence is secondary.
-     *
-     * Even when comparison confidence and data quality are strong,
-     * it cannot replace the period score matrix.
-     */
-    const evidenceCoherence = this.clamp(
-      comparisonConfidence * 0.55 + dataQuality * 0.45,
-      0,
-      1,
-    );
-
-    const evidenceWeight = this.clamp(
-      timingEvidence.weight * (0.75 + evidenceCoherence * 0.25),
-      0,
-      0.3,
-    );
-
-    return this.clamp(
-      matrix * (1 - evidenceWeight) +
-        timingEvidence.probability * evidenceWeight,
-    );
   }
 
   private getThresholdKey(line: number): string | null {
@@ -713,9 +725,20 @@ export class HalfMarketEngine implements MarketModel {
     sampleSize: number,
     dataQuality: number,
   ): number {
-    const sampleReliability = 1 - Math.exp(-sampleSize / 20);
+    const safeSampleSize = Math.max(
+      Number.isFinite(sampleSize) ? sampleSize : 0,
+      0,
+    );
 
-    return this.clamp(sampleReliability * 0.45 + (dataQuality / 100) * 0.55);
+    const safeDataQuality = this.clamp(dataQuality, 0, 100);
+
+    const sampleReliability = 1 - Math.exp(-safeSampleSize / 20);
+
+    return this.clamp(
+      sampleReliability * 0.45 + (safeDataQuality / 100) * 0.55,
+      0,
+      1,
+    );
   }
 
   private clamp(value: number, minimum = 0, maximum = 1): number {

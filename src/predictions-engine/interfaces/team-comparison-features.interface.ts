@@ -23,6 +23,14 @@ export interface TeamComparisonFeatures {
 
   overallStrength: TeamComparisonDimension;
 
+  /*
+   * Explicit opponent-adjusted competition strength.
+   *
+   * This prevents raw win/loss records from being interpreted
+   * without considering the quality of opposition.
+   */
+  opponentAdjustedStrength: TeamComparisonDimension;
+
   goalProduction: TeamComparisonDimension;
 
   goalPrevention: TeamComparisonDimension;

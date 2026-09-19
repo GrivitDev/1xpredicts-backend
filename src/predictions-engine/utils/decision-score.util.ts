@@ -1,8 +1,37 @@
-// src/predictions-engine/utils/decision-score.util.ts
-
 import { DecisionScore } from '../interfaces/decision-score.interface';
 
 export class DecisionScoreUtil {
+  /*
+   * ----------------------------------------------------------
+   * DECISION SCORE WEIGHTS
+   * ----------------------------------------------------------
+   *
+   * DecisionScore is a ranking signal.
+   *
+   * It is NOT:
+   *
+   * - probability
+   * - confidence
+   * - safety
+   * - value
+   * - risk
+   *
+   * Those remain separate outputs.
+   *
+   * Meaningfulness is included only as a small ranking factor.
+   * It does not modify the underlying probability or confidence.
+   */
+  private static readonly WEIGHTS = {
+    probability: 0.26,
+    confidence: 0.24,
+    relativeEvidence: 0.18,
+    modelAgreement: 0.12,
+    dataQuality: 0.08,
+    safety: 0.07,
+    calibration: 0.0,
+    meaningfulness: 0.05,
+  } as const;
+
   static calculate(input: {
     probability: number;
     confidence: number;
@@ -11,17 +40,53 @@ export class DecisionScoreUtil {
     dataQuality: number;
     calibrationReliability: number;
 
+    /*
+     * These comparison fields are retained for diagnostics and
+     * compatibility with the existing decision pipeline.
+     *
+     * They must NOT be converted into absolute evidence strength
+     * here because this utility does not know whether the evidence
+     * supports the selected proposition.
+     */
     comparisonConfidence?: number;
     directionalDifference?: number;
     goalProductionDifference?: number;
     goalPreventionDifference?: number;
     evidenceCoherence?: number;
 
+    /*
+     * Selection-aware evidence.
+     *
+     * 0.50 = neutral
+     * > 0.50 = evidence advantage
+     * < 0.50 = evidence disadvantage
+     */
     relativeEvidenceAdvantage?: number;
+
+    /*
+     * Selection meaningfulness / specificity.
+     *
+     * 0.50 = neutral
+     * > 0.50 = more specific/actionable
+     * < 0.50 = broader
+     *
+     * This is NOT:
+     *
+     * - probability
+     * - confidence
+     * - value
+     * - risk
+     */
     marketSpecificity?: number;
   }): DecisionScore {
     const probability = this.clamp(input.probability, 0, 1);
 
+    /*
+     * Confidence is normalized against the engine maximum.
+     *
+     * Confidence remains completely independent from
+     * probability.
+     */
     const confidence = this.clamp(input.confidence, 0, 98) / 98;
 
     const safety = this.clamp(input.safetyScore, 0, 100) / 100;
@@ -32,122 +97,93 @@ export class DecisionScoreUtil {
 
     const calibration = this.clamp(input.calibrationReliability, 0, 100) / 100;
 
-    const comparisonConfidence = this.clamp(
-      input.comparisonConfidence ?? 0,
-      0,
-      1,
-    );
-
-    const directionalDifference = this.clamp(
-      input.directionalDifference ?? 0,
-      -1,
-      1,
-    );
-
-    const goalProductionDifference = this.clamp(
-      input.goalProductionDifference ?? 0,
-      -1,
-      1,
-    );
-
-    const goalPreventionDifference = this.clamp(
-      input.goalPreventionDifference ?? 0,
-      -1,
-      1,
-    );
-
-    const evidenceCoherence = this.clamp(input.evidenceCoherence ?? 0, 0, 1);
-
     /*
-     * Relative evidence is centered at 0.50.
+     * ----------------------------------------------------------
+     * SELECTION-ALIGNED EVIDENCE
+     * ----------------------------------------------------------
      *
-     * 0.50 means neither candidate has an evidence advantage.
-     * This means the score does not punish a candidate merely
-     * because the engine cannot distinguish it from alternatives.
+     * The decision score must use evidence already interpreted
+     * for the candidate.
      */
-    const relativeEvidenceAdvantage = this.clamp(
+    const relativeEvidence = this.clamp(
       input.relativeEvidenceAdvantage ?? 0.5,
       0,
       1,
     );
 
     /*
-     * Specificity is deliberately neutral by default.
+     * ----------------------------------------------------------
+     * EVIDENCE COHERENCE
+     * ----------------------------------------------------------
      *
-     * It is included only as a very small descriptive signal.
-     * It cannot overpower probability, evidence, agreement or
-     * confidence.
+     * Coherence is a supporting component of selection-aware
+     * evidence. It does not become another probability.
      */
-    const marketSpecificity = this.clamp(input.marketSpecificity ?? 0.5, 0, 1);
+    const evidenceCoherence =
+      input.evidenceCoherence !== undefined
+        ? this.clamp(input.evidenceCoherence, 0, 1)
+        : null;
 
-    const directionalStrength = Math.abs(directionalDifference);
-
-    const goalStrength =
-      Math.abs(goalProductionDifference) * 0.5 +
-      Math.abs(goalPreventionDifference) * 0.5;
-
-    const comparisonEvidence = this.clamp(
-      comparisonConfidence *
-        (directionalStrength * 0.4 +
-          goalStrength * 0.3 +
-          evidenceCoherence * 0.3),
-      0,
-      1,
-    );
+    const selectionEvidence =
+      evidenceCoherence !== null
+        ? this.clamp(relativeEvidence * 0.8 + evidenceCoherence * 0.2, 0, 1)
+        : relativeEvidence;
 
     /*
      * ----------------------------------------------------------
-     * FINAL DECISION WEIGHTS
+     * MEANINGFULNESS / SPECIFICITY
      * ----------------------------------------------------------
      *
-     * Probability is no longer allowed to dominate the final
-     * selection.
+     * This comes from the configured market-selection metadata.
      *
-     * Relative evidence is now a first-class signal.
+     * It is deliberately given only a small influence so that
+     * meaningfulness cannot overpower probability, confidence,
+     * evidence, safety, or model agreement.
      *
-     * Safety is supporting evidence, not the objective.
+     * Example:
+     *
+     *   BROAD    = 0.25
+     *   STANDARD = 0.50
+     *   SPECIFIC = 0.75
+     *
+     * This does NOT mean SPECIFIC predictions are more likely
+     * to be correct.
      */
-    const probabilityScore = probability;
+    const marketSpecificity = this.clamp(input.marketSpecificity ?? 0.5, 0, 1);
 
-    const confidenceScore = confidence;
-
-    const safetyScoreValue = safety;
-
-    const agreementScore = agreement;
-
-    const dataQualityScore = dataQuality;
-
-    const calibrationScore = calibration;
-
-    const relativeEvidenceScore = relativeEvidenceAdvantage;
-
-    const specificityScore = marketSpecificity;
-
+    /*
+     * ----------------------------------------------------------
+     * FINAL DECISION SCORE
+     * ----------------------------------------------------------
+     *
+     * This remains a ranking score for comparing candidates.
+     *
+     * It does not redefine any underlying prediction output.
+     */
     const total =
-      probabilityScore * 0.22 +
-      confidenceScore * 0.2 +
-      relativeEvidenceScore * 0.16 +
-      agreementScore * 0.12 +
-      dataQualityScore * 0.1 +
-      safetyScoreValue * 0.08 +
-      comparisonEvidence * 0.07 +
-      calibrationScore * 0.04 +
-      specificityScore * 0.01;
+      probability * this.WEIGHTS.probability +
+      confidence * this.WEIGHTS.confidence +
+      selectionEvidence * this.WEIGHTS.relativeEvidence +
+      agreement * this.WEIGHTS.modelAgreement +
+      dataQuality * this.WEIGHTS.dataQuality +
+      safety * this.WEIGHTS.safety +
+      calibration * this.WEIGHTS.calibration +
+      marketSpecificity * this.WEIGHTS.meaningfulness;
 
     return {
       total: this.clamp(total, 0, 1),
 
-      probability: probabilityScore,
+      probability,
 
-      confidence: confidenceScore,
+      confidence,
 
-      safety: safetyScoreValue,
+      safety,
 
-      modelAgreement: agreementScore,
+      modelAgreement: agreement,
 
-      dataQuality: dataQualityScore,
+      dataQuality,
 
-      calibration: calibrationScore,
+      calibration,
     };
   }
 

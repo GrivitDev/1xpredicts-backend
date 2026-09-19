@@ -1,5 +1,3 @@
-// src/predictions-engine/utils/market-probability.util.ts
-
 import { PredictionMarket } from '../../enums/prediction-market.enum';
 
 import { GoalModelResult } from './raw-goal-model.util';
@@ -31,6 +29,12 @@ export class MarketProbabilityUtil {
       case PredictionMarket.MATCH_RESULT:
         return this.calculateMatchResult(goalModel, selection);
 
+      case PredictionMarket.DOUBLE_CHANCE:
+        return this.calculateDoubleChance(goalModel, selection);
+
+      case PredictionMarket.DRAW_NO_BET:
+        return this.calculateDrawNoBet(goalModel, selection);
+
       case PredictionMarket.OVER_UNDER:
         return this.calculateOverUnder(goalModel, selection);
 
@@ -59,14 +63,14 @@ export class MarketProbabilityUtil {
 
       case PredictionMarket.FIRST_HALF_GOALS:
         return this.calculatePeriodGoals(
-          goalModel.halfTime.totalGoals,
+          goalModel.halfTime,
           selection,
           'HALF_SCORE_MATRIX',
         );
 
       case PredictionMarket.SECOND_HALF_GOALS:
         return this.calculatePeriodGoals(
-          goalModel.secondHalf.totalGoals,
+          goalModel.secondHalf,
           selection,
           'SECOND_HALF_SCORE_MATRIX',
         );
@@ -78,11 +82,7 @@ export class MarketProbabilityUtil {
         return this.calculateEuropeanHandicap(goalModel, selection);
 
       default:
-        return {
-          probability: 0,
-          source: 'COMMON_SCORE_MATRIX',
-          scoreMatrixCoherent: false,
-        };
+        return this.unavailable('COMMON_SCORE_MATRIX');
     }
   }
 
@@ -90,6 +90,10 @@ export class MarketProbabilityUtil {
     goalModel: GoalModelResult,
     selection: string,
   ): MarketProbabilityResult {
+    if (!this.matrixIsCoherent(goalModel.matrix)) {
+      return this.unavailable('COMMON_SCORE_MATRIX');
+    }
+
     const normalized = this.normalizeThreeWay(
       goalModel.homeWin,
       goalModel.draw,
@@ -119,12 +123,109 @@ export class MarketProbabilityUtil {
         };
 
       default:
-        return {
-          probability: 0,
-          source: 'COMMON_SCORE_MATRIX',
-          scoreMatrixCoherent: false,
-        };
+        return this.unavailable('COMMON_SCORE_MATRIX');
     }
+  }
+
+  private static calculateDoubleChance(
+    goalModel: GoalModelResult,
+    selection: string,
+  ): MarketProbabilityResult {
+    if (!this.matrixIsCoherent(goalModel.matrix)) {
+      return this.unavailable('COMMON_SCORE_MATRIX');
+    }
+
+    const normalized = this.normalizeThreeWay(
+      goalModel.homeWin,
+      goalModel.draw,
+      goalModel.awayWin,
+    );
+
+    const normalizedSelection = selection
+      .trim()
+      .toUpperCase()
+      .replace(/\s+/g, '');
+
+    switch (normalizedSelection) {
+      case 'HOME_OR_DRAW':
+      case 'HOME_DRAW':
+      case '1X':
+        return {
+          probability: this.clamp(normalized.home + normalized.draw),
+          source: 'COMMON_SCORE_MATRIX',
+          scoreMatrixCoherent: true,
+        };
+
+      case 'AWAY_OR_DRAW':
+      case 'DRAW_AWAY':
+      case 'X2':
+        return {
+          probability: this.clamp(normalized.away + normalized.draw),
+          source: 'COMMON_SCORE_MATRIX',
+          scoreMatrixCoherent: true,
+        };
+
+      case 'HOME_OR_AWAY':
+      case 'HOME_AWAY':
+      case '12':
+        return {
+          probability: this.clamp(normalized.home + normalized.away),
+          source: 'COMMON_SCORE_MATRIX',
+          scoreMatrixCoherent: true,
+        };
+
+      default:
+        return this.unavailable('COMMON_SCORE_MATRIX');
+    }
+  }
+
+  private static calculateDrawNoBet(
+    goalModel: GoalModelResult,
+    selection: string,
+  ): MarketProbabilityResult {
+    if (!this.matrixIsCoherent(goalModel.matrix)) {
+      return this.unavailable('COMMON_SCORE_MATRIX');
+    }
+
+    const normalized = this.normalizeThreeWay(
+      goalModel.homeWin,
+      goalModel.draw,
+      goalModel.awayWin,
+    );
+
+    const normalizedSelection = this.normalizeSelection(selection);
+
+    if (normalizedSelection === 'HOME') {
+      return {
+        probability: normalized.home,
+        winProbability: normalized.home,
+        pushProbability: normalized.draw,
+        lossProbability: normalized.away,
+        source: 'COMMON_SCORE_MATRIX',
+        scoreMatrixCoherent: this.settlementProbabilitiesAreCoherent(
+          normalized.home,
+          normalized.draw,
+          normalized.away,
+        ),
+      };
+    }
+
+    if (normalizedSelection === 'AWAY') {
+      return {
+        probability: normalized.away,
+        winProbability: normalized.away,
+        pushProbability: normalized.draw,
+        lossProbability: normalized.home,
+        source: 'COMMON_SCORE_MATRIX',
+        scoreMatrixCoherent: this.settlementProbabilitiesAreCoherent(
+          normalized.away,
+          normalized.draw,
+          normalized.home,
+        ),
+      };
+    }
+
+    return this.unavailable('COMMON_SCORE_MATRIX');
   }
 
   private static calculateOverUnder(
@@ -134,33 +235,29 @@ export class MarketProbabilityUtil {
     const match = selection
       .trim()
       .toUpperCase()
-      .match(/^(OVER|UNDER)[_: -]?(\d+(?:\.\d+)?)$/);
+      .match(/^(OVER|UNDER)[_: -]?(\d+(?:[._]\d+)?)$/);
 
     if (!match) {
-      return {
-        probability: 0,
-        source: 'COMMON_SCORE_MATRIX',
-        scoreMatrixCoherent: false,
-      };
+      return this.unavailable('COMMON_SCORE_MATRIX');
     }
 
     const type = match[1];
-    const line = Number(match[2]);
+    const line = this.parseNumericToken(match[2]);
 
-    if (!Number.isFinite(line) || line < 0) {
-      return {
-        probability: 0,
-        source: 'COMMON_SCORE_MATRIX',
-        scoreMatrixCoherent: false,
-      };
+    if (!this.isValidGoalLine(line)) {
+      return this.unavailable('COMMON_SCORE_MATRIX');
     }
 
-    const over = this.probabilityTotalOver(
-      goalModel.totalGoalProbabilities,
-      line,
-    );
+    const probabilities = goalModel.totalGoalProbabilities;
 
-    const probability = type === 'OVER' ? over : this.clamp(1 - over);
+    if (!this.probabilityArrayIsCoherent(probabilities)) {
+      return this.unavailable('COMMON_SCORE_MATRIX');
+    }
+
+    const probability =
+      type === 'OVER'
+        ? this.probabilityTotalOver(probabilities, line)
+        : this.probabilityTotalUnder(probabilities, line);
 
     return {
       probability,
@@ -173,12 +270,20 @@ export class MarketProbabilityUtil {
     goalModel: GoalModelResult,
     selection: string,
   ): MarketProbabilityResult {
+    if (!this.matrixIsCoherent(goalModel.matrix)) {
+      return this.unavailable('COMMON_SCORE_MATRIX');
+    }
+
     let yes = 0;
 
-    for (let homeGoals = 0; homeGoals < goalModel.matrix.length; homeGoals++) {
+    for (
+      let homeGoals = 0;
+      homeGoals < goalModel.matrix.length;
+      homeGoals += 1
+    ) {
       const row = goalModel.matrix[homeGoals] ?? [];
 
-      for (let awayGoals = 0; awayGoals < row.length; awayGoals++) {
+      for (let awayGoals = 0; awayGoals < row.length; awayGoals += 1) {
         if (homeGoals > 0 && awayGoals > 0) {
           yes += row[awayGoals] ?? 0;
         }
@@ -203,11 +308,7 @@ export class MarketProbabilityUtil {
         };
 
       default:
-        return {
-          probability: 0,
-          source: 'COMMON_SCORE_MATRIX',
-          scoreMatrixCoherent: false,
-        };
+        return this.unavailable('COMMON_SCORE_MATRIX');
     }
   }
 
@@ -216,6 +317,10 @@ export class MarketProbabilityUtil {
     selection: string,
   ): MarketProbabilityResult {
     const total = goalModel.totalGoalProbabilities;
+
+    if (!this.probabilityArrayIsCoherent(total)) {
+      return this.unavailable('COMMON_SCORE_MATRIX');
+    }
 
     const normalized = selection.trim().toUpperCase().replace(/\s+/g, '');
 
@@ -240,6 +345,10 @@ export class MarketProbabilityUtil {
     if (atLeastMatch) {
       const minimum = Number(atLeastMatch[1]);
 
+      if (!Number.isFinite(minimum) || minimum < 0) {
+        return this.unavailable('COMMON_SCORE_MATRIX');
+      }
+
       return {
         probability: this.atLeast(total, minimum),
         source: 'COMMON_SCORE_MATRIX',
@@ -250,15 +359,10 @@ export class MarketProbabilityUtil {
     const rangeMatch = value.match(/^(\d+)-(\d+)$/);
 
     if (!rangeMatch) {
-      return {
-        probability: 0,
-        source: 'COMMON_SCORE_MATRIX',
-        scoreMatrixCoherent: false,
-      };
+      return this.unavailable('COMMON_SCORE_MATRIX');
     }
 
     const minimum = Number(rangeMatch[1]);
-
     const maximum = Number(rangeMatch[2]);
 
     if (
@@ -267,11 +371,7 @@ export class MarketProbabilityUtil {
       minimum < 0 ||
       maximum < minimum
     ) {
-      return {
-        probability: 0,
-        source: 'COMMON_SCORE_MATRIX',
-        scoreMatrixCoherent: false,
-      };
+      return this.unavailable('COMMON_SCORE_MATRIX');
     }
 
     return {
@@ -288,28 +388,18 @@ export class MarketProbabilityUtil {
     const match = selection
       .trim()
       .toUpperCase()
-      .match(/^(HOME|AWAY)[_: -]?(OVER|UNDER)[_: -]?(\d+(?:\.\d+)?)$/);
+      .match(/^(HOME|AWAY)[_: -]?(OVER|UNDER)[_: -]?(\d+(?:[._]\d+)?)$/);
 
     if (!match) {
-      return {
-        probability: 0,
-        source: 'COMMON_SCORE_MATRIX',
-        scoreMatrixCoherent: false,
-      };
+      return this.unavailable('COMMON_SCORE_MATRIX');
     }
 
     const side = match[1];
-
     const type = match[2];
+    const line = this.parseNumericToken(match[3]);
 
-    const line = Number(match[3]);
-
-    if (!Number.isFinite(line) || line < 0) {
-      return {
-        probability: 0,
-        source: 'COMMON_SCORE_MATRIX',
-        scoreMatrixCoherent: false,
-      };
+    if (!this.isValidGoalLine(line)) {
+      return this.unavailable('COMMON_SCORE_MATRIX');
     }
 
     const probabilities =
@@ -317,26 +407,31 @@ export class MarketProbabilityUtil {
         ? goalModel.homeGoalProbabilities
         : goalModel.awayGoalProbabilities;
 
-    const over = this.probabilityTotalOver(probabilities, line);
+    if (!this.probabilityArrayIsCoherent(probabilities)) {
+      return this.unavailable('COMMON_SCORE_MATRIX');
+    }
+
+    const probability =
+      type === 'OVER'
+        ? this.probabilityTotalOver(probabilities, line)
+        : this.probabilityTotalUnder(probabilities, line);
 
     return {
-      probability: type === 'OVER' ? over : this.clamp(1 - over),
-
+      probability,
       source: 'COMMON_SCORE_MATRIX',
-
       scoreMatrixCoherent: true,
     };
   }
 
   private static calculatePeriodResult(
-    period: {
-      homeWin: number;
-      draw: number;
-      awayWin: number;
-    },
+    period: GoalModelResult['halfTime'],
     selection: string,
     source: 'HALF_SCORE_MATRIX' | 'SECOND_HALF_SCORE_MATRIX',
   ): MarketProbabilityResult {
+    if (!this.periodModelIsCoherent(period)) {
+      return this.unavailable(source);
+    }
+
     const normalized = this.normalizeThreeWay(
       period.homeWin,
       period.draw,
@@ -366,49 +461,44 @@ export class MarketProbabilityUtil {
         };
 
       default:
-        return {
-          probability: 0,
-          source,
-          scoreMatrixCoherent: false,
-        };
+        return this.unavailable(source);
     }
   }
 
   private static calculatePeriodGoals(
-    probabilities: number[],
+    period: GoalModelResult['halfTime'],
     selection: string,
     source: 'HALF_SCORE_MATRIX' | 'SECOND_HALF_SCORE_MATRIX',
   ): MarketProbabilityResult {
+    if (!this.periodModelIsCoherent(period)) {
+      return this.unavailable(source);
+    }
+
+    const probabilities = period.totalGoals;
+
     const match = selection
       .trim()
       .toUpperCase()
-      .match(/^(OVER|UNDER)[_: -]?(\d+(?:\.\d+)?)$/);
+      .match(/^(OVER|UNDER)[_: -]?(\d+(?:[._]\d+)?)$/);
 
     if (!match) {
-      return {
-        probability: 0,
-        source,
-        scoreMatrixCoherent: false,
-      };
+      return this.unavailable(source);
     }
 
-    const line = Number(match[2]);
+    const line = this.parseNumericToken(match[2]);
 
-    if (!Number.isFinite(line) || line < 0) {
-      return {
-        probability: 0,
-        source,
-        scoreMatrixCoherent: false,
-      };
+    if (!this.isValidGoalLine(line)) {
+      return this.unavailable(source);
     }
 
-    const over = this.probabilityTotalOver(probabilities, line);
+    const probability =
+      match[1] === 'OVER'
+        ? this.probabilityTotalOver(probabilities, line)
+        : this.probabilityTotalUnder(probabilities, line);
 
     return {
-      probability: match[1] === 'OVER' ? over : this.clamp(1 - over),
-
+      probability,
       source,
-
       scoreMatrixCoherent: true,
     };
   }
@@ -417,48 +507,28 @@ export class MarketProbabilityUtil {
     goalModel: GoalModelResult,
     selection: string,
   ): MarketProbabilityResult {
-    const match = selection
-      .trim()
-      .toUpperCase()
-      .match(/^(HOME|AWAY|1|2)[_: -]?([+-]?\d+(?:\.\d+)?)$/);
-
-    if (!match) {
-      return {
-        probability: 0,
-        source: 'COMMON_SCORE_MATRIX',
-        scoreMatrixCoherent: false,
-      };
+    if (!this.matrixIsCoherent(goalModel.matrix)) {
+      return this.unavailable('COMMON_SCORE_MATRIX');
     }
 
-    const side = match[1] === 'HOME' || match[1] === '1' ? 'HOME' : 'AWAY';
+    const parsed = this.parseHandicapSelection(selection);
 
-    const line = Number(match[2]);
-
-    if (!Number.isFinite(line)) {
-      return {
-        probability: 0,
-        source: 'COMMON_SCORE_MATRIX',
-        scoreMatrixCoherent: false,
-      };
+    if (!parsed || !this.isValidHandicapLine(parsed.line)) {
+      return this.unavailable('COMMON_SCORE_MATRIX');
     }
 
-    const outcome = this.calculateAsianSettlement(goalModel.matrix, side, line);
+    const outcome = this.calculateAsianSettlement(
+      goalModel.matrix,
+      parsed.side,
+      parsed.line,
+    );
 
     return {
-      probability: this.normalizeAsianProbability(
-        outcome.win,
-        outcome.push,
-        outcome.loss,
-      ),
-
+      probability: outcome.win,
       winProbability: outcome.win,
-
       pushProbability: outcome.push,
-
       lossProbability: outcome.loss,
-
       source: 'COMMON_SCORE_MATRIX',
-
       scoreMatrixCoherent: this.settlementProbabilitiesAreCoherent(
         outcome.win,
         outcome.push,
@@ -471,55 +541,38 @@ export class MarketProbabilityUtil {
     goalModel: GoalModelResult,
     selection: string,
   ): MarketProbabilityResult {
-    const match = selection
-      .trim()
-      .toUpperCase()
-      .match(/^(HOME|DRAW|AWAY|1|X|2)[_: -]?([+-]?\d+(?:\.\d+)?)$/);
-
-    if (!match) {
-      return {
-        probability: 0,
-        source: 'COMMON_SCORE_MATRIX',
-        scoreMatrixCoherent: false,
-      };
+    if (!this.matrixIsCoherent(goalModel.matrix)) {
+      return this.unavailable('COMMON_SCORE_MATRIX');
     }
 
-    const side =
-      match[1] === 'HOME' || match[1] === '1'
-        ? 'HOME'
-        : match[1] === 'DRAW' || match[1] === 'X'
-          ? 'DRAW'
-          : 'AWAY';
+    const parsed = this.parseEuropeanHandicapSelection(selection);
 
-    const line = Number(match[2]);
-
-    if (!Number.isFinite(line)) {
-      return {
-        probability: 0,
-        source: 'COMMON_SCORE_MATRIX',
-        scoreMatrixCoherent: false,
-      };
+    if (!parsed || !this.isValidHandicapLine(parsed.line)) {
+      return this.unavailable('COMMON_SCORE_MATRIX');
     }
 
     let probability = 0;
 
-    for (let homeGoals = 0; homeGoals < goalModel.matrix.length; homeGoals++) {
+    for (
+      let homeGoals = 0;
+      homeGoals < goalModel.matrix.length;
+      homeGoals += 1
+    ) {
       const row = goalModel.matrix[homeGoals] ?? [];
 
-      for (let awayGoals = 0; awayGoals < row.length; awayGoals++) {
+      for (let awayGoals = 0; awayGoals < row.length; awayGoals += 1) {
         const matrixProbability = this.clamp(row[awayGoals] ?? 0);
+        const adjusted = homeGoals - awayGoals + parsed.line;
 
-        const adjusted = homeGoals - awayGoals + line;
-
-        if (side === 'HOME' && adjusted > 0) {
+        if (parsed.side === 'HOME' && adjusted > 0) {
           probability += matrixProbability;
         }
 
-        if (side === 'DRAW' && adjusted === 0) {
+        if (parsed.side === 'DRAW' && Math.abs(adjusted) <= 0.000001) {
           probability += matrixProbability;
         }
 
-        if (side === 'AWAY' && adjusted < 0) {
+        if (parsed.side === 'AWAY' && adjusted < 0) {
           probability += matrixProbability;
         }
       }
@@ -527,9 +580,7 @@ export class MarketProbabilityUtil {
 
     return {
       probability: this.clamp(probability),
-
       source: 'COMMON_SCORE_MATRIX',
-
       scoreMatrixCoherent: true,
     };
   }
@@ -543,42 +594,98 @@ export class MarketProbabilityUtil {
     push: number;
     loss: number;
   } {
-    /*
-     * Whole and half Asian lines.
-     */
-    if (this.isQuarterLine(line)) {
-      const lower = Math.floor(line * 2) / 2;
-
-      const upper = Math.ceil(line * 2) / 2;
-
-      const first = this.calculateAsianSettlement(matrix, side, lower);
-
-      const second = this.calculateAsianSettlement(matrix, side, upper);
-
-      return this.normalizeSettlement(
-        (first.win + second.win) / 2,
-        (first.push + second.push) / 2,
-        (first.loss + second.loss) / 2,
-      );
+    if (!this.isQuarterLine(line)) {
+      return this.calculateSingleAsianSettlement(matrix, side, line);
     }
+
+    const lower = this.normalizeHandicapQuarter(Math.floor(line * 2) / 2);
+
+    const upper = this.normalizeHandicapQuarter(Math.ceil(line * 2) / 2);
 
     let win = 0;
     let push = 0;
     let loss = 0;
 
-    for (let homeGoals = 0; homeGoals < matrix.length; homeGoals++) {
+    for (let homeGoals = 0; homeGoals < matrix.length; homeGoals += 1) {
       const row = matrix[homeGoals] ?? [];
 
-      for (let awayGoals = 0; awayGoals < row.length; awayGoals++) {
+      for (let awayGoals = 0; awayGoals < row.length; awayGoals += 1) {
         const probability = this.clamp(row[awayGoals] ?? 0);
 
-        const margin = homeGoals - awayGoals;
+        if (probability <= 0) {
+          continue;
+        }
 
-        const adjusted = side === 'HOME' ? margin + line : -margin + line;
+        const first = this.asianOutcome(homeGoals, awayGoals, side, lower);
 
-        if (adjusted > 0) {
+        const second = this.asianOutcome(homeGoals, awayGoals, side, upper);
+
+        if (first === 'WIN' && second === 'WIN') {
           win += probability;
-        } else if (adjusted < 0) {
+          continue;
+        }
+
+        if (
+          (first === 'WIN' && second === 'PUSH') ||
+          (first === 'PUSH' && second === 'WIN')
+        ) {
+          win += probability * 0.5;
+          continue;
+        }
+
+        if (first === 'PUSH' && second === 'PUSH') {
+          push += probability;
+          continue;
+        }
+
+        if (first === 'LOSS' && second === 'LOSS') {
+          loss += probability;
+          continue;
+        }
+
+        if (
+          (first === 'LOSS' && second === 'PUSH') ||
+          (first === 'PUSH' && second === 'LOSS')
+        ) {
+          loss += probability * 0.5;
+          continue;
+        }
+
+        push += probability;
+      }
+    }
+
+    return this.normalizeSettlement(win, push, loss);
+  }
+
+  private static calculateSingleAsianSettlement(
+    matrix: number[][],
+    side: 'HOME' | 'AWAY',
+    line: number,
+  ): {
+    win: number;
+    push: number;
+    loss: number;
+  } {
+    let win = 0;
+    let push = 0;
+    let loss = 0;
+
+    for (let homeGoals = 0; homeGoals < matrix.length; homeGoals += 1) {
+      const row = matrix[homeGoals] ?? [];
+
+      for (let awayGoals = 0; awayGoals < row.length; awayGoals += 1) {
+        const probability = this.clamp(row[awayGoals] ?? 0);
+
+        if (probability <= 0) {
+          continue;
+        }
+
+        const outcome = this.asianOutcome(homeGoals, awayGoals, side, line);
+
+        if (outcome === 'WIN') {
+          win += probability;
+        } else if (outcome === 'LOSS') {
           loss += probability;
         } else {
           push += probability;
@@ -587,6 +694,27 @@ export class MarketProbabilityUtil {
     }
 
     return this.normalizeSettlement(win, push, loss);
+  }
+
+  private static asianOutcome(
+    homeGoals: number,
+    awayGoals: number,
+    side: 'HOME' | 'AWAY',
+    line: number,
+  ): 'WIN' | 'PUSH' | 'LOSS' {
+    const margin = homeGoals - awayGoals;
+
+    const adjusted = side === 'HOME' ? margin + line : -margin + line;
+
+    if (adjusted > 0) {
+      return 'WIN';
+    }
+
+    if (adjusted < 0) {
+      return 'LOSS';
+    }
+
+    return 'PUSH';
   }
 
   private static normalizeSettlement(
@@ -599,14 +727,12 @@ export class MarketProbabilityUtil {
     loss: number;
   } {
     const safeWin = this.clamp(win);
-
     const safePush = this.clamp(push);
-
     const safeLoss = this.clamp(loss);
 
     const total = safeWin + safePush + safeLoss;
 
-    if (total <= 0) {
+    if (total <= 0 || !Number.isFinite(total)) {
       return {
         win: 0,
         push: 0,
@@ -616,9 +742,7 @@ export class MarketProbabilityUtil {
 
     return {
       win: safeWin / total,
-
       push: safePush / total,
-
       loss: safeLoss / total,
     };
   }
@@ -641,29 +765,30 @@ export class MarketProbabilityUtil {
     );
   }
 
-  private static normalizeAsianProbability(
-    win: number,
-    push: number,
-    loss: number,
-  ): number {
-    const normalized = this.normalizeSettlement(win, push, loss);
-
-    /*
-     * A push is neutral for settlement but is retained at 50%
-     * when representing the outcome as a probability-like score.
-     */
-    return this.clamp(normalized.win + normalized.push * 0.5);
-  }
-
   private static probabilityTotalOver(
     probabilities: number[],
     line: number,
   ): number {
     let result = 0;
 
-    for (let goals = 0; goals < probabilities.length; goals++) {
+    for (let goals = 0; goals < probabilities.length; goals += 1) {
       if (goals > line) {
-        result += this.clamp(probabilities[goals] ?? 0);
+        result += probabilities[goals] ?? 0;
+      }
+    }
+
+    return this.clamp(result);
+  }
+
+  private static probabilityTotalUnder(
+    probabilities: number[],
+    line: number,
+  ): number {
+    let result = 0;
+
+    for (let goals = 0; goals < probabilities.length; goals += 1) {
+      if (goals < line) {
+        result += probabilities[goals] ?? 0;
       }
     }
 
@@ -691,9 +816,9 @@ export class MarketProbabilityUtil {
     for (
       let goals = Math.max(0, minimum);
       goals <= maximum && goals < probabilities.length;
-      goals++
+      goals += 1
     ) {
-      result += this.clamp(probabilities[goals] ?? 0);
+      result += probabilities[goals] ?? 0;
     }
 
     return this.clamp(result);
@@ -706,8 +831,8 @@ export class MarketProbabilityUtil {
 
     let result = 0;
 
-    for (let goals = minimum; goals < probabilities.length; goals++) {
-      result += this.clamp(probabilities[goals] ?? 0);
+    for (let goals = minimum; goals < probabilities.length; goals += 1) {
+      result += probabilities[goals] ?? 0;
     }
 
     return this.clamp(result);
@@ -723,14 +848,12 @@ export class MarketProbabilityUtil {
     away: number;
   } {
     const safeHome = this.clamp(home);
-
     const safeDraw = this.clamp(draw);
-
     const safeAway = this.clamp(away);
 
     const total = safeHome + safeDraw + safeAway;
 
-    if (total <= 0) {
+    if (total <= 0 || !Number.isFinite(total)) {
       return {
         home: 0,
         draw: 0,
@@ -740,11 +863,213 @@ export class MarketProbabilityUtil {
 
     return {
       home: safeHome / total,
-
       draw: safeDraw / total,
-
       away: safeAway / total,
     };
+  }
+
+  private static periodModelIsCoherent(
+    period: GoalModelResult['halfTime'],
+  ): boolean {
+    return (
+      this.probabilityArrayIsCoherent(period.homeGoals) &&
+      this.probabilityArrayIsCoherent(period.awayGoals) &&
+      this.probabilityArrayIsCoherent(period.totalGoals) &&
+      this.threeWayIsCoherent(period.homeWin, period.draw, period.awayWin)
+    );
+  }
+
+  private static matrixIsCoherent(matrix: number[][]): boolean {
+    if (!Array.isArray(matrix) || !matrix.length) {
+      return false;
+    }
+
+    let total = 0;
+
+    for (const row of matrix) {
+      if (!Array.isArray(row)) {
+        return false;
+      }
+
+      for (const value of row) {
+        if (!Number.isFinite(value) || value < 0) {
+          return false;
+        }
+
+        total += value;
+      }
+    }
+
+    return Number.isFinite(total) && total > 0 && Math.abs(total - 1) <= 0.0001;
+  }
+
+  private static probabilityArrayIsCoherent(probabilities: number[]): boolean {
+    if (!Array.isArray(probabilities) || probabilities.length === 0) {
+      return false;
+    }
+
+    let total = 0;
+
+    for (const value of probabilities) {
+      if (!Number.isFinite(value) || value < 0) {
+        return false;
+      }
+
+      total += value;
+    }
+
+    return Number.isFinite(total) && total > 0 && Math.abs(total - 1) <= 0.0001;
+  }
+
+  private static threeWayIsCoherent(
+    home: number,
+    draw: number,
+    away: number,
+  ): boolean {
+    const safeHome = this.clamp(home);
+    const safeDraw = this.clamp(draw);
+    const safeAway = this.clamp(away);
+
+    const total = safeHome + safeDraw + safeAway;
+
+    return Number.isFinite(total) && total > 0 && Math.abs(total - 1) <= 0.0001;
+  }
+
+  private static parseHandicapSelection(selection: string): {
+    side: 'HOME' | 'AWAY';
+    line: number;
+  } | null {
+    const normalized = selection.trim().toUpperCase().replace(/\s+/g, '');
+
+    let match = normalized.match(
+      /^(HOME|AWAY|1|2)(?:_|:)?(PLUS|MINUS)(?:_|:)?(\d+(?:[._]\d+)?)$/,
+    );
+
+    if (match) {
+      const side = match[1] === 'HOME' || match[1] === '1' ? 'HOME' : 'AWAY';
+
+      const magnitude = this.parseNumericToken(match[3]);
+
+      if (!Number.isFinite(magnitude)) {
+        return null;
+      }
+
+      return {
+        side,
+        line: match[2] === 'MINUS' ? -magnitude : magnitude,
+      };
+    }
+
+    match = normalized.match(/^(HOME|AWAY|1|2)(?:_|:)?([+-]?\d+(?:[._]\d+)?)$/);
+
+    if (match) {
+      const side = match[1] === 'HOME' || match[1] === '1' ? 'HOME' : 'AWAY';
+
+      const line = this.parseNumericToken(match[2]);
+
+      if (!Number.isFinite(line)) {
+        return null;
+      }
+
+      return {
+        side,
+        line,
+      };
+    }
+
+    return null;
+  }
+
+  private static parseEuropeanHandicapSelection(selection: string): {
+    side: 'HOME' | 'DRAW' | 'AWAY';
+    line: number;
+  } | null {
+    const normalized = selection.trim().toUpperCase().replace(/\s+/g, '');
+
+    let match = normalized.match(
+      /^(HOME|DRAW|AWAY|1|X|2)(?:_|:)?(PLUS|MINUS)(?:_|:)?(\d+(?:[._]\d+)?)$/,
+    );
+
+    if (match) {
+      const side =
+        match[1] === 'HOME' || match[1] === '1'
+          ? 'HOME'
+          : match[1] === 'DRAW' || match[1] === 'X'
+            ? 'DRAW'
+            : 'AWAY';
+
+      const magnitude = this.parseNumericToken(match[3]);
+
+      if (!Number.isFinite(magnitude)) {
+        return null;
+      }
+
+      return {
+        side,
+        line: match[2] === 'MINUS' ? -magnitude : magnitude,
+      };
+    }
+
+    match = normalized.match(
+      /^(HOME|DRAW|AWAY|1|X|2)(?:_|:)?([+-]?\d+(?:[._]\d+)?)$/,
+    );
+
+    if (!match) {
+      return null;
+    }
+
+    const side =
+      match[1] === 'HOME' || match[1] === '1'
+        ? 'HOME'
+        : match[1] === 'DRAW' || match[1] === 'X'
+          ? 'DRAW'
+          : 'AWAY';
+
+    const line = this.parseNumericToken(match[2]);
+
+    if (!Number.isFinite(line)) {
+      return null;
+    }
+
+    return {
+      side,
+      line,
+    };
+  }
+
+  private static isValidGoalLine(line: number): boolean {
+    if (!Number.isFinite(line) || line < 0) {
+      return false;
+    }
+
+    const doubled = line * 2;
+
+    return Math.abs(doubled - Math.round(doubled)) <= 0.000001;
+  }
+
+  private static isValidHandicapLine(line: number): boolean {
+    if (!Number.isFinite(line)) {
+      return false;
+    }
+
+    const quarterUnits = line * 4;
+
+    return Math.abs(quarterUnits - Math.round(quarterUnits)) <= 0.000001;
+  }
+
+  private static isQuarterLine(line: number): boolean {
+    if (!this.isValidHandicapLine(line)) {
+      return false;
+    }
+
+    const doubled = line * 2;
+    const nearestHalf = Math.round(doubled);
+
+    return Math.abs(doubled - nearestHalf) > 0.000001;
+  }
+
+  private static normalizeHandicapQuarter(line: number): number {
+    return Math.round(line * 4) / 4;
   }
 
   private static normalizeSelection(selection: string): string {
@@ -765,15 +1090,34 @@ export class MarketProbabilityUtil {
       case 'AWAY_WIN':
         return 'AWAY';
 
+      case 'YES':
+      case 'BTTS_YES':
+        return 'YES';
+
+      case 'NO':
+      case 'BTTS_NO':
+        return 'NO';
+
       default:
         return normalized;
     }
   }
 
-  private static isQuarterLine(line: number): boolean {
-    const doubled = line * 2;
+  private static parseNumericToken(value: string): number {
+    return Number(value.replace('_', '.'));
+  }
 
-    return Math.abs(doubled - Math.round(doubled)) > 0.000001;
+  private static unavailable(
+    source:
+      | 'COMMON_SCORE_MATRIX'
+      | 'HALF_SCORE_MATRIX'
+      | 'SECOND_HALF_SCORE_MATRIX',
+  ): MarketProbabilityResult {
+    return {
+      probability: 0,
+      source,
+      scoreMatrixCoherent: false,
+    };
   }
 
   private static clamp(value: number, minimum = 0, maximum = 1): number {

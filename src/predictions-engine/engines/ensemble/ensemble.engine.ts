@@ -7,7 +7,6 @@ import { EnsembleResult } from '../../interfaces/ensemble-result.interface';
 
 import { ConfidenceEngine } from './confidence.engine';
 
-import { ConfidenceUtil } from '../../utils/confidence.util';
 import { PredictionMathUtil } from '../../utils/prediction-math.util';
 
 @Injectable()
@@ -17,18 +16,12 @@ export class EnsembleEngine {
   calculate(input: EnsembleInput): EnsembleResult {
     /*
      * ----------------------------------------------------------
-     * SHARED PROBABILITY / COMPARISON ARCHITECTURE
+     * PROBABILITY
      * ----------------------------------------------------------
      *
-     * ProbabilityEngine has already reconciled:
+     * Probability has already been established by ProbabilityEngine.
      *
-     *   - common score matrix
-     *   - registered market model
-     *   - TeamComparisonService
-     *   - model agreement
-     *   - calibration
-     *
-     * Ensemble does not create another probability model.
+     * Ensemble does not alter it.
      */
     const probability = PredictionMathUtil.clamp(
       input.probability.probability,
@@ -40,12 +33,6 @@ export class EnsembleEngine {
       input.probability.modelAgreement ?? 0,
       0,
       1,
-    );
-
-    const safetyScore = PredictionMathUtil.clamp(
-      input.safety.safetyScore ?? 0,
-      0,
-      100,
     );
 
     const dataQuality = PredictionMathUtil.clamp(
@@ -62,11 +49,13 @@ export class EnsembleEngine {
 
     /*
      * ----------------------------------------------------------
-     * COMPARISON EVIDENCE
+     * SUPPORTING EVIDENCE
      * ----------------------------------------------------------
      *
-     * These signals are passed through from ProbabilityEngine.
-     * Ensemble does not reconstruct TeamComparisonService logic.
+     * These values are passed to ConfidenceEngine as evidence
+     * information.
+     *
+     * They do not independently modify confidence here.
      */
     const comparisonConfidence = this.readSignal(
       input.probability,
@@ -95,8 +84,17 @@ export class EnsembleEngine {
 
     /*
      * ----------------------------------------------------------
-     * CONFIDENCE ENGINE
+     * CONFIDENCE
      * ----------------------------------------------------------
+     *
+     * ConfidenceEngine is the sole authority for confidence.
+     *
+     * Ensemble must not:
+     *
+     * - recalculate confidence
+     * - multiply confidence
+     * - cap confidence based on probability
+     * - add comparison confidence a second time
      */
     const confidence = this.confidenceEngine.calculate({
       probability: input.probability,
@@ -120,39 +118,17 @@ export class EnsembleEngine {
       evidenceCoherence: evidenceCoherence ?? undefined,
     });
 
-    const baseConfidence = ConfidenceUtil.clamp(confidence.confidence);
-
     /*
      * ----------------------------------------------------------
-     * EVIDENCE-ALIGNED CONFIDENCE
+     * FINAL ENSEMBLE RESULT
      * ----------------------------------------------------------
      *
-     * Probability is preserved exactly.
+     * Probability is preserved.
      *
-     * Confidence is not allowed to become a proxy for:
+     * Confidence is taken directly from ConfidenceEngine.
      *
-     *   "This is the safest market available."
-     *
-     * It only represents how strongly the evidence package
-     * supports the probability estimate.
+     * No second confidence calculation exists here.
      */
-    const comparisonEvidence = this.calculateComparisonSupport(
-      comparisonConfidence,
-      directionalDifference,
-      goalProductionDifference,
-      goalPreventionDifference,
-      evidenceCoherence,
-    );
-
-    const alignedConfidence = this.calculateEvidenceAlignedConfidence(
-      baseConfidence,
-      modelAgreement,
-      safetyScore,
-      dataQuality,
-      calibrationReliability,
-      comparisonEvidence,
-    );
-
     return {
       market: input.probability.market,
 
@@ -160,7 +136,7 @@ export class EnsembleEngine {
 
       probability: PredictionMathUtil.round(probability, 6),
 
-      confidence: ConfidenceUtil.clamp(alignedConfidence),
+      confidence: PredictionMathUtil.clamp(confidence.confidence, 0, 98),
 
       modelAgreement: PredictionMathUtil.round(modelAgreement, 4),
 
@@ -172,113 +148,6 @@ export class EnsembleEngine {
 
       safetyResult: input.safety,
     };
-  }
-
-  private calculateComparisonSupport(
-    comparisonConfidence: number | null,
-    directionalDifference: number | null,
-    goalProductionDifference: number | null,
-    goalPreventionDifference: number | null,
-    evidenceCoherence: number | null,
-  ): number {
-    const confidence = PredictionMathUtil.clamp(
-      comparisonConfidence ?? 0,
-      0,
-      1,
-    );
-
-    const directional =
-      directionalDifference !== null
-        ? Math.abs(PredictionMathUtil.clamp(directionalDifference, -1, 1))
-        : 0;
-
-    const production =
-      goalProductionDifference !== null
-        ? Math.abs(PredictionMathUtil.clamp(goalProductionDifference, -1, 1))
-        : 0;
-
-    const prevention =
-      goalPreventionDifference !== null
-        ? Math.abs(PredictionMathUtil.clamp(goalPreventionDifference, -1, 1))
-        : 0;
-
-    const goalEvidence = PredictionMathUtil.clamp(
-      (production + prevention) / 2,
-      0,
-      1,
-    );
-
-    /*
-     * Explicit coherence remains the strongest comparison
-     * consistency signal.
-     *
-     * When unavailable, comparison confidence is only the
-     * fallback. It does not increase probability.
-     */
-    const coherence = PredictionMathUtil.clamp(
-      evidenceCoherence ?? confidence,
-      0,
-      1,
-    );
-
-    return PredictionMathUtil.clamp(
-      confidence * 0.4 +
-        directional * 0.1 +
-        goalEvidence * 0.15 +
-        coherence * 0.35,
-      0,
-      1,
-    );
-  }
-
-  private calculateEvidenceAlignedConfidence(
-    confidence: number,
-    modelAgreement: number,
-    safetyScore: number,
-    dataQuality: number,
-    calibrationReliability: number,
-    comparisonEvidence: number,
-  ): number {
-    /*
-     * Confidence remains primarily evidence-driven.
-     *
-     * Safety is deliberately kept below agreement, comparison
-     * evidence and data quality so that "safe" does not become
-     * synonymous with "best prediction".
-     */
-    const support =
-      modelAgreement * 0.3 +
-      comparisonEvidence * 0.38 +
-      (safetyScore / 100) * 0.1 +
-      (dataQuality / 100) * 0.17 +
-      this.calibrationSupport(calibrationReliability) * 0.05;
-
-    /*
-     * Strong evidence leaves ConfidenceEngine's result unchanged.
-     */
-    if (support >= 0.65) {
-      return confidence;
-    }
-
-    /*
-     * Weak evidence reduces confidence progressively.
-     *
-     * Probability itself is never changed here.
-     */
-    const supportRatio = PredictionMathUtil.clamp(support / 0.65, 0, 1);
-
-    return confidence * (0.7 + supportRatio * 0.3);
-  }
-
-  private calibrationSupport(reliability: number): number {
-    /*
-     * No calibration history is neutral rather than destructive.
-     */
-    if (reliability <= 0) {
-      return 0.5;
-    }
-
-    return PredictionMathUtil.clamp(reliability / 100, 0, 1);
   }
 
   private readSignal(

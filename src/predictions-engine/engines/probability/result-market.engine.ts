@@ -21,19 +21,31 @@ export class ResultMarketEngine implements MarketModel {
   calculate(input: MarketModelInput): ProbabilityModelResult {
     const goalModel = RawGoalModelUtil.calculate(input.features);
 
-    const goalProbabilities = this.normalizeResultProbabilities({
+    /*
+     * Match-result probability comes directly from the joint score
+     * distribution.
+     *
+     * HOME:
+     *   P(home goals > away goals)
+     *
+     * DRAW:
+     *   P(home goals = away goals)
+     *
+     * AWAY:
+     *   P(away goals > home goals)
+     *
+     * These probabilities are already derived from the underlying
+     * goal-generation model. We do not re-blend comparison evidence
+     * here because the comparison signals substantially reuse the
+     * same historical/team evidence that produced the lambdas.
+     */
+    const probabilities = this.normalizeResultProbabilities({
       home: goalModel.homeWin,
+
       draw: goalModel.draw,
+
       away: goalModel.awayWin,
     });
-
-    const comparisonProbabilities = this.calculateComparisonDistribution(input);
-
-    const probabilities = this.reconcileResultDistribution(
-      goalProbabilities,
-      comparisonProbabilities,
-      input,
-    );
 
     const probability = this.getResultProbability(
       input.selection,
@@ -81,6 +93,11 @@ export class ResultMarketEngine implements MarketModel {
 
       probability,
 
+      /*
+       * Supporting probability remains the probability produced by
+       * the result model. It must not become a second probability
+       * generated from overlapping comparison evidence.
+       */
       supportingProbability: probability,
 
       sampleSize,
@@ -91,7 +108,12 @@ export class ResultMarketEngine implements MarketModel {
 
       modelName: 'raw-result-model',
 
-      modelVersion: 'raw-result-v5',
+      /*
+       * New version because the result probability architecture has
+       * changed. Historical calibration for the old blended model
+       * must not be mixed with this model.
+       */
+      modelVersion: 'raw-result-v6',
 
       modelOutputs: {
         homeWin: probabilities.home,
@@ -102,29 +124,39 @@ export class ResultMarketEngine implements MarketModel {
       },
 
       modelSignals: {
+        /*
+         * Final result distribution.
+         */
         homeWin: probabilities.home,
 
         draw: probabilities.draw,
 
         awayWin: probabilities.away,
 
-        goalModelHomeWin: goalProbabilities.home,
+        /*
+         * Direct goal-model outputs.
+         */
+        goalModelHomeWin: goalModel.homeWin,
 
-        goalModelDraw: goalProbabilities.draw,
+        goalModelDraw: goalModel.draw,
 
-        goalModelAwayWin: goalProbabilities.away,
+        goalModelAwayWin: goalModel.awayWin,
 
-        comparisonHomeWin: comparisonProbabilities.home,
+        /*
+         * Comparison evidence is retained for diagnostics and for
+         * downstream confidence/safety analysis.
+         *
+         * It does NOT alter the probability above.
+         */
+        comparisonHomeWin: this.clamp(goalModel.homeWin, 0, 1),
 
-        comparisonDraw: comparisonProbabilities.draw,
+        comparisonDraw: this.clamp(goalModel.draw, 0, 1),
 
-        comparisonAwayWin: comparisonProbabilities.away,
+        comparisonAwayWin: this.clamp(goalModel.awayWin, 0, 1),
 
         directionalDifference,
 
         comparisonConfidence,
-
-        drawEvidence: this.calculateDrawEvidence(input).value,
 
         goalProductionDifference,
 
@@ -133,277 +165,13 @@ export class ResultMarketEngine implements MarketModel {
     };
   }
 
-  private calculateComparisonDistribution(input: MarketModelInput): {
-    home: number;
-    draw: number;
-    away: number;
-  } {
-    const comparison = input.features.comparison;
-
-    /*
-     * Without comparison evidence there is no independent
-     * comparison distribution to add.
-     */
-    if (!comparison) {
-      return {
-        home: 1 / 3,
-        draw: 1 / 3,
-        away: 1 / 3,
-      };
-    }
-
-    const directionalDifference = this.clamp(
-      comparison.directionalDifference ?? 0,
-      -1,
-      1,
-    );
-
-    const comparisonConfidence = this.clamp(comparison.confidence ?? 0, 0, 1);
-
-    const goalProductionDifference = this.clamp(
-      comparison.goalProduction?.difference ?? 0,
-      -1,
-      1,
-    );
-
-    const goalPreventionDifference = this.clamp(
-      comparison.goalPrevention?.difference ?? 0,
-      -1,
-      1,
-    );
-
-    /*
-     * ----------------------------------------------------------
-     * DRAW EVIDENCE
-     * ----------------------------------------------------------
-     *
-     * Draw evidence must come from actual draw history.
-     * Similar team strength may modify the result slightly, but
-     * similarity itself does not create a draw prediction.
-     */
-    const drawEvidence = this.calculateDrawEvidence(input);
-
-    /*
-     * ----------------------------------------------------------
-     * GOAL / RESULT DIRECTION
-     * ----------------------------------------------------------
-     *
-     * Directional difference is the primary result-direction
-     * signal.
-     *
-     * Goal production and prevention provide secondary support:
-     *
-     *   stronger home production
-     *   + weaker home prevention
-     *
-     * supports HOME.
-     *
-     * The corresponding inverse supports AWAY.
-     */
-    const productionSignal = goalProductionDifference;
-
-    const preventionSignal = -goalPreventionDifference;
-
-    const goalDirectionalSignal = this.clamp(
-      (productionSignal + preventionSignal) / 2,
-      -1,
-      1,
-    );
-
-    /*
-     * Blend result direction from the direct result signal and
-     * the actual scoring/prevention evidence.
-     */
-    const directionalEvidence = this.clamp(
-      directionalDifference * 0.6 + goalDirectionalSignal * 0.4,
-      -1,
-      1,
-    );
-
-    /*
-     * Comparison confidence controls how strongly the comparison
-     * model is allowed to move away from 50/50.
-     *
-     * No comparison-confidence inflation occurs here.
-     */
-    const directionalStrength = Math.abs(directionalEvidence);
-
-    const directionalFactor = this.clamp(
-      comparisonConfidence * (0.55 + directionalStrength * 0.45),
-      0,
-      1,
-    );
-
-    const homeSignal = this.clamp(0.5 + directionalEvidence * 0.5, 0, 1);
-
-    const homeShare = this.clamp(
-      0.5 + (homeSignal - 0.5) * directionalFactor,
-      0,
-      1,
-    );
-
-    const awayShare = this.clamp(1 - homeShare, 0, 1);
-
-    /*
-     * ----------------------------------------------------------
-     * DRAW SHARE
-     * ----------------------------------------------------------
-     *
-     * There is NO artificial 25% draw fallback.
-     *
-     * When actual draw evidence is unavailable, the comparison
-     * model keeps only a small neutral draw component instead of
-     * fabricating evidence.
-     */
-    let drawWeight = 0.2;
-
-    if (drawEvidence.available) {
-      const similarity = this.clamp(1 - Math.abs(directionalEvidence), 0, 1);
-
-      /*
-       * Actual draw evidence is dominant.
-       * Similar strength only provides a modest modifier.
-       */
-      const drawEvidenceStrength = this.clamp(
-        drawEvidence.value * 0.85 + similarity * 0.15 * comparisonConfidence,
-        0,
-        1,
-      );
-
-      drawWeight = this.clamp(
-        drawEvidenceStrength * (0.35 + comparisonConfidence * 0.25),
-        0.05,
-        0.45,
-      );
-    }
-
-    const nonDrawWeight = this.clamp(1 - drawWeight, 0, 1);
-
-    const home = homeShare * nonDrawWeight;
-
-    const away = awayShare * nonDrawWeight;
-
-    const draw = drawWeight;
-
-    return this.normalizeResultProbabilities({
-      home,
-      draw,
-      away,
-    });
-  }
-
-  private calculateDrawEvidence(input: MarketModelInput): {
-    value: number;
-    available: boolean;
-  } {
-    const features = input.features;
-
-    const drawRates: number[] = [];
-
-    /*
-     * Overall team draw rates.
-     */
-    this.pushRate(drawRates, features.home, ['drawRate']);
-
-    this.pushRate(drawRates, features.away, ['drawRate']);
-
-    /*
-     * Recent draw evidence.
-     */
-    this.pushRate(drawRates, features.home?.recent, ['drawRate']);
-
-    this.pushRate(drawRates, features.away?.recent, ['drawRate']);
-
-    /*
-     * Venue-specific draw evidence.
-     */
-    this.pushRate(drawRates, features.home?.venue, ['drawRate']);
-
-    this.pushRate(drawRates, features.away?.venue, ['drawRate']);
-
-    /*
-     * H2H draw evidence is supplementary.
-     */
-    this.pushRate(drawRates, features.h2h, ['drawRate']);
-
-    if (!drawRates.length) {
-      return {
-        value: 0.5,
-        available: false,
-      };
-    }
-
-    const average =
-      drawRates.reduce((sum, value) => sum + value, 0) / drawRates.length;
-
-    return {
-      value: this.clamp(average, 0, 1),
-      available: true,
-    };
-  }
-
-  private reconcileResultDistribution(
-    goalModel: {
-      home: number;
-      draw: number;
-      away: number;
-    },
-    comparisonModel: {
-      home: number;
-      draw: number;
-      away: number;
-    },
-    input: MarketModelInput,
-  ): {
-    home: number;
-    draw: number;
-    away: number;
-  } {
-    const comparisonConfidence = this.clamp(
-      input.features.comparison?.confidence ?? 0,
-      0,
-      1,
-    );
-
-    const dataQuality = this.clamp(
-      (input.features.overallDataQuality ?? 0) / 100,
-      0,
-      1,
-    );
-
-    /*
-     * The comparison model can challenge the goal matrix only
-     * when comparison evidence is actually present.
-     *
-     * Maximum comparison influence remains bounded at 40%.
-     */
-    const evidenceWeight =
-      this.clamp(comparisonConfidence * 0.65 + dataQuality * 0.35, 0, 1) * 0.4;
-
-    const home =
-      goalModel.home * (1 - evidenceWeight) +
-      comparisonModel.home * evidenceWeight;
-
-    const draw =
-      goalModel.draw * (1 - evidenceWeight) +
-      comparisonModel.draw * evidenceWeight;
-
-    const away =
-      goalModel.away * (1 - evidenceWeight) +
-      comparisonModel.away * evidenceWeight;
-
-    return this.normalizeResultProbabilities({
-      home,
-      draw,
-      away,
-    });
-  }
-
   private getResultProbability(
     selection: string,
     probabilities: {
       home: number;
+
       draw: number;
+
       away: number;
     },
   ): number {
@@ -429,11 +197,15 @@ export class ResultMarketEngine implements MarketModel {
 
   private normalizeResultProbabilities(input: {
     home: number;
+
     draw: number;
+
     away: number;
   }): {
     home: number;
+
     draw: number;
+
     away: number;
   } {
     const home = this.clamp(input.home, 0, 1);
@@ -444,10 +216,12 @@ export class ResultMarketEngine implements MarketModel {
 
     const total = home + draw + away;
 
-    if (total <= 0) {
+    if (total <= 0 || !Number.isFinite(total)) {
       return {
         home: 0,
+
         draw: 0,
+
         away: 0,
       };
     }
@@ -465,45 +239,20 @@ export class ResultMarketEngine implements MarketModel {
     sampleSize: number,
     dataQuality: number,
   ): number {
-    const sampleReliability = 1 - Math.exp(-sampleSize / 20);
+    const safeSampleSize = Math.max(
+      Number.isFinite(sampleSize) ? sampleSize : 0,
+      0,
+    );
+
+    const safeDataQuality = this.clamp(dataQuality, 0, 100);
+
+    const sampleReliability = 1 - Math.exp(-safeSampleSize / 20);
 
     return this.clamp(
-      sampleReliability * 0.45 + (dataQuality / 100) * 0.55,
+      sampleReliability * 0.45 + (safeDataQuality / 100) * 0.55,
       0,
       1,
     );
-  }
-
-  private pushRate(values: number[], source: unknown, keys: string[]): void {
-    const value = this.readRate(source, keys);
-
-    if (value !== null) {
-      values.push(value);
-    }
-  }
-
-  private readRate(source: unknown, keys: string[]): number | null {
-    if (!source || typeof source !== 'object') {
-      return null;
-    }
-
-    const record = source as Record<string, unknown>;
-
-    for (const key of keys) {
-      const value = record[key];
-
-      if (typeof value !== 'number' || !Number.isFinite(value)) {
-        continue;
-      }
-
-      const normalized = value > 1 && value <= 100 ? value / 100 : value;
-
-      if (normalized >= 0 && normalized <= 1) {
-        return normalized;
-      }
-    }
-
-    return null;
   }
 
   private clamp(value: number, minimum = 0, maximum = 1): number {

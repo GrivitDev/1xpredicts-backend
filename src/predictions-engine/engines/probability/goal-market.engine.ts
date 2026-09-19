@@ -25,23 +25,32 @@ export class GoalMarketEngine implements MarketModel {
   calculate(input: MarketModelInput): ProbabilityModelResult {
     const model = RawGoalModelUtil.calculate(input.features);
 
+    /*
+     * The score distribution is the authoritative probability source
+     * for all goal-based markets.
+     *
+     * The same underlying historical evidence is already used upstream
+     * to construct the team lambdas. Re-blending recent/venue/H2H goal
+     * rates here would count overlapping evidence twice.
+     */
     const matrixProbability = this.resolveProbability(
       input.market,
       input.selection,
       model,
     );
 
+    /*
+     * Empirical evidence is retained as a diagnostic signal only.
+     *
+     * It does not modify the final probability.
+     */
     const empiricalEvidence = this.calculateEmpiricalEvidence(
       input,
       input.market,
       input.selection,
     );
 
-    const probability = this.reconcileProbability(
-      matrixProbability,
-      empiricalEvidence,
-      input,
-    );
+    const probability = this.clamp(matrixProbability);
 
     const sampleSize = Math.max(input.features.overallSampleSize ?? 0, 0);
 
@@ -65,9 +74,8 @@ export class GoalMarketEngine implements MarketModel {
       probability,
 
       /*
-       * Keep the structural score-matrix result available as the
-       * supporting probability. The reconciled probability above
-       * is the final market probability after empirical evidence.
+       * Supporting probability is the same structural probability
+       * produced from the authoritative score distribution.
        */
       supportingProbability: matrixProbability,
 
@@ -79,7 +87,13 @@ export class GoalMarketEngine implements MarketModel {
 
       modelName: 'raw-goal-model',
 
-      modelVersion: 'raw-goal-v4',
+      /*
+       * Probability architecture changed:
+       * final goal-market probability now comes directly from the
+       * coherent score distribution rather than a secondary empirical
+       * reconciliation.
+       */
+      modelVersion: 'raw-goal-v5',
 
       modelOutputs: {
         expectedHomeGoals: model.expectedHomeGoals,
@@ -106,34 +120,62 @@ export class GoalMarketEngine implements MarketModel {
 
         matrixProbability,
 
+        /*
+         * Diagnostic only. This value is not used to alter probability.
+         */
         empiricalProbability: empiricalProbability ?? -1,
 
         empiricalEvidenceWeight: empiricalEvidence.weight,
 
         empiricalEvidenceAvailable: empiricalEvidence.available ? 1 : 0,
 
-        comparisonConfidence: input.features.comparison?.confidence ?? 0,
+        comparisonConfidence: this.clamp(
+          input.features.comparison?.confidence ?? 0,
+          0,
+          1,
+        ),
 
-        directionalDifference:
+        directionalDifference: this.clamp(
           input.features.comparison?.directionalDifference ?? 0,
+          -1,
+          1,
+        ),
 
-        goalProductionHome:
+        goalProductionHome: this.clamp(
           input.features.comparison?.goalProduction?.home ?? 0,
+          0,
+          1,
+        ),
 
-        goalProductionAway:
+        goalProductionAway: this.clamp(
           input.features.comparison?.goalProduction?.away ?? 0,
+          0,
+          1,
+        ),
 
-        goalProductionDifference:
+        goalProductionDifference: this.clamp(
           input.features.comparison?.goalProduction?.difference ?? 0,
+          -1,
+          1,
+        ),
 
-        goalPreventionHome:
+        goalPreventionHome: this.clamp(
           input.features.comparison?.goalPrevention?.home ?? 0,
+          0,
+          1,
+        ),
 
-        goalPreventionAway:
+        goalPreventionAway: this.clamp(
           input.features.comparison?.goalPrevention?.away ?? 0,
+          0,
+          1,
+        ),
 
-        goalPreventionDifference:
+        goalPreventionDifference: this.clamp(
           input.features.comparison?.goalPrevention?.difference ?? 0,
+          -1,
+          1,
+        ),
       },
     };
   }
@@ -231,13 +273,9 @@ export class GoalMarketEngine implements MarketModel {
 
     const sources: unknown[] = [
       input.features.home?.recent,
-
       input.features.away?.recent,
-
       input.features.home?.venue,
-
       input.features.away?.venue,
-
       input.features.h2h,
     ];
 
@@ -273,26 +311,21 @@ export class GoalMarketEngine implements MarketModel {
 
     const sources: unknown[] = [
       input.features.home?.recent,
-
       input.features.away?.recent,
-
       input.features.home?.venue,
-
       input.features.away?.venue,
-
       input.features.h2h,
     ];
 
     /*
-     * With the currently exposed OVER rates:
+     * Convert cumulative over-rates into mutually exclusive ranges:
      *
-     *   0-1 = 1 - O1.5
-     *   2   = O1.5 - O2.5
-     *   3-4 = O2.5 - O4.5
-     *   5+  = O4.5
+     * 0-1 = 1 - O1.5
+     * 2   = O1.5 - O2.5
+     * 3-4 = O2.5 - O4.5
+     * 5+  = O4.5
      *
-     * Range differences are accepted only when the supplied
-     * cumulative rates are internally monotonic.
+     * Only internally coherent cumulative rates are accepted.
      */
     for (const source of sources) {
       const observations = this.readSampleSize(source);
@@ -470,8 +503,9 @@ export class GoalMarketEngine implements MarketModel {
     );
 
     /*
-     * Evidence strength is based on actual empirical observations,
-     * not overallSampleSize copied onto every source.
+     * This is diagnostic evidence strength only.
+     *
+     * It is deliberately not used to modify the final probability.
      */
     const sampleReliability = this.clamp(
       1 - Math.exp(-totalObservations / 40),
@@ -485,29 +519,11 @@ export class GoalMarketEngine implements MarketModel {
       1,
     );
 
-    const comparisonConfidence = this.clamp(
-      input.features.comparison?.confidence ?? 0,
+    const weight = this.clamp(
+      (sampleReliability * 0.6 + dataReliability * 0.4) * 0.3,
       0,
-      1,
+      0.3,
     );
-
-    /*
-     * Comparison evidence is a supporting modifier only.
-     * It does not create empirical probability.
-     */
-    const comparisonSupport = this.calculateGoalComparisonSupport(input);
-
-    const evidenceStrength =
-      sampleReliability * 0.5 +
-      dataReliability * 0.3 +
-      comparisonConfidence * comparisonSupport * 0.2;
-
-    /*
-     * Empirical evidence is secondary.
-     *
-     * Maximum influence remains 30%.
-     */
-    const weight = this.clamp(evidenceStrength * 0.3, 0, 0.3);
 
     return {
       probability,
@@ -516,72 +532,6 @@ export class GoalMarketEngine implements MarketModel {
 
       available: true,
     };
-  }
-
-  private calculateGoalComparisonSupport(input: MarketModelInput): number {
-    const production = this.clamp(
-      input.features.comparison?.goalProduction?.difference ?? 0,
-      -1,
-      1,
-    );
-
-    const prevention = this.clamp(
-      input.features.comparison?.goalPrevention?.difference ?? 0,
-      -1,
-      1,
-    );
-
-    return this.clamp((Math.abs(production) + Math.abs(prevention)) / 2, 0, 1);
-  }
-
-  private reconcileProbability(
-    matrixProbability: number,
-    empiricalEvidence: {
-      probability: number;
-      weight: number;
-      available: boolean;
-    },
-    input: MarketModelInput,
-  ): number {
-    const matrix = this.clamp(matrixProbability);
-
-    if (!empiricalEvidence.available || empiricalEvidence.weight <= 0) {
-      return matrix;
-    }
-
-    const comparisonConfidence = this.clamp(
-      input.features.comparison?.confidence ?? 0,
-      0,
-      1,
-    );
-
-    const dataQuality = this.clamp(
-      (input.features.overallDataQuality ?? 0) / 100,
-      0,
-      1,
-    );
-
-    /*
-     * Empirical evidence can challenge the matrix, but the
-     * structural score matrix remains the primary probability
-     * source.
-     */
-    const coherence = this.clamp(
-      comparisonConfidence * 0.6 + dataQuality * 0.4,
-      0,
-      1,
-    );
-
-    const evidenceWeight = this.clamp(
-      empiricalEvidence.weight * (0.75 + coherence * 0.25),
-      0,
-      0.3,
-    );
-
-    return this.clamp(
-      matrix * (1 - evidenceWeight) +
-        empiricalEvidence.probability * evidenceWeight,
-    );
   }
 
   private collectEmpiricalValues(
@@ -638,14 +588,6 @@ export class GoalMarketEngine implements MarketModel {
     }
 
     return 0;
-  }
-
-  private pushRate(values: number[], source: unknown, keys: string[]): void {
-    const value = this.readRate(source, keys);
-
-    if (value !== null) {
-      values.push(value);
-    }
   }
 
   private readRate(source: unknown, keys: string[]): number | null {
@@ -862,9 +804,20 @@ export class GoalMarketEngine implements MarketModel {
     sampleSize: number,
     dataQuality: number,
   ): number {
-    const sampleReliability = 1 - Math.exp(-sampleSize / 20);
+    const safeSampleSize = Math.max(
+      Number.isFinite(sampleSize) ? sampleSize : 0,
+      0,
+    );
 
-    return this.clamp(sampleReliability * 0.4 + (dataQuality / 100) * 0.6);
+    const safeDataQuality = this.clamp(dataQuality, 0, 100);
+
+    const sampleReliability = 1 - Math.exp(-safeSampleSize / 20);
+
+    return this.clamp(
+      sampleReliability * 0.4 + (safeDataQuality / 100) * 0.6,
+      0,
+      1,
+    );
   }
 
   private clamp(value: number, minimum = 0, maximum = 1): number {
@@ -872,6 +825,6 @@ export class GoalMarketEngine implements MarketModel {
       return minimum;
     }
 
-    return Math.min(Math.max(minimum, value), maximum);
+    return Math.min(Math.max(value, minimum), maximum);
   }
 }

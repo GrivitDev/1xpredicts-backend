@@ -21,56 +21,86 @@ export class RawModelAgreementUtil {
     registeredProbability: number,
   ): RawModelAgreementResult {
     const matrixModel = this.clamp(commonProbability);
+
     const registeredModel = this.clamp(registeredProbability);
 
-    const comparisonAvailable = !!features.comparison;
-
-    const comparisonModel = comparisonAvailable
-      ? this.clamp(
-          this.calculateComparisonProbability(features, market, selection),
-        )
+    /*
+     * The score-matrix probability and registered probability are the
+     * actual probability paths supplied to this utility.
+     *
+     * The comparison object is NOT treated as a third independent
+     * probability model because its dimensions are derived from much
+     * of the same underlying team evidence.
+     */
+    const comparisonSupport = features.comparison
+      ? this.calculateComparisonSupport(features, market, selection)
       : null;
 
     /*
-     * ----------------------------------------------------------
-     * MODEL AGREEMENT
-     * ----------------------------------------------------------
+     * Agreement between actual probability paths is based directly on
+     * their distance.
      *
-     * Missing comparison evidence is NOT a 50% prediction.
+     * 0.00 difference → 1.00 agreement
+     * 1.00 difference → 0.00 agreement
      *
-     * If comparison data is unavailable, agreement is calculated
-     * only across the model paths that actually exist.
+     * This is much more stable than calculating deviation from a mean
+     * across correlated pseudo-models.
      */
-    const values =
-      comparisonModel === null
-        ? [matrixModel, registeredModel]
-        : [matrixModel, registeredModel, comparisonModel];
+    const probabilityAgreement = this.clamp(
+      1 - Math.abs(matrixModel - registeredModel),
+    );
 
-    const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
+    /*
+     * Comparison evidence is a consistency check only.
+     *
+     * It can reduce agreement when it materially contradicts the
+     * probability direction, but it cannot create agreement by itself.
+     */
+    const agreement = this.clamp(
+      probabilityAgreement *
+        this.comparisonAgreementModifier(comparisonSupport),
+      0,
+      1,
+    );
 
-    const deviation =
-      values.reduce((sum, value) => sum + Math.abs(value - mean), 0) /
-      values.length;
+    const signals = ['matrixModel', 'registeredModel'];
 
-    const agreement = this.clamp(1 - deviation * 4);
+    if (comparisonSupport !== null) {
+      signals.push(
+        comparisonSupport > 0
+          ? 'comparisonSupportsSelection'
+          : comparisonSupport < 0
+            ? 'comparisonContradictsSelection'
+            : 'comparisonNeutral',
+      );
+    } else {
+      signals.push('comparisonUnavailable');
+    }
 
     return {
       agreement,
 
       modelOutputs: {
         matrixModel,
+
         registeredModel,
-        comparisonModel: comparisonModel ?? matrixModel,
+
+        /*
+         * This value remains in the output for compatibility and
+         * diagnostics, but it is explicitly NOT an independent model
+         * probability.
+         */
+        comparisonModel:
+          comparisonSupport === null
+            ? 0.5
+            : this.comparisonSupportToProbability(comparisonSupport),
       },
 
-      signals:
-        comparisonModel === null
-          ? ['matrixModel', 'registeredModel']
-          : ['matrixModel', 'registeredModel', 'comparisonModel'],
+      signals,
     };
   }
 
-  private static calculateComparisonProbability(
+  private static calculateComparisonSupport(
     features: RawPredictionFeatures,
     market: PredictionMarket,
     selection: string,
@@ -78,324 +108,238 @@ export class RawModelAgreementUtil {
     const comparison = features.comparison;
 
     if (!comparison) {
-      return 0.5;
+      return 0;
     }
 
-    const difference = this.clamp(comparison.directionalDifference ?? 0, -1, 1);
+    const directionalDifference = this.clamp(
+      comparison.directionalDifference ?? 0,
+      -1,
+      1,
+    );
 
-    const productionDifference = this.clamp(
+    const goalProductionDifference = this.clamp(
       comparison.goalProduction?.difference ?? 0,
       -1,
       1,
     );
 
-    const preventionDifference = this.clamp(
+    const goalPreventionDifference = this.clamp(
       comparison.goalPrevention?.difference ?? 0,
       -1,
       1,
     );
 
-    const upper = selection.trim().toUpperCase();
-
     switch (market) {
       case PredictionMarket.MATCH_RESULT:
       case PredictionMarket.HALF_TIME_RESULT:
       case PredictionMarket.SECOND_HALF_RESULT:
-        return this.directionalSelectionProbability(
-          difference,
-          upper,
-          features,
-        );
+        return this.resultSelectionSupport(directionalDifference, selection);
 
       case PredictionMarket.ASIAN_HANDICAP:
-        return this.calculateAsianHandicapComparisonProbability(
-          difference,
-          upper,
-          comparison.confidence ?? 0,
-        );
-
       case PredictionMarket.EUROPEAN_HANDICAP:
-        return this.calculateEuropeanHandicapComparisonProbability(
-          difference,
-          upper,
-          comparison.confidence ?? 0,
-        );
+        return this.handicapSelectionSupport(directionalDifference, selection);
 
       case PredictionMarket.BOTH_TEAMS_TO_SCORE:
-        return this.calculateBttsComparisonProbability(features, upper);
+        return this.bttsSelectionSupport(features, selection);
 
       case PredictionMarket.OVER_UNDER:
-        return this.calculateGoalDirectionComparisonProbability(
-          productionDifference,
-          preventionDifference,
-          upper,
-        );
-
       case PredictionMarket.FIRST_HALF_GOALS:
       case PredictionMarket.SECOND_HALF_GOALS:
-        return this.calculatePeriodGoalComparisonProbability(
-          productionDifference,
-          preventionDifference,
-          upper,
+        return this.goalSelectionSupport(
+          goalProductionDifference,
+          goalPreventionDifference,
+          selection,
         );
 
       case PredictionMarket.GOAL_RANGE:
-        return this.calculateGoalRangeComparisonProbability(
-          productionDifference,
-          preventionDifference,
-          upper,
+        return this.goalRangeSelectionSupport(
+          goalProductionDifference,
+          goalPreventionDifference,
+          selection,
         );
 
       case PredictionMarket.TEAM_TOTAL_GOALS:
-        return this.calculateTeamTotalComparisonProbability(
-          difference,
-          productionDifference,
-          preventionDifference,
-          upper,
+        return this.teamTotalSelectionSupport(
+          goalProductionDifference,
+          goalPreventionDifference,
+          selection,
         );
 
       default:
-        return 0.5;
+        return 0;
     }
   }
 
-  private static directionalSelectionProbability(
+  private static resultSelectionSupport(
     difference: number,
     selection: string,
-    features: RawPredictionFeatures,
   ): number {
-    if (
-      selection === 'HOME' ||
-      selection === '1' ||
-      selection === 'HOME_WIN' ||
-      selection.startsWith('HOME_')
-    ) {
-      return this.directionalProbability(difference);
-    }
+    const normalized = selection.trim().toUpperCase();
 
     if (
-      selection === 'AWAY' ||
-      selection === '2' ||
-      selection === 'AWAY_WIN' ||
-      selection.startsWith('AWAY_')
+      normalized === 'HOME' ||
+      normalized === '1' ||
+      normalized === 'HOME_WIN' ||
+      normalized.startsWith('HOME_')
     ) {
-      return this.directionalProbability(-difference);
+      return this.clamp(difference, -1, 1);
     }
 
-    if (selection === 'DRAW' || selection === 'X') {
-      return this.drawProbability(features, difference);
-    }
-
-    return 0.5;
-  }
-
-  private static calculateAsianHandicapComparisonProbability(
-    difference: number,
-    selection: string,
-    confidence: number,
-  ): number {
-    const normalizedConfidence = this.clamp(confidence, 0, 1);
-
-    if (normalizedConfidence <= 0) {
-      return 0.5;
-    }
-
-    const parsed = this.parseHandicapSelection(selection);
-
-    if (!parsed) {
-      return 0.5;
+    if (
+      normalized === 'AWAY' ||
+      normalized === '2' ||
+      normalized === 'AWAY_WIN' ||
+      normalized.startsWith('AWAY_')
+    ) {
+      return this.clamp(-difference, -1, 1);
     }
 
     /*
-     * A handicap changes the strength required from the selected
-     * side. Larger negative handicaps require stronger directional
-     * evidence. Positive handicaps require less.
-     *
-     * The comparison signal is deliberately bounded and remains a
-     * secondary model path.
+     * A directional comparison cannot reliably determine a draw
+     * probability. Similarity is therefore used only as a weak
+     * consistency signal.
      */
-    const directional = parsed.side === 'HOME' ? difference : -difference;
-
-    const linePressure = this.handicapLinePressure(parsed.line);
-
-    const adjustedSignal = directional - linePressure;
-
-    const base = this.directionalProbability(adjustedSignal);
-
-    return this.clamp(0.5 + (base - 0.5) * normalizedConfidence);
-  }
-
-  private static calculateEuropeanHandicapComparisonProbability(
-    difference: number,
-    selection: string,
-    confidence: number,
-  ): number {
-    const normalizedConfidence = this.clamp(confidence, 0, 1);
-
-    if (normalizedConfidence <= 0) {
-      return 0.5;
+    if (normalized === 'DRAW' || normalized === 'X') {
+      return this.clamp(1 - Math.abs(difference), 0, 1);
     }
 
+    return 0;
+  }
+
+  private static handicapSelectionSupport(
+    difference: number,
+    selection: string,
+  ): number {
     const parsed = this.parseHandicapSelection(selection);
 
     if (!parsed) {
-      return 0.5;
+      return 0;
     }
 
-    const directional =
-      parsed.side === 'HOME'
-        ? difference
-        : parsed.side === 'AWAY'
-          ? -difference
-          : 0;
-
-    /*
-     * European handicap lines are discrete outcome shifts.
-     * Larger negative lines require stronger directional support.
-     */
     if (parsed.side === 'DRAW') {
-      const drawBase = this.drawProbability(
-        {
-          comparison: {
-            directionalDifference: difference,
-          },
-        } as RawPredictionFeatures,
-        difference,
-      );
-
-      const lineEffect = Math.abs(parsed.line) * 0.08;
-
-      return this.clamp(
-        0.5 +
-          (drawBase - 0.5) * normalizedConfidence -
-          Math.sign(parsed.line) * lineEffect,
-      );
+      return this.clamp(1 - Math.abs(difference), 0, 1);
     }
 
-    const linePressure = this.handicapLinePressure(parsed.line);
+    const directedDifference =
+      parsed.side === 'HOME' ? difference : -difference;
 
-    const adjustedSignal = directional - linePressure;
-
-    const base = this.directionalProbability(adjustedSignal);
-
-    return this.clamp(0.5 + (base - 0.5) * normalizedConfidence);
+    /*
+     * This is only a direction check.
+     *
+     * We deliberately do not manufacture a handicap probability from
+     * the comparison score.
+     */
+    return this.clamp(directedDifference, -1, 1);
   }
 
-  private static calculateBttsComparisonProbability(
+  private static bttsSelectionSupport(
     features: RawPredictionFeatures,
     selection: string,
   ): number {
-    const values: number[] = [];
+    const normalized = selection.trim().toUpperCase();
 
-    this.pushRate(values, features.home, ['bttsRate']);
-    this.pushRate(values, features.away, ['bttsRate']);
+    const home = this.calculateTeamScoringSupport(features.home);
 
-    this.pushRate(values, features.home?.recent, ['bttsRate']);
+    const away = this.calculateTeamScoringSupport(features.away);
 
-    this.pushRate(values, features.away?.recent, ['bttsRate']);
+    /*
+     * Both teams need scoring support for BTTS YES.
+     */
+    const yesSupport = this.clamp(Math.min(home, away), 0, 1);
 
-    this.pushRate(values, features.home?.venue, ['bttsRate']);
-
-    this.pushRate(values, features.away?.venue, ['bttsRate']);
-
-    this.pushRate(values, features.h2h, ['bttsRate', 'bothTeamsToScoreRate']);
-
-    if (!values.length) {
-      return 0.5;
+    if (
+      normalized === 'YES' ||
+      normalized === 'BTTS_YES' ||
+      normalized === '1'
+    ) {
+      return yesSupport;
     }
 
-    const base = this.average(values);
-
-    if (selection === 'YES' || selection === 'BTTS_YES' || selection === '1') {
-      return base;
+    if (normalized === 'NO' || normalized === 'BTTS_NO' || normalized === '0') {
+      return this.clamp(-yesSupport, -1, 0);
     }
 
-    if (selection === 'NO' || selection === 'BTTS_NO' || selection === '0') {
-      return this.clamp(1 - base);
-    }
-
-    return 0.5;
+    return 0;
   }
 
-  private static calculateGoalDirectionComparisonProbability(
+  private static goalSelectionSupport(
     productionDifference: number,
     preventionDifference: number,
     selection: string,
   ): number {
+    const normalized = selection.trim().toUpperCase();
+
+    /*
+     * Positive values indicate a more goal-friendly environment.
+     */
     const goalEnvironment = this.clamp(
-      productionDifference - preventionDifference,
+      (productionDifference - preventionDifference) / 2,
       -1,
       1,
     );
 
-    const threshold = this.extractThreshold(selection);
-
-    const lineAdjustment =
-      threshold === null ? 0 : this.clamp((threshold - 2.5) * 0.08, -0.2, 0.2);
-
-    const overProbability = this.clamp(
-      0.5 + goalEnvironment * 0.2 - lineAdjustment,
-    );
-
-    if (selection.includes('UNDER') || selection.startsWith('U')) {
-      return this.clamp(1 - overProbability);
+    if (normalized.includes('OVER') || normalized.startsWith('O')) {
+      return goalEnvironment;
     }
 
-    if (selection.includes('OVER') || selection.startsWith('O')) {
-      return overProbability;
+    if (normalized.includes('UNDER') || normalized.startsWith('U')) {
+      return -goalEnvironment;
     }
 
-    return 0.5;
+    return 0;
   }
 
-  private static calculatePeriodGoalComparisonProbability(
+  private static goalRangeSelectionSupport(
     productionDifference: number,
     preventionDifference: number,
     selection: string,
   ): number {
+    const normalized = selection.trim().toUpperCase();
+
+    const goalEnvironment = this.clamp(
+      (productionDifference - preventionDifference) / 2,
+      -1,
+      1,
+    );
+
     /*
-     * There are no dedicated half-specific comparison fields in
-     * this contract.
+     * Range direction is intentionally weak.
      *
-     * Therefore use the available goal environment only as a
-     * bounded secondary signal rather than pretending that it is
-     * an exact first-half/second-half probability.
+     * The actual probability must come from the goal distribution.
      */
-    return this.calculateGoalDirectionComparisonProbability(
-      productionDifference,
-      preventionDifference,
-      selection,
-    );
+    switch (normalized) {
+      case '0-1':
+        return -goalEnvironment;
+
+      case '2':
+        return 0;
+
+      case '3-4':
+        return goalEnvironment * 0.5;
+
+      case '5+':
+        return goalEnvironment;
+
+      default:
+        return 0;
+    }
   }
 
-  private static calculateTeamTotalComparisonProbability(
-    difference: number,
+  private static teamTotalSelectionSupport(
     productionDifference: number,
     preventionDifference: number,
     selection: string,
   ): number {
-    const upper = selection.trim().toUpperCase();
+    const normalized = selection.trim().toUpperCase();
 
-    const isHome = upper.startsWith('HOME_');
-    const isAway = upper.startsWith('AWAY_');
+    const isHome = normalized.startsWith('HOME_');
+
+    const isAway = normalized.startsWith('AWAY_');
 
     if (!isHome && !isAway) {
-      return 0.5;
+      return 0;
     }
 
-    /*
-     * Team-total evidence must be directed at the actual team.
-     *
-     * Production difference:
-     *   positive => home attack advantage
-     *
-     * Prevention difference:
-     *   positive => home defensive-prevention advantage
-     *
-     * For a team's own scoring total:
-     *   stronger production supports OVER
-     *   stronger opponent prevention supports UNDER
-     */
     const teamProduction = isHome
       ? productionDifference
       : -productionDifference;
@@ -404,99 +348,96 @@ export class RawModelAgreementUtil {
       ? -preventionDifference
       : preventionDifference;
 
-    const threshold = this.extractThreshold(upper);
-
-    const lineAdjustment =
-      threshold === null
-        ? 0
-        : this.clamp((threshold - 1.5) * 0.08, -0.12, 0.16);
-
-    const overSignal = this.clamp(
-      0.5 + teamProduction * 0.2 + opponentPrevention * 0.2 - lineAdjustment,
-    );
-
-    if (upper.includes('_UNDER_')) {
-      return this.clamp(1 - overSignal);
-    }
-
-    if (upper.includes('_OVER_')) {
-      return overSignal;
-    }
-
-    return this.clamp(0.5 + difference * 0.15);
-  }
-
-  private static calculateGoalRangeComparisonProbability(
-    productionDifference: number,
-    preventionDifference: number,
-    selection: string,
-  ): number {
-    const goalEnvironment = this.clamp(
-      productionDifference - preventionDifference,
+    const scoringEnvironment = this.clamp(
+      (teamProduction + opponentPrevention) / 2,
       -1,
       1,
     );
 
-    /*
-     * This is intentionally a soft ordering signal, not an exact
-     * probability estimate. The actual exact-range probability is
-     * calculated from the score matrix by MarketProbabilityUtil.
-     */
-    switch (selection.trim().toUpperCase()) {
-      case '0-1':
-        return this.clamp(0.5 - goalEnvironment * 0.25);
-
-      case '2':
-        return this.clamp(0.5 - goalEnvironment * 0.05);
-
-      case '3-4':
-        return this.clamp(0.5 + goalEnvironment * 0.1);
-
-      case '5+':
-        return this.clamp(0.5 + goalEnvironment * 0.25);
-
-      default:
-        return 0.5;
+    if (normalized.includes('_OVER_')) {
+      return scoringEnvironment;
     }
+
+    if (normalized.includes('_UNDER_')) {
+      return -scoringEnvironment;
+    }
+
+    return 0;
   }
 
-  private static drawProbability(
-    features: RawPredictionFeatures,
-    difference: number,
+  private static calculateTeamScoringSupport(
+    team: RawPredictionFeatures['home'],
   ): number {
     const values: number[] = [];
 
-    this.pushRate(values, features.home, ['drawRate']);
+    this.pushRate(values, team.bttsRate);
 
-    this.pushRate(values, features.away, ['drawRate']);
+    this.pushRate(values, team.recent?.bttsRate);
 
-    this.pushRate(values, features.home?.recent, ['drawRate']);
+    this.pushRate(values, team.venue?.bttsRate);
 
-    this.pushRate(values, features.away?.recent, ['drawRate']);
+    const failedToScore = this.readRate(team.failedToScoreRate);
 
-    this.pushRate(values, features.home?.venue, ['drawRate']);
-
-    this.pushRate(values, features.away?.venue, ['drawRate']);
-
-    this.pushRate(values, features.h2h, ['drawRate']);
-
-    const historicalDraw = values.length ? this.average(values) : null;
-
-    /*
-     * Actual draw evidence comes first.
-     * Similar strength only modulates observed draw evidence.
-     */
-    if (historicalDraw !== null) {
-      const similarity = this.clamp(1 - Math.abs(difference), 0, 1);
-
-      return this.clamp(historicalDraw * (0.75 + similarity * 0.25));
+    if (failedToScore !== null) {
+      values.push(1 - failedToScore);
     }
 
-    return this.clamp(0.3 - Math.abs(difference) * 0.12, 0.05, 0.4);
+    const recentFailedToScore = this.readRate(team.recent?.failedToScoreRate);
+
+    if (recentFailedToScore !== null) {
+      values.push(1 - recentFailedToScore);
+    }
+
+    const venueFailedToScore = this.readRate(team.venue?.failedToScoreRate);
+
+    if (venueFailedToScore !== null) {
+      values.push(1 - venueFailedToScore);
+    }
+
+    if (!values.length) {
+      return 0.5;
+    }
+
+    return this.clamp(
+      values.reduce((sum, value) => sum + value, 0) / values.length,
+      0,
+      1,
+    );
+  }
+
+  private static comparisonSupportToProbability(support: number): number {
+    return this.clamp(0.5 + this.clamp(support, -1, 1) * 0.5, 0, 1);
+  }
+
+  private static comparisonAgreementModifier(support: number | null): number {
+    if (support === null) {
+      return 1;
+    }
+
+    /*
+     * Agreement should remain primarily about actual probability paths.
+     *
+     * Positive comparison support provides only a small consistency
+     * benefit.
+     *
+     * Contradictory comparison evidence creates a modest penalty.
+     *
+     * This prevents comparison from becoming a hidden third model.
+     */
+    if (support > 0) {
+      return 1;
+    }
+
+    if (support < 0) {
+      return this.clamp(1 - Math.abs(support) * 0.15, 0.85, 1);
+    }
+
+    return 1;
   }
 
   private static parseHandicapSelection(selection: string): {
     side: 'HOME' | 'AWAY' | 'DRAW';
+
     line: number;
   } | null {
     const match = selection
@@ -527,79 +468,31 @@ export class RawModelAgreementUtil {
     };
   }
 
-  private static handicapLinePressure(line: number): number {
-    if (line <= -1.5) {
-      return 0.5;
-    }
+  private static pushRate(
+    values: number[],
+    value: number | null | undefined,
+  ): void {
+    const normalized = this.readRate(value);
 
-    if (line <= -1) {
-      return 0.34;
+    if (normalized !== null) {
+      values.push(normalized);
     }
-
-    if (line <= -0.5) {
-      return 0.18;
-    }
-
-    if (line <= 0.5) {
-      return 0;
-    }
-
-    if (line <= 1) {
-      return -0.16;
-    }
-
-    return -0.3;
   }
 
-  private static extractThreshold(selection: string): number | null {
-    const match = selection.match(/(?:\d+\.\d+|\d+)/);
-
-    if (!match) {
+  private static readRate(value: number | null | undefined): number | null {
+    if (value === null || value === undefined || !Number.isFinite(value)) {
       return null;
     }
 
-    const value = Number(match[0]);
-
-    return Number.isFinite(value) ? value : null;
-  }
-
-  private static directionalProbability(difference: number): number {
-    return this.clamp(0.5 + this.clamp(difference, -1, 1) * 0.65);
-  }
-
-  private static pushRate(
-    values: number[],
-    source: unknown,
-    keys: string[],
-  ): void {
-    if (!source || typeof source !== 'object') {
-      return;
+    if (value >= 0 && value <= 1) {
+      return value;
     }
 
-    const record = source as Record<string, unknown>;
-
-    for (const key of keys) {
-      const value = record[key];
-
-      if (typeof value !== 'number' || !Number.isFinite(value)) {
-        continue;
-      }
-
-      const normalized = value > 1 && value <= 100 ? value / 100 : value;
-
-      if (normalized >= 0 && normalized <= 1) {
-        values.push(normalized);
-        return;
-      }
-    }
-  }
-
-  private static average(values: number[]): number {
-    if (!values.length) {
-      return 0;
+    if (value > 1 && value <= 100) {
+      return value / 100;
     }
 
-    return values.reduce((sum, value) => sum + value, 0) / values.length;
+    return null;
   }
 
   private static clamp(value: number, minimum = 0, maximum = 1): number {
@@ -607,6 +500,6 @@ export class RawModelAgreementUtil {
       return minimum;
     }
 
-    return Math.min(Math.max(minimum, value), maximum);
+    return Math.min(Math.max(value, minimum), maximum);
   }
 }

@@ -24,28 +24,10 @@ export class HandicapMarketEngine implements MarketModel {
   calculate(input: MarketModelInput): ProbabilityModelResult {
     const model = RawGoalModelUtil.calculate(input.features);
 
-    const matrixOutcome =
+    const outcome =
       input.market === PredictionMarket.ASIAN_HANDICAP
         ? this.calculateAsianHandicap(input.selection, model)
         : this.calculateEuropeanHandicap(input.selection, model);
-
-    const comparisonProbability = this.calculateComparisonProbability(
-      input,
-      input.selection,
-      input.market,
-    );
-
-    const probability = this.reconcileWithComparison(
-      input,
-      input.selection,
-      matrixOutcome.probability,
-      input.market,
-    );
-
-    const outcome = this.reconcileSettlementProbabilities(
-      matrixOutcome,
-      probability,
-    );
 
     const sampleSize = Math.max(input.features.overallSampleSize ?? 0, 0);
 
@@ -55,50 +37,105 @@ export class HandicapMarketEngine implements MarketModel {
       100,
     );
 
+    const comparisonConfidence = this.clamp(
+      input.features.comparison?.confidence ?? 0,
+      0,
+      1,
+    );
+
+    const directionalDifference = this.clamp(
+      input.features.comparison?.directionalDifference ?? 0,
+      -1,
+      1,
+    );
+
+    const goalProductionHome = this.clamp(
+      input.features.comparison?.goalProduction?.home ?? 0,
+      0,
+      1,
+    );
+
+    const goalProductionAway = this.clamp(
+      input.features.comparison?.goalProduction?.away ?? 0,
+      0,
+      1,
+    );
+
+    const goalPreventionHome = this.clamp(
+      input.features.comparison?.goalPrevention?.home ?? 0,
+      0,
+      1,
+    );
+
+    const goalPreventionAway = this.clamp(
+      input.features.comparison?.goalPrevention?.away ?? 0,
+      0,
+      1,
+    );
+
+    /*
+     * Handicap probability comes directly from the score-margin
+     * distribution.
+     *
+     * Comparison evidence is retained as diagnostic information only.
+     * It does not modify the probability because the underlying team
+     * evidence is already represented in the goal model.
+     */
+    const probability = this.clamp(outcome.probability, 0, 1);
+
     return {
       market: input.market,
-      selection: input.selection,
-      probability: outcome.probability,
 
-      // Keep this as the structural / raw matrix probability.
-      // The reconciled probability remains the final probability above.
-      supportingProbability: this.clamp(matrixOutcome.probability),
+      selection: input.selection,
+
+      probability,
+
+      supportingProbability: probability,
 
       sampleSize,
+
       dataQuality,
+
       modelReliability: this.calculateReliability(sampleSize, dataQuality),
+
       modelName: 'raw-handicap-model',
-      modelVersion: 'raw-handicap-v4',
+
+      /*
+       * New version because handicap probability is now derived
+       * directly from the score-margin distribution.
+       */
+      modelVersion: 'raw-handicap-v5',
 
       modelOutputs: {
         winProbability: outcome.winProbability,
+
         pushProbability: outcome.pushProbability,
+
         lossProbability: outcome.lossProbability,
-        matrixProbability: matrixOutcome.probability,
-        comparisonProbability,
-        directionalDifference:
-          input.features.comparison?.directionalDifference ?? 0,
+
+        matrixProbability: probability,
       },
 
       modelSignals: {
         winProbability: outcome.winProbability,
+
         pushProbability: outcome.pushProbability,
+
         lossProbability: outcome.lossProbability,
-        matrixProbability: matrixOutcome.probability,
-        comparisonProbability,
-        comparisonConfidence: input.features.comparison?.confidence ?? 0,
-        directionalDifference:
-          input.features.comparison?.directionalDifference ?? 0,
 
-        goalProductionHome:
-          input.features.comparison?.goalProduction?.home ?? 0,
-        goalProductionAway:
-          input.features.comparison?.goalProduction?.away ?? 0,
+        matrixProbability: probability,
 
-        goalPreventionHome:
-          input.features.comparison?.goalPrevention?.home ?? 0,
-        goalPreventionAway:
-          input.features.comparison?.goalPrevention?.away ?? 0,
+        comparisonConfidence,
+
+        directionalDifference,
+
+        goalProductionHome,
+
+        goalProductionAway,
+
+        goalPreventionHome,
+
+        goalPreventionAway,
       },
     };
   }
@@ -108,8 +145,11 @@ export class HandicapMarketEngine implements MarketModel {
     model: ReturnType<typeof RawGoalModelUtil.calculate>,
   ): {
     probability: number;
+
     winProbability: number;
+
     pushProbability: number;
+
     lossProbability: number;
   } {
     const parsed = this.parseAsianSelection(selection);
@@ -126,40 +166,11 @@ export class HandicapMarketEngine implements MarketModel {
       );
     }
 
-    let win = 0;
-    let push = 0;
-    let loss = 0;
-
-    for (let homeGoals = 0; homeGoals < model.matrix.length; homeGoals++) {
-      for (
-        let awayGoals = 0;
-        awayGoals < model.matrix[homeGoals].length;
-        awayGoals++
-      ) {
-        const probability = model.matrix[homeGoals][awayGoals] ?? 0;
-
-        if (probability <= 0) {
-          continue;
-        }
-
-        const margin = homeGoals - awayGoals;
-
-        const adjusted =
-          parsed.outcome === 'HOME'
-            ? margin + parsed.line
-            : -margin + parsed.line;
-
-        if (adjusted > 0) {
-          win += probability;
-        } else if (adjusted < 0) {
-          loss += probability;
-        } else {
-          push += probability;
-        }
-      }
-    }
-
-    return this.buildDecisiveOutcome(win, push, loss);
+    return this.calculateAsianHandicapWholeOrHalf(
+      parsed.outcome,
+      parsed.line,
+      model,
+    );
   }
 
   private calculateQuarterAsianHandicap(
@@ -168,11 +179,15 @@ export class HandicapMarketEngine implements MarketModel {
     model: ReturnType<typeof RawGoalModelUtil.calculate>,
   ): {
     probability: number;
+
     winProbability: number;
+
     pushProbability: number;
+
     lossProbability: number;
   } {
     const lowerLine = Math.floor(line * 2) / 2;
+
     const upperLine = Math.ceil(line * 2) / 2;
 
     const first = this.calculateAsianHandicapWholeOrHalf(
@@ -187,20 +202,43 @@ export class HandicapMarketEngine implements MarketModel {
       model,
     );
 
+    /*
+     * Quarter Asian lines represent an equal split between the
+     * adjacent half/whole lines.
+     *
+     * Therefore each settlement component is averaged.
+     */
+    const winProbability = this.clamp(
+      (first.winProbability + second.winProbability) / 2,
+      0,
+      1,
+    );
+
+    const pushProbability = this.clamp(
+      (first.pushProbability + second.pushProbability) / 2,
+      0,
+      1,
+    );
+
+    const lossProbability = this.clamp(
+      (first.lossProbability + second.lossProbability) / 2,
+      0,
+      1,
+    );
+
     return {
-      probability: this.clamp((first.probability + second.probability) / 2),
+      /*
+       * Probability means the actual probability of winning the
+       * selected Asian handicap, not win conditional on avoiding
+       * a push.
+       */
+      probability: winProbability,
 
-      winProbability: this.clamp(
-        (first.winProbability + second.winProbability) / 2,
-      ),
+      winProbability,
 
-      pushProbability: this.clamp(
-        (first.pushProbability + second.pushProbability) / 2,
-      ),
+      pushProbability,
 
-      lossProbability: this.clamp(
-        (first.lossProbability + second.lossProbability) / 2,
-      ),
+      lossProbability,
     };
   }
 
@@ -210,21 +248,24 @@ export class HandicapMarketEngine implements MarketModel {
     model: ReturnType<typeof RawGoalModelUtil.calculate>,
   ): {
     probability: number;
+
     winProbability: number;
+
     pushProbability: number;
+
     lossProbability: number;
   } {
     let win = 0;
+
     let push = 0;
+
     let loss = 0;
 
-    for (let homeGoals = 0; homeGoals < model.matrix.length; homeGoals++) {
-      for (
-        let awayGoals = 0;
-        awayGoals < model.matrix[homeGoals].length;
-        awayGoals++
-      ) {
-        const probability = model.matrix[homeGoals][awayGoals] ?? 0;
+    for (let homeGoals = 0; homeGoals < model.matrix.length; homeGoals += 1) {
+      const row = model.matrix[homeGoals] ?? [];
+
+      for (let awayGoals = 0; awayGoals < row.length; awayGoals += 1) {
+        const probability = row[awayGoals] ?? 0;
 
         if (probability <= 0) {
           continue;
@@ -244,7 +285,7 @@ export class HandicapMarketEngine implements MarketModel {
       }
     }
 
-    return this.buildDecisiveOutcome(win, push, loss);
+    return this.buildAsianOutcome(win, push, loss);
   }
 
   private calculateEuropeanHandicap(
@@ -252,8 +293,11 @@ export class HandicapMarketEngine implements MarketModel {
     model: ReturnType<typeof RawGoalModelUtil.calculate>,
   ): {
     probability: number;
+
     winProbability: number;
+
     pushProbability: number;
+
     lossProbability: number;
   } {
     const parsed = this.parseEuropeanSelection(selection);
@@ -263,16 +307,16 @@ export class HandicapMarketEngine implements MarketModel {
     }
 
     let home = 0;
+
     let draw = 0;
+
     let away = 0;
 
-    for (let homeGoals = 0; homeGoals < model.matrix.length; homeGoals++) {
-      for (
-        let awayGoals = 0;
-        awayGoals < model.matrix[homeGoals].length;
-        awayGoals++
-      ) {
-        const probability = model.matrix[homeGoals][awayGoals] ?? 0;
+    for (let homeGoals = 0; homeGoals < model.matrix.length; homeGoals += 1) {
+      const row = model.matrix[homeGoals] ?? [];
+
+      for (let awayGoals = 0; awayGoals < row.length; awayGoals += 1) {
+        const probability = row[awayGoals] ?? 0;
 
         if (probability <= 0) {
           continue;
@@ -287,6 +331,11 @@ export class HandicapMarketEngine implements MarketModel {
         } else if (parsed.outcome === 'AWAY') {
           difference = -margin + parsed.line;
         } else {
+          /*
+           * For the European draw selection, the handicap is applied
+           * to the home-vs-away margin and the resulting zero defines
+           * the adjusted draw.
+           */
           difference = margin + parsed.line;
         }
 
@@ -307,194 +356,77 @@ export class HandicapMarketEngine implements MarketModel {
           ? draw
           : away;
 
-    const remainder = Math.max(home + draw + away - selected, 0);
+    const loss =
+      parsed.outcome === 'HOME'
+        ? draw + away
+        : parsed.outcome === 'DRAW'
+          ? home + away
+          : home + draw;
 
+    /*
+     * European handicap has no push settlement. The selected outcome
+     * is therefore the direct market probability.
+     */
     return {
-      probability: this.clamp(selected),
+      probability: this.clamp(selected, 0, 1),
 
-      winProbability:
-        parsed.outcome === 'DRAW' ? this.clamp(draw) : this.clamp(selected),
+      winProbability: this.clamp(selected, 0, 1),
 
       pushProbability: 0,
 
-      lossProbability: this.clamp(remainder),
+      lossProbability: this.clamp(loss, 0, 1),
     };
   }
 
-  private calculateComparisonProbability(
-    input: MarketModelInput,
-    selection: string,
-    market: PredictionMarket,
-  ): number {
-    const comparison = input.features.comparison;
-
-    if (!comparison) {
-      return 0.5;
-    }
-
-    const directionalDifference = this.clamp(
-      comparison.directionalDifference ?? 0,
-      -1,
-      1,
-    );
-
-    const confidence = this.clamp(comparison.confidence ?? 0);
-
-    const parsedAsian =
-      market === PredictionMarket.ASIAN_HANDICAP
-        ? this.parseAsianSelection(selection)
-        : null;
-
-    const parsedEuropean =
-      market === PredictionMarket.EUROPEAN_HANDICAP
-        ? this.parseEuropeanSelection(selection)
-        : null;
-
-    let side: 'HOME' | 'DRAW' | 'AWAY' | null = null;
-
-    if (parsedAsian) {
-      side = parsedAsian.outcome;
-    }
-
-    if (parsedEuropean) {
-      side = parsedEuropean.outcome;
-    }
-
-    if (!side) {
-      return 0.5;
-    }
-
-    let baseProbability = 0.5;
-
-    if (side === 'HOME') {
-      baseProbability = 0.5 + directionalDifference * 0.5;
-    } else if (side === 'AWAY') {
-      baseProbability = 0.5 - directionalDifference * 0.5;
-    } else {
-      baseProbability = 0.5 - Math.abs(directionalDifference) * 0.25;
-    }
-
-    const confidenceWeight = this.clamp(confidence * 0.4, 0, 0.4);
-
-    return this.clamp(0.5 + (baseProbability - 0.5) * (0.5 + confidenceWeight));
-  }
-
-  private reconcileWithComparison(
-    input: MarketModelInput,
-    selection: string,
-    matrixProbability: number,
-    market: PredictionMarket,
-  ): number {
-    const matrix = this.clamp(matrixProbability);
-
-    const comparison = this.calculateComparisonProbability(
-      input,
-      selection,
-      market,
-    );
-
-    const comparisonConfidence = this.clamp(
-      input.features.comparison?.confidence ?? 0,
-    );
-
-    const dataQuality = this.clamp(
-      (input.features.overallDataQuality ?? 0) / 100,
-    );
-
-    const evidenceAvailable = Boolean(input.features.comparison);
-
-    if (!evidenceAvailable) {
-      return matrix;
-    }
-
-    const weight = this.clamp(
-      (comparisonConfidence * 0.6 + dataQuality * 0.4) * 0.25,
-      0,
-      0.25,
-    );
-
-    return this.clamp(matrix * (1 - weight) + comparison * weight);
-  }
-
-  private reconcileSettlementProbabilities(
-    matrixOutcome: {
-      probability: number;
-      winProbability: number;
-      pushProbability: number;
-      lossProbability: number;
-    },
-    reconciledProbability: number,
-  ): {
-    probability: number;
-    winProbability: number;
-    pushProbability: number;
-    lossProbability: number;
-  } {
-    const originalWin = this.clamp(matrixOutcome.winProbability);
-
-    const originalPush = this.clamp(matrixOutcome.pushProbability);
-
-    const originalLoss = this.clamp(matrixOutcome.lossProbability);
-
-    const originalDecisive = originalWin + originalLoss;
-
-    if (originalDecisive <= 0) {
-      return {
-        probability: this.clamp(reconciledProbability),
-        winProbability: 0,
-        pushProbability: originalPush,
-        lossProbability: 0,
-      };
-    }
-
-    const target = this.clamp(reconciledProbability);
-
-    const originalWinRate = originalWin / originalDecisive;
-
-    const decisiveAdjustment = target - originalWinRate;
-
-    const win = this.clamp(originalWin + decisiveAdjustment * originalDecisive);
-
-    const loss = this.clamp(
-      originalLoss - decisiveAdjustment * originalDecisive,
-    );
-
-    return {
-      probability: this.clamp(win / Math.max(win + loss, Number.EPSILON)),
-
-      winProbability: win,
-      pushProbability: originalPush,
-      lossProbability: loss,
-    };
-  }
-
-  private buildDecisiveOutcome(
+  private buildAsianOutcome(
     win: number,
     push: number,
     loss: number,
   ): {
     probability: number;
+
     winProbability: number;
+
     pushProbability: number;
+
     lossProbability: number;
   } {
-    const normalizedWin = this.clamp(win);
-    const normalizedPush = this.clamp(push);
-    const normalizedLoss = this.clamp(loss);
+    const winProbability = this.clamp(win, 0, 1);
 
-    const decisive = normalizedWin + normalizedLoss;
+    const pushProbability = this.clamp(push, 0, 1);
+
+    const lossProbability = this.clamp(loss, 0, 1);
+
+    const total = winProbability + pushProbability + lossProbability;
+
+    if (total <= 0 || !Number.isFinite(total)) {
+      return this.emptyOutcome();
+    }
+
+    /*
+     * Normalize only to protect against numerical drift from the
+     * score matrix. The three probabilities remain distinct.
+     */
+    const normalizedWin = winProbability / total;
+
+    const normalizedPush = pushProbability / total;
+
+    const normalizedLoss = lossProbability / total;
 
     return {
-      probability: decisive > 0 ? this.clamp(normalizedWin / decisive) : 0,
+      probability: normalizedWin,
 
       winProbability: normalizedWin,
+
       pushProbability: normalizedPush,
+
       lossProbability: normalizedLoss,
     };
   }
 
   private parseAsianSelection(selection: string): {
     outcome: 'HOME' | 'AWAY';
+
     line: number;
   } | null {
     const normalized = selection.trim().toUpperCase();
@@ -517,6 +449,7 @@ export class HandicapMarketEngine implements MarketModel {
 
       return {
         outcome,
+
         line,
       };
     }
@@ -535,12 +468,14 @@ export class HandicapMarketEngine implements MarketModel {
 
     return {
       outcome: 'HOME',
+
       line,
     };
   }
 
   private parseEuropeanSelection(selection: string): {
     outcome: 'HOME' | 'DRAW' | 'AWAY';
+
     line: number;
   } | null {
     const normalized = selection.trim().toUpperCase();
@@ -568,6 +503,7 @@ export class HandicapMarketEngine implements MarketModel {
 
     return {
       outcome,
+
       line,
     };
   }
@@ -580,14 +516,20 @@ export class HandicapMarketEngine implements MarketModel {
 
   private emptyOutcome(): {
     probability: number;
+
     winProbability: number;
+
     pushProbability: number;
+
     lossProbability: number;
   } {
     return {
       probability: 0,
+
       winProbability: 0,
+
       pushProbability: 0,
+
       lossProbability: 0,
     };
   }
@@ -596,9 +538,20 @@ export class HandicapMarketEngine implements MarketModel {
     sampleSize: number,
     dataQuality: number,
   ): number {
-    const sampleReliability = 1 - Math.exp(-sampleSize / 20);
+    const safeSampleSize = Math.max(
+      Number.isFinite(sampleSize) ? sampleSize : 0,
+      0,
+    );
 
-    return this.clamp(sampleReliability * 0.45 + (dataQuality / 100) * 0.55);
+    const safeDataQuality = this.clamp(dataQuality, 0, 100);
+
+    const sampleReliability = 1 - Math.exp(-safeSampleSize / 20);
+
+    return this.clamp(
+      sampleReliability * 0.45 + (safeDataQuality / 100) * 0.55,
+      0,
+      1,
+    );
   }
 
   private clamp(value: number, minimum = 0, maximum = 1): number {

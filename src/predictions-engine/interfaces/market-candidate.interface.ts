@@ -1,5 +1,6 @@
 import { PredictionMarket } from '../enums/prediction-market.enum';
 import { PredictionRisk } from '../enums/prediction-risk.enum';
+import { PredictionMeaningfulnessTier } from '../config/prediction-markets.config';
 
 export interface MarketCandidate {
   market: PredictionMarket;
@@ -17,6 +18,8 @@ export interface MarketCandidate {
   dataQuality: number;
 
   calibrationReliability: number;
+
+  meaningfulness: PredictionMeaningfulnessTier;
 
   risk: PredictionRisk;
 

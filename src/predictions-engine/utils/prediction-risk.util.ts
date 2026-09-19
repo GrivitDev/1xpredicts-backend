@@ -1,8 +1,54 @@
+// src/predictions-engine/utils/prediction-risk.util.ts
+
 import { PredictionRisk } from '../enums/prediction-risk.enum';
 
-import { PREDICTION_DECISION_CONFIG } from '../config/prediction-decision.config';
-
 export class PredictionRiskUtil {
+  /*
+   * ----------------------------------------------------------
+   * RISK-BAND BOUNDARIES
+   * ----------------------------------------------------------
+   *
+   * These classify the already-calculated continuous risk score.
+   *
+   * They are not probability gates and are not market-specific.
+   */
+  private static readonly LOW_RISK_MAX = 0.33;
+
+  private static readonly MEDIUM_RISK_MAX = 0.66;
+
+  /*
+   * ----------------------------------------------------------
+   * DYNAMIC RISK WEIGHTS
+   * ----------------------------------------------------------
+   *
+   * Risk considers:
+   *
+   * - outcome probability
+   * - confidence
+   * - safety
+   * - structural consistency
+   * - data quality
+   * - calibration reliability
+   *
+   * The weights sum to 1.
+   */
+  private static readonly WEIGHTS = {
+    probabilityRisk: 0.2,
+    confidenceRisk: 0.2,
+    safetyRisk: 0.22,
+    agreementRisk: 0.16,
+    dataRisk: 0.12,
+    calibrationRisk: 0.1,
+  } as const;
+
+  /*
+   * ----------------------------------------------------------
+   * RISK CLASSIFICATION
+   * ----------------------------------------------------------
+   *
+   * Calculates the continuous score once and then classifies
+   * that exact score.
+   */
   static fromScores(input: {
     probability: number;
     confidence: number;
@@ -11,6 +57,60 @@ export class PredictionRiskUtil {
     dataQuality: number;
     calibrationReliability: number;
   }): PredictionRisk {
+    return this.fromRiskScore(this.score(input));
+  }
+
+  /*
+   * ----------------------------------------------------------
+   * CLASSIFY EXISTING RISK SCORE
+   * ----------------------------------------------------------
+   *
+   * This is important for SafetyEngine.
+   *
+   * SafetyEngine already calculates the richer continuous risk
+   * score using calibration error, comparison evidence and
+   * structural risk.
+   *
+   * It must not calculate another risk score merely to determine
+   * the enum.
+   */
+  static fromRiskScore(riskScore: number): PredictionRisk {
+    const normalizedRisk = this.clamp(riskScore, 0, 1);
+
+    if (normalizedRisk <= this.LOW_RISK_MAX) {
+      return PredictionRisk.LOW;
+    }
+
+    if (normalizedRisk <= this.MEDIUM_RISK_MAX) {
+      return PredictionRisk.MEDIUM;
+    }
+
+    return PredictionRisk.HIGH;
+  }
+
+  /*
+   * ----------------------------------------------------------
+   * CONTINUOUS RISK SCORE
+   * ----------------------------------------------------------
+   *
+   * Returns:
+   *
+   *   0 = lowest risk
+   *   1 = highest risk
+   *
+   * Probability remains an input because outcome exposure is a
+   * legitimate part of risk.
+   *
+   * It does NOT alter the probability itself.
+   */
+  static score(input: {
+    probability: number;
+    confidence: number;
+    safetyScore: number;
+    modelAgreement: number;
+    dataQuality: number;
+    calibrationReliability: number;
+  }): number {
     const probability = this.clamp(input.probability, 0, 1);
 
     const confidence = this.clamp(input.confidence, 0, 98);
@@ -27,69 +127,84 @@ export class PredictionRiskUtil {
       100,
     );
 
-    const low = PREDICTION_DECISION_CONFIG.risk.low;
-
-    const medium = PREDICTION_DECISION_CONFIG.risk.medium;
+    /*
+     * ----------------------------------------------------------
+     * PROBABILITY RISK
+     * ----------------------------------------------------------
+     *
+     * A lower-probability selected outcome has greater outcome
+     * exposure.
+     *
+     * This is intentionally independent from confidence.
+     *
+     * Example:
+     *
+     *   probability = 0.10
+     *   confidence  = 89
+     *
+     * is valid.
+     *
+     * The confidence says the system trusts its 10% estimate.
+     * The risk still recognizes that the selected event is
+     * unlikely to occur.
+     */
+    const probabilityRisk = 1 - probability;
 
     /*
-     * Calibration is advisory.
+     * ----------------------------------------------------------
+     * CONFIDENCE RISK
+     * ----------------------------------------------------------
      *
-     * A new prediction may have no historical calibration profile.
-     * That must not automatically force the prediction into HIGH risk.
-     *
-     * Existing calibration can still qualify a prediction for LOW or
-     * MEDIUM risk when the historical evidence is available.
+     * Low confidence means greater uncertainty about the
+     * probability estimate.
      */
-    const hasCalibrationHistory = calibrationReliability > 0;
+    const confidenceRisk = 1 - confidence / 98;
 
-    if (
-      probability >= low.minimumProbability &&
-      confidence >= low.minimumConfidence &&
-      safetyScore >= low.minimumSafetyScore &&
-      agreement >= low.minimumModelAgreement &&
-      dataQuality >= low.minimumDataQuality &&
-      (!hasCalibrationHistory ||
-        calibrationReliability >= low.minimumCalibrationReliability)
-    ) {
-      return PredictionRisk.LOW;
-    }
+    /*
+     * ----------------------------------------------------------
+     * SAFETY RISK
+     * ----------------------------------------------------------
+     */
+    const safetyRisk = 1 - safetyScore / 100;
 
-    if (
-      probability >= medium.minimumProbability &&
-      confidence >= medium.minimumConfidence &&
-      safetyScore >= medium.minimumSafetyScore &&
-      agreement >= medium.minimumModelAgreement &&
-      dataQuality >= medium.minimumDataQuality &&
-      (!hasCalibrationHistory ||
-        calibrationReliability >= medium.minimumCalibrationReliability)
-    ) {
-      return PredictionRisk.MEDIUM;
-    }
+    /*
+     * ----------------------------------------------------------
+     * STRUCTURAL CONSISTENCY RISK
+     * ----------------------------------------------------------
+     *
+     * modelAgreement is now understood as structural consistency,
+     * not independent-model voting.
+     */
+    const agreementRisk = 1 - agreement;
 
-    return PredictionRisk.HIGH;
-  }
+    /*
+     * ----------------------------------------------------------
+     * DATA RISK
+     * ----------------------------------------------------------
+     */
+    const dataRisk = 1 - dataQuality / 100;
 
-  static score(input: {
-    probability: number;
-    confidence: number;
-    safetyScore: number;
-    modelAgreement: number;
-    dataQuality: number;
-    calibrationReliability: number;
-  }): number {
-    const risk = this.fromScores(input);
+    /*
+     * ----------------------------------------------------------
+     * CALIBRATION RISK
+     * ----------------------------------------------------------
+     *
+     * No calibration history is neutral.
+     *
+     * Existing calibration reliability lowers risk.
+     */
+    const calibrationRisk =
+      calibrationReliability > 0 ? 1 - calibrationReliability / 100 : 0.5;
 
-    switch (risk) {
-      case PredictionRisk.LOW:
-        return 0.2;
+    const riskScore =
+      probabilityRisk * this.WEIGHTS.probabilityRisk +
+      confidenceRisk * this.WEIGHTS.confidenceRisk +
+      safetyRisk * this.WEIGHTS.safetyRisk +
+      agreementRisk * this.WEIGHTS.agreementRisk +
+      dataRisk * this.WEIGHTS.dataRisk +
+      calibrationRisk * this.WEIGHTS.calibrationRisk;
 
-      case PredictionRisk.MEDIUM:
-        return 0.5;
-
-      case PredictionRisk.HIGH:
-      default:
-        return 0.85;
-    }
+    return this.clamp(riskScore, 0, 1);
   }
 
   private static clamp(

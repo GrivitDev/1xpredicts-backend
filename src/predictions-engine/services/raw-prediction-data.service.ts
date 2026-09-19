@@ -40,6 +40,17 @@ import { RawPredictionMatchInput } from '../interfaces/raw-prediction-match.inte
 
 @Injectable()
 export class RawPredictionDataService {
+  private readonly completedStatuses = [
+    'FT',
+    'AET',
+    'PEN',
+    'FINAL',
+    'FINISHED',
+    'COMPLETED',
+    'POST',
+    'STATUS_FINAL',
+  ];
+
   constructor(
     @InjectModel(EspnFixture.name)
     private readonly fixtureModel: Model<EspnFixtureDocument>,
@@ -61,7 +72,7 @@ export class RawPredictionDataService {
   ) {}
 
   async getMatch(eventId: string): Promise<RawPredictionMatchInput | null> {
-    const normalizedEventId = String(eventId).trim();
+    const normalizedEventId = this.normalizeString(eventId);
 
     if (!normalizedEventId) {
       return null;
@@ -90,23 +101,23 @@ export class RawPredictionDataService {
 
     const fixtureDate = new Date(fixture.fixtureDate);
 
-    if (!Number.isFinite(fixtureDate.getTime())) {
+    if (!this.isValidDate(fixtureDate)) {
       return null;
     }
 
-    const competitionId = String(fixture.leagueId).trim().toLowerCase();
+    const competitionId = this.normalizeCompetitionId(fixture.leagueId);
 
     const season = Number(fixture.season);
 
-    if (!Number.isFinite(season)) {
+    if (!competitionId || !Number.isFinite(season)) {
       return null;
     }
 
-    const homeTeamId = String(fixture.homeTeamId).trim();
+    const homeTeamId = this.normalizeString(fixture.homeTeamId);
 
-    const awayTeamId = String(fixture.awayTeamId).trim();
+    const awayTeamId = this.normalizeString(fixture.awayTeamId);
 
-    if (!homeTeamId || !awayTeamId) {
+    if (!homeTeamId || !awayTeamId || homeTeamId === awayTeamId) {
       return null;
     }
 
@@ -122,6 +133,7 @@ export class RawPredictionDataService {
       headToHead,
       homeHistoricalFixtures,
       awayHistoricalFixtures,
+      competitionHistoricalFixtures,
     ] = await Promise.all([
       this.teamModel
         .findOne({
@@ -190,6 +202,8 @@ export class RawPredictionDataService {
       this.getHistoricalFixtures(homeTeamId, fixtureDate, competitionId),
 
       this.getHistoricalFixtures(awayTeamId, fixtureDate, competitionId),
+
+      this.getCompetitionHistoricalFixtures(competitionId, season, fixtureDate),
     ]);
 
     return {
@@ -213,13 +227,11 @@ export class RawPredictionDataService {
 
       headToHead,
 
-      /*
-       * Complete historical fixtures are passed downstream.
-       * No age-based reduction occurs here.
-       */
       homeHistoricalFixtures,
 
       awayHistoricalFixtures,
+
+      competitionHistoricalFixtures,
 
       retrievedAt: new Date(),
     };
@@ -231,24 +243,19 @@ export class RawPredictionDataService {
     competitionId: string,
   ): Promise<EspnFixtureDocument[]> {
     /*
-     * ----------------------------------------------------------
-     * COMPLETE HISTORICAL DATA
-     * ----------------------------------------------------------
+     * Historical team evidence is not removed by age.
      *
-     * There is deliberately no lookback window and no maximum
-     * number of historical fixtures.
+     * The prediction feature layer is responsible for applying
+     * recency weighting. This query only establishes the temporal
+     * boundary and historical-match eligibility.
      *
-     * Every completed fixture for the team in the same competition
-     * before the target kickoff is supplied to the prediction layer.
-     *
-     * The model decides how observations are weighted. The data
-     * service does not discard older observations.
+     * A fixture is considered completed when either the explicit
+     * completed flag is true or ESPN has supplied a recognized
+     * completed status.
      */
     return this.fixtureModel
       .find({
         leagueId: competitionId,
-
-        completed: true,
 
         fixtureDate: {
           $lt: beforeDate,
@@ -256,15 +263,73 @@ export class RawPredictionDataService {
 
         $or: [
           {
-            homeTeamId: teamId,
+            completed: true,
           },
+
           {
-            awayTeamId: teamId,
+            status: {
+              $in: this.completedStatuses,
+            },
+          },
+        ],
+
+        $and: [
+          {
+            $or: [
+              {
+                homeTeamId: teamId,
+              },
+
+              {
+                awayTeamId: teamId,
+              },
+            ],
           },
         ],
       })
       .sort({
         fixtureDate: -1,
+      })
+      .exec();
+  }
+
+  private async getCompetitionHistoricalFixtures(
+    competitionId: string,
+    season: number,
+    beforeDate: Date,
+  ): Promise<EspnFixtureDocument[]> {
+    /*
+     * Competition strength is constructed only from matches that
+     * happened before the target fixture.
+     *
+     * Keeping the current season separate from the complete team
+     * history prevents future/current-season information from
+     * leaking into pre-match strength calculations.
+     */
+    return this.fixtureModel
+      .find({
+        leagueId: competitionId,
+
+        season,
+
+        fixtureDate: {
+          $lt: beforeDate,
+        },
+
+        $or: [
+          {
+            completed: true,
+          },
+
+          {
+            status: {
+              $in: this.completedStatuses,
+            },
+          },
+        ],
+      })
+      .sort({
+        fixtureDate: 1,
       })
       .exec();
   }
@@ -292,28 +357,43 @@ export class RawPredictionDataService {
       return null;
     }
 
-    /*
-     * H2H aggregates are produced from completed historical
-     * meetings. We only protect against an accidentally stored
-     * future meeting being exposed to the prediction engine.
-     *
-     * Older meetings are never removed because of age.
-     */
     return this.trimFutureHeadToHeadMeetings(headToHead, fixtureDate);
   }
 
   private trimFutureHeadToHeadMeetings(
     headToHead: HeadToHeadDocument,
     cutoff: Date,
-  ): HeadToHeadDocument {
+  ): HeadToHeadDocument | null {
     const source = headToHead.toObject() as unknown as {
       meetings?: unknown;
     };
 
-    const meetings = Array.isArray(source.meetings) ? source.meetings : [];
+    /*
+     * If the document contains an explicit meetings collection,
+     * that collection becomes the authoritative historical H2H
+     * evidence for this prediction.
+     *
+     * We deliberately do not fall back to stored aggregate values
+     * when every stored meeting is future-dated. Those aggregates
+     * could contain the very future matches we are required to
+     * exclude.
+     */
+    const hasMeetingsArray = Array.isArray(source.meetings);
 
-    if (!meetings.length) {
+    if (!hasMeetingsArray) {
       return headToHead;
+    }
+
+    const meetings = source.meetings as unknown[];
+
+    if (meetings.length === 0) {
+      /*
+       * An explicitly empty meeting history means there is no
+       * meeting-level evidence available. Do not manufacture
+       * historical evidence from potentially stale aggregate
+       * fields.
+       */
+      return null;
     }
 
     const filteredMeetings = meetings.filter((meeting: unknown) => {
@@ -323,7 +403,7 @@ export class RawPredictionDataService {
 
       const record = meeting as Record<string, unknown>;
 
-      const meetingDate = record.fixtureDate ?? record.date;
+      const meetingDate = record['fixtureDate'] ?? record['date'];
 
       if (
         !(
@@ -337,24 +417,47 @@ export class RawPredictionDataService {
 
       const date = new Date(meetingDate);
 
-      return Number.isFinite(date.getTime()) && date < cutoff;
+      return this.isValidDate(date) && date < cutoff;
     });
 
+    /*
+     * No valid historical meeting remains before the target
+     * fixture. Returning null prevents the feature layer from
+     * trusting stale aggregate fields that may include future
+     * meetings.
+     */
+    if (filteredMeetings.length === 0) {
+      return null;
+    }
+
+    /*
+     * Avoid cloning the document when no temporal filtering was
+     * necessary.
+     */
     if (filteredMeetings.length === meetings.length) {
       return headToHead;
     }
 
-    /*
-     * Only the meeting list is filtered here.
-     *
-     * The aggregate H2H fields remain untouched because replacing
-     * or partially rebuilding those aggregates in this service
-     * would risk silently discarding existing H2H information.
-     */
     const cloned = headToHead.toObject() as unknown as Record<string, unknown>;
 
     cloned.meetings = filteredMeetings;
 
     return cloned as unknown as HeadToHeadDocument;
+  }
+
+  private normalizeString(value: unknown): string {
+    if (typeof value !== 'string' && typeof value !== 'number') {
+      return '';
+    }
+
+    return String(value).trim();
+  }
+
+  private normalizeCompetitionId(value: unknown): string {
+    return this.normalizeString(value).toLowerCase();
+  }
+
+  private isValidDate(value: Date): boolean {
+    return Number.isFinite(value.getTime());
   }
 }
