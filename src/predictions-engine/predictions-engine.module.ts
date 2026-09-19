@@ -91,6 +91,7 @@ import {
 } from 'src/sports/schemas/team-performance-profile.schema';
 import { OddsCalculationService } from './engines/value/odds-calculation.service';
 import { TeamComparisonService } from './services/team-comparison.service';
+import { MarketCoherenceService } from './services/market-coherence.service';
 
 @Module({
   imports: [
