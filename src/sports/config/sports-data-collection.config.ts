@@ -14,7 +14,7 @@ export const SPORTS_DATA_COLLECTION_CONFIG = {
      * through the provider-wide rate-limit service.
      */
     rateLimit: {
-      minIntervalSeconds: 5,
+      minIntervalSeconds: 3,
     },
 
     /**
@@ -23,7 +23,7 @@ export const SPORTS_DATA_COLLECTION_CONFIG = {
      * The catalogue is refreshed monthly.
      */
     catalogue: {
-      refreshIntervalDays: 30,
+      refreshIntervalDays: 7,
     },
 
     /**
@@ -34,7 +34,7 @@ export const SPORTS_DATA_COLLECTION_CONFIG = {
      */
     activeCompetitions: {
       enabled: true,
-      refreshIntervalMinutes: 60,
+      refreshIntervalMinutes: 15,
     },
 
     /**
@@ -46,7 +46,7 @@ export const SPORTS_DATA_COLLECTION_CONFIG = {
      */
     fixtures: {
       enabled: true,
-      slotIntervalMinutes: 0.5,
+      slotIntervalMinutes: 0.1,
     },
 
     /**
@@ -55,8 +55,8 @@ export const SPORTS_DATA_COLLECTION_CONFIG = {
     queue: {
       enabled: true,
       maxAttempts: 3,
-      staleProcessingMinutes: 30,
-      retryDelayMinutes: 15,
+      staleProcessingMinutes: 5,
+      retryDelayMinutes: 5,
     },
   },
 

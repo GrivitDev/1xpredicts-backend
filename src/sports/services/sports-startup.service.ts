@@ -1,10 +1,11 @@
+// src/sports/services/sports-startup.service.ts
+
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 
 import { EspnActiveCompetitionService } from './espn-active-competition.service';
-import { EspnQueueBuilderService } from './espn-queue-builder.service';
 import { EspnQueueService } from './espn-queue.service';
 import { SportsCollectionService } from './sports-collection.service';
 
@@ -12,8 +13,6 @@ import {
   EspnFixture,
   EspnFixtureDocument,
 } from '../schemas/espn/espn-fixture.schema';
-
-import { EspnService } from '../providers/espn.service';
 
 import { SportsDerivedDataBootstrapService } from './sports-derived-data-bootstrap.service';
 
@@ -30,11 +29,7 @@ export class SportsStartupService implements OnModuleInit {
 
     private readonly sportsCollectionService: SportsCollectionService,
 
-    private readonly espnQueueBuilderService: EspnQueueBuilderService,
-
     private readonly espnQueueService: EspnQueueService,
-
-    private readonly espnService: EspnService,
 
     private readonly sportsDerivedDataBootstrapService: SportsDerivedDataBootstrapService,
 
@@ -58,69 +53,17 @@ export class SportsStartupService implements OnModuleInit {
   // ============================================================
 
   private async initializeEspn(): Promise<void> {
-    let catalogueEmpty: boolean;
-
-    try {
-      catalogueEmpty =
-        await this.espnActiveCompetitionService.isLeagueCatalogueEmpty();
-    } catch (error) {
-      this.logger.error(
-        'Unable to check ESPN league catalogue state',
-        error instanceof Error ? error.stack : String(error),
-      );
-
-      return;
-    }
-
     /*
-     * The complete bootstrap remains a first-time bootstrap.
+     * ==========================================================
+     * STEP 1 — ALWAYS SYNCHRONIZE ESPN CATALOGUE
+     * ==========================================================
      *
-     * Subsequent application restarts continue using the
-     * stored catalogue and normal queue operation.
+     * This is intentionally performed on every startup.
+     *
+     * It does NOT collect fixtures.
      */
-    if (!catalogueEmpty) {
-      this.logger.log(
-        'ESPN league catalogue already populated. ' +
-          'Skipping initial ESPN bootstrap.',
-      );
-
-      /*
-       * Source ESPN data already exists, so give the derived-data
-       * bootstrap an opportunity to build any derived collections
-       * that are still empty.
-       *
-       * SportsDerivedDataBootstrapService is responsible for checking
-       * whether the derived collections already contain data.
-       */
-      try {
-        await this.sportsDerivedDataBootstrapService.initialize();
-
-        this.logger.log(
-          'Derived-data bootstrap check completed using existing ESPN source data',
-        );
-      } catch (error) {
-        this.logger.error(
-          'Derived-data bootstrap failed while using existing ESPN source data',
-          error instanceof Error ? error.stack : String(error),
-        );
-      }
-
-      return;
-    }
-
-    this.logger.log(
-      'ESPN league catalogue is empty. ' +
-        'Starting complete initial bootstrap.',
-    );
-
-    // ==========================================================
-    // STEP 1 — COMPLETE ESPN CATALOGUE
-    // ==========================================================
-
-    let leagues: unknown[] = [];
-
     try {
-      leagues =
+      const leagues =
         await this.espnActiveCompetitionService.synchronizeLeagueCatalogue();
 
       this.logger.log(
@@ -135,25 +78,22 @@ export class SportsStartupService implements OnModuleInit {
       return;
     }
 
-    // ==========================================================
-    // STEP 2 — LEAGUE DETAILS + ACTIVE SEASONS
-    // ==========================================================
-
-    let detailResult: {
-      processed: number;
-      synchronized: number;
-      active: number;
-      inactive: number;
-      skipped: number;
-      failed: number;
-    };
-
+    /*
+     * ==========================================================
+     * STEP 2 — ONLY FETCH MISSING LEAGUE DETAILS
+     * ==========================================================
+     *
+     * Existing detailed leagues do not call ESPN here.
+     *
+     * synchronizeMissingLeagueDetails() also updates
+     * ActiveCompetition for newly detailed active leagues.
+     */
     try {
-      detailResult =
-        await this.espnActiveCompetitionService.synchronizeLeagueDetails();
+      const detailResult =
+        await this.espnActiveCompetitionService.synchronizeMissingLeagueDetails();
 
       this.logger.log(
-        `ESPN league season discovery completed: ` +
+        `ESPN missing league-detail synchronization completed: ` +
           `processed=${detailResult.processed}, ` +
           `synchronized=${detailResult.synchronized}, ` +
           `active=${detailResult.active}, ` +
@@ -163,17 +103,30 @@ export class SportsStartupService implements OnModuleInit {
       );
     } catch (error) {
       this.logger.error(
-        'ESPN league detail synchronization failed',
+        'ESPN missing league-detail synchronization failed',
         error instanceof Error ? error.stack : String(error),
       );
 
       return;
     }
 
-    // ==========================================================
-    // STEP 3 — FIXTURES FROM SEASON START THROUGH TODAY
-    // ==========================================================
-
+    /*
+     * ==========================================================
+     * STEP 3 — LOCAL FIXTURE GAP INSPECTION
+     * ==========================================================
+     *
+     * MongoDB only.
+     *
+     * No ESPN fixture endpoint is called here.
+     *
+     * A league gets FIXTURE_RECOVERY only when:
+     *
+     * - an unexplained historical fixture-date gap > 6 days exists
+     * - OR the active season has no stored completed/current
+     *   fixture dates yet and its season has already started
+     *
+     * The worker later performs the expensive recovery.
+     */
     let activeLeagues: Awaited<
       ReturnType<EspnActiveCompetitionService['getActiveLeagues']>
     >;
@@ -183,34 +136,41 @@ export class SportsStartupService implements OnModuleInit {
         await this.espnActiveCompetitionService.getActiveLeagues();
 
       this.logger.log(
-        `Starting ESPN historical fixture bootstrap for ` +
+        `Inspecting local ESPN fixture completeness for ` +
           `${activeLeagues.length} active leagues`,
       );
     } catch (error) {
       this.logger.error(
-        'Unable to load active ESPN leagues for fixture bootstrap',
+        'Unable to load active ESPN leagues for local fixture inspection',
         error instanceof Error ? error.stack : String(error),
       );
 
       return;
     }
 
-    const today = new Date();
-    const todayDate = this.toUtcDateOnly(today);
-
-    let fixtureProcessed = 0;
-    let fixtureCollected = 0;
-    let fixtureFailed = 0;
+    let recoveryQueued = 0;
+    let recoveryAlreadyQueued = 0;
+    let gapLeagues = 0;
+    let summaryJobsQueued = 0;
 
     for (const league of activeLeagues) {
       if (!league.isActive) {
         continue;
       }
 
-      if (typeof league.season !== 'number' || !league.seasonStartDate) {
+      if (typeof league.season !== 'number') {
         this.logger.warn(
-          `Skipping startup fixture bootstrap for ` +
-            `${league.leagueId}: missing season or seasonStartDate`,
+          `Skipping fixture completeness inspection for ` +
+            `${league.leagueId}: missing season`,
+        );
+
+        continue;
+      }
+
+      if (!league.seasonStartDate) {
+        this.logger.warn(
+          `Skipping fixture completeness inspection for ` +
+            `${league.leagueId}: missing seasonStartDate`,
         );
 
         continue;
@@ -218,91 +178,108 @@ export class SportsStartupService implements OnModuleInit {
 
       const leagueId = (league.slug || league.leagueId).trim().toLowerCase();
 
-      const seasonStartDate = this.toUtcDateOnly(
-        new Date(league.seasonStartDate),
-      );
-
-      if (seasonStartDate > todayDate) {
-        this.logger.warn(
-          `Skipping startup fixture bootstrap for ${league.leagueId}: ` +
-            `seasonStartDate ${seasonStartDate} is after today ${todayDate}`,
-        );
-
+      if (!leagueId) {
         continue;
       }
 
-      fixtureProcessed += 1;
+      /*
+       * --------------------------------------------------------
+       * 3A — DETECT LOCAL FIXTURE GAP
+       * --------------------------------------------------------
+       */
+      const gap = await this.detectFixtureGap({
+        leagueId,
+        season: league.season,
+        seasonStartDate: new Date(league.seasonStartDate),
+      });
 
-      try {
-        /*
-         * IMPORTANT:
-         *
-         * Initial startup fixture collection stops at TODAY.
-         *
-         * We intentionally do not collect future fixtures here.
-         *
-         * The normal ESPN queue will take over after the initial
-         * historical/current fixture population and refresh the
-         * current + upcoming window continuously.
-         */
-        const response = await this.espnService.getFixturesRange(
+      const priority = this.getQueuePriority(league.priority);
+
+      if (gap.hasGap) {
+        gapLeagues += 1;
+
+        const job = await this.espnQueueService.addFixtureRecoveryJob({
           leagueId,
-          seasonStartDate,
-          todayDate,
-        );
+          season: league.season,
+          priority,
+          scheduledFor: new Date(),
+        });
 
-        const result = await this.sportsCollectionService.collectEspnFixtures(
-          leagueId,
-          response,
-        );
-
-        fixtureCollected += result.collected;
+        if (String(job.status) === 'PENDING') {
+          recoveryQueued += 1;
+        } else {
+          recoveryAlreadyQueued += 1;
+        }
 
         this.logger.log(
-          `ESPN startup fixtures collected for ${league.leagueId}: ` +
-            `collected=${result.collected}, ` +
-            `range=${seasonStartDate}->${todayDate}`,
-        );
-      } catch (error) {
-        fixtureFailed += 1;
-
-        this.logger.error(
-          `ESPN startup fixture bootstrap failed for ` +
-            `${league.leagueId}: ` +
-            `${error instanceof Error ? error.message : String(error)}`,
-          error instanceof Error ? error.stack : undefined,
+          `Fixture recovery required for ${leagueId}: ` +
+            `largestGap=${gap.largestGapDays} days` +
+            `${
+              gap.gapFrom && gap.gapTo
+                ? ` (${gap.gapFrom.toISOString()} -> ${gap.gapTo.toISOString()})`
+                : ''
+            }`,
         );
       }
+
+      /*
+       * --------------------------------------------------------
+       * 3B — QUEUE EXISTING FINISHED FIXTURES WITHOUT SUMMARY
+       * --------------------------------------------------------
+       *
+       * This is MongoDB-only.
+       *
+       * If a FIXTURE_RECOVERY job is created, the newly recovered
+       * fixtures will be checked again by the worker after the
+       * recovery finishes.
+       */
+      const summaryQueued = await this.queueMissingFinishedMatchSummaries({
+        leagueId,
+        season: league.season,
+        priority,
+      });
+
+      summaryJobsQueued += summaryQueued;
     }
 
     this.logger.log(
-      `ESPN startup historical fixture bootstrap completed: ` +
-        `processed=${fixtureProcessed}, ` +
-        `collected=${fixtureCollected}, ` +
-        `failed=${fixtureFailed}`,
+      `ESPN startup local fixture inspection completed: ` +
+        `active=${activeLeagues.length}, ` +
+        `gapLeagues=${gapLeagues}, ` +
+        `recoveryQueued=${recoveryQueued}, ` +
+        `recoveryExisting=${recoveryAlreadyQueued}, ` +
+        `summaryJobsQueued=${summaryJobsQueued}`,
     );
 
-    // ==========================================================
-    // STEP 4 — INITIAL DERIVED DATA
-    // ==========================================================
-
+    /*
+     * ==========================================================
+     * STEP 4 — DERIVED DATA BOOTSTRAP
+     * ==========================================================
+     *
+     * This performs no startup fixture collection.
+     *
+     * The source-data recovery itself belongs to the queue.
+     */
     try {
       await this.sportsDerivedDataBootstrapService.initialize();
 
-      this.logger.log(
-        'Initial derived-data bootstrap completed after historical fixture collection',
-      );
+      this.logger.log('Derived-data bootstrap/recovery completed');
     } catch (error) {
       this.logger.error(
-        'Initial derived-data bootstrap failed',
+        'Derived-data bootstrap/recovery failed',
         error instanceof Error ? error.stack : String(error),
       );
     }
 
-    // ==========================================================
-    // STEP 5 — SEED LEAGUE REFRESH QUEUE
-    // ==========================================================
-
+    /*
+     * ==========================================================
+     * STEP 5 — SEED NORMAL LEAGUE REFRESH JOBS
+     * ==========================================================
+     *
+     * These are normal recurring refresh jobs.
+     *
+     * They do NOT perform historical startup recovery.
+     */
     try {
       const result = await this.seedInitialLeagueRefreshQueue(activeLeagues);
 
@@ -321,45 +298,16 @@ export class SportsStartupService implements OnModuleInit {
       return;
     }
 
-    // ==========================================================
-    // STEP 6 — STARTUP FINISHED MATCH SUMMARIES
-    // ==========================================================
-
-    try {
-      await this.collectStartupFinishedMatchSummaries();
-    } catch (error) {
-      this.logger.error(
-        'ESPN startup finished-match summary collection failed',
-        error instanceof Error ? error.stack : String(error),
-      );
-
-      return;
-    }
-
-    // ==========================================================
-    // STEP 7 — STARTUP STANDINGS
-    // ==========================================================
-
-    try {
-      await this.collectStartupStandings(activeLeagues);
-    } catch (error) {
-      this.logger.error(
-        'ESPN startup standings collection failed',
-        error instanceof Error ? error.stack : String(error),
-      );
-
-      return;
-    }
-
-    // ==========================================================
-    // STEP 8 — QUEUE STATE
-    // ==========================================================
-
+    /*
+     * ==========================================================
+     * STEP 6 — QUEUE STATE
+     * ==========================================================
+     */
     try {
       const stats = await this.getQueueStats();
 
       this.logger.log(
-        `ESPN queue state after startup seeding: ` +
+        `ESPN queue state before worker release: ` +
           `pending=${stats.pending}, ` +
           `processing=${stats.processing}, ` +
           `completed=${stats.completed}, ` +
@@ -373,34 +321,229 @@ export class SportsStartupService implements OnModuleInit {
       );
     }
 
+    /*
+     * ==========================================================
+     * STEP 7 — RELEASE QUEUE WORKER
+     * ==========================================================
+     *
+     * Only now can the worker consume:
+     *
+     * FIXTURE_RECOVERY
+     * FINISHED_MATCH
+     * UPCOMING_MATCH
+     * LEAGUE_REFRESH
+     */
+    this.espnQueueService.markStartupReady();
+
     this.logger.log(
-      'ESPN complete initial bootstrap finished. ' +
-        'Historical fixtures are populated through today and ' +
-        'the normal five-second queue now owns ongoing fixture refresh.',
+      'ESPN startup initialization finished. ' +
+        'No historical fixture collection was performed during startup. ' +
+        'Queued recovery and normal jobs are now released to the worker.',
     );
+  }
+
+  // ============================================================
+  // FIXTURE GAP DETECTION
+  // ============================================================
+
+  private async detectFixtureGap(params: {
+    leagueId: string;
+    season: number;
+    seasonStartDate: Date;
+  }): Promise<{
+    hasGap: boolean;
+    largestGapDays: number;
+    gapFrom?: Date;
+    gapTo?: Date;
+  }> {
+    const now = new Date();
+
+    /*
+     * Only dates up to today are relevant for historical
+     * completeness.
+     *
+     * Future fixtures must not hide a historical gap.
+     */
+    const todayStart = this.startOfUtcDay(now);
+
+    const fixtures = await this.espnFixtureModel
+      .find({
+        leagueId: params.leagueId,
+        season: params.season,
+
+        fixtureDate: {
+          $gte: params.seasonStartDate,
+          $lte: todayStart,
+        },
+      })
+      .select({
+        fixtureDate: 1,
+      })
+      .sort({
+        fixtureDate: 1,
+      })
+      .lean()
+      .exec();
+
+    /*
+     * Distinct UTC fixture dates.
+     */
+    const dayKeys = Array.from(
+      new Set(
+        fixtures
+          .map((fixture) => fixture.fixtureDate)
+          .filter(Boolean)
+          .map((date) => this.startOfUtcDay(new Date(date)).getTime()),
+      ),
+    ).sort((a, b) => a - b);
+
+    /*
+     * If the active season has started but there is no local
+     * fixture data at all, recovery is required.
+     */
+    if (
+      dayKeys.length === 0 &&
+      params.seasonStartDate.getTime() <= todayStart.getTime()
+    ) {
+      return {
+        hasGap: true,
+        largestGapDays: 0,
+      };
+    }
+
+    let largestGapDays = 0;
+    let gapFrom: Date | undefined;
+    let gapTo: Date | undefined;
+
+    /*
+     * Internal fixture-date gaps.
+     *
+     * A 5-day gap is acceptable.
+     * A 6-day gap is acceptable.
+     * Only > 6 days triggers recovery.
+     */
+    for (let index = 1; index < dayKeys.length; index += 1) {
+      const previous = dayKeys[index - 1];
+      const current = dayKeys[index];
+
+      const gapDays = Math.floor((current - previous) / (24 * 60 * 60 * 1000));
+
+      if (gapDays > largestGapDays) {
+        largestGapDays = gapDays;
+        gapFrom = new Date(previous);
+        gapTo = new Date(current);
+      }
+    }
+
+    /*
+     * Also check the last stored fixture against today.
+     *
+     * Example:
+     *
+     * Aug 22 -> Sep 1
+     *
+     * means the local collection has stopped and needs recovery.
+     */
+    if (dayKeys.length > 0) {
+      const lastFixtureDay = dayKeys[dayKeys.length - 1];
+
+      const daysSinceLastFixture = Math.floor(
+        (todayStart.getTime() - lastFixtureDay) / (24 * 60 * 60 * 1000),
+      );
+
+      if (daysSinceLastFixture > largestGapDays) {
+        largestGapDays = daysSinceLastFixture;
+        gapFrom = new Date(lastFixtureDay);
+        gapTo = todayStart;
+      }
+    }
+
+    return {
+      hasGap: largestGapDays > 6,
+      largestGapDays,
+      gapFrom,
+      gapTo,
+    };
+  }
+
+  private startOfUtcDay(date: Date): Date {
+    return new Date(
+      Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()),
+    );
+  }
+
+  // ============================================================
+  // FINISHED MATCH SUMMARY QUEUE
+  // ============================================================
+
+  private async queueMissingFinishedMatchSummaries(params: {
+    leagueId: string;
+    season: number;
+    priority: number;
+  }): Promise<number> {
+    const cutoff = new Date(Date.now() - this.threeHourWindowMs);
+
+    const fixtures = await this.espnFixtureModel
+      .find({
+        leagueId: params.leagueId,
+        season: params.season,
+
+        completed: true,
+
+        fixtureDate: {
+          $lte: cutoff,
+        },
+
+        /*
+         * Only fixtures whose stored payload does not contain
+         * a summary need a FINISHED_MATCH job.
+         */
+        $or: [
+          {
+            'payload.summary': {
+              $exists: false,
+            },
+          },
+          {
+            'payload.summary': null,
+          },
+        ],
+      })
+      .select({
+        eventId: 1,
+        fixtureDate: 1,
+      })
+      .sort({
+        fixtureDate: 1,
+      })
+      .lean()
+      .exec();
+
+    let queued = 0;
+
+    for (const fixture of fixtures) {
+      if (!fixture.eventId) {
+        continue;
+      }
+
+      await this.espnQueueService.addFinishedMatchJob({
+        leagueId: params.leagueId,
+        eventId: fixture.eventId,
+        season: params.season,
+        priority: params.priority,
+        scheduledFor: new Date(),
+      });
+
+      queued += 1;
+    }
+
+    return queued;
   }
 
   // ============================================================
   // INITIAL LEAGUE REFRESH QUEUE
   // ============================================================
 
-  /**
-   * Seeds one LEAGUE_REFRESH job per active competition.
-   *
-   * Startup deliberately does not collect future fixtures itself.
-   *
-   * Once these jobs are processed by EspnQueueWorkerService:
-   *
-   * LEAGUE_REFRESH
-   *      ->
-   * today's scoreboard + upcoming window
-   *      ->
-   * sports_espn_fixtures
-   *      ->
-   * UPCOMING_MATCH / FINISHED_MATCH
-   *
-   * Priority is used only to determine processing order.
-   */
   private async seedInitialLeagueRefreshQueue(
     activeLeagues: Awaited<
       ReturnType<EspnActiveCompetitionService['getActiveLeagues']>
@@ -435,7 +578,6 @@ export class SportsStartupService implements OnModuleInit {
 
       if (!leagueId) {
         skipped += 1;
-
         continue;
       }
 
@@ -450,12 +592,6 @@ export class SportsStartupService implements OnModuleInit {
         scheduledFor: new Date(),
       });
 
-      /*
-       * addLeagueRefreshJob() returns an existing job when the
-       * same league/season refresh already exists.
-       *
-       * Count it as seeded because the queue now owns that league.
-       */
       if (job) {
         queued += 1;
       }
@@ -486,177 +622,6 @@ export class SportsStartupService implements OnModuleInit {
   }
 
   // ============================================================
-  // STARTUP FINISHED SUMMARIES
-  // ============================================================
-
-  private async collectStartupFinishedMatchSummaries(): Promise<void> {
-    const now = new Date();
-
-    const cutoff = new Date(now.getTime() - this.threeHourWindowMs);
-
-    /*
-     * Startup only processes matches that are:
-     *
-     * 1. already completed by the ESPN scoreboard
-     * 2. at least three hours past kickoff
-     */
-    const fixtures = await this.espnFixtureModel
-      .find({
-        completed: true,
-
-        fixtureDate: {
-          $lte: cutoff,
-        },
-      })
-      .sort({
-        fixtureDate: 1,
-      })
-      .lean()
-      .exec();
-
-    let processed = 0;
-    let collected = 0;
-    let skipped = 0;
-    let failed = 0;
-
-    this.logger.log(
-      `Starting startup summary collection for ` +
-        `${fixtures.length} finished ESPN fixtures`,
-    );
-
-    for (const fixture of fixtures) {
-      if (!fixture.eventId) {
-        skipped += 1;
-        continue;
-      }
-
-      if (!fixture.leagueId) {
-        skipped += 1;
-        continue;
-      }
-
-      if (
-        fixture.fixtureDate &&
-        new Date(fixture.fixtureDate).getTime() + this.threeHourWindowMs >
-          now.getTime()
-      ) {
-        skipped += 1;
-        continue;
-      }
-
-      processed += 1;
-
-      try {
-        const hasSummary =
-          await this.sportsCollectionService.hasEspnMatchSummary(
-            fixture.eventId,
-          );
-
-        if (hasSummary) {
-          skipped += 1;
-          continue;
-        }
-
-        const summary = await this.getSummary(
-          fixture.leagueId,
-          fixture.eventId,
-        );
-
-        await this.sportsCollectionService.collectEspnMatchSummary({
-          leagueId: fixture.leagueId,
-
-          eventId: fixture.eventId,
-
-          summary,
-        });
-
-        collected += 1;
-      } catch (error) {
-        failed += 1;
-
-        this.logger.error(
-          `Startup summary collection failed for ` +
-            `${fixture.leagueId}:${fixture.eventId}: ` +
-            `${error instanceof Error ? error.message : String(error)}`,
-          error instanceof Error ? error.stack : undefined,
-        );
-      }
-    }
-
-    this.logger.log(
-      `ESPN startup finished-match summaries completed: ` +
-        `processed=${processed}, ` +
-        `collected=${collected}, ` +
-        `skipped=${skipped}, ` +
-        `failed=${failed}`,
-    );
-  }
-
-  private async getSummary(
-    leagueId: string,
-    eventId: string,
-  ): Promise<Record<string, unknown>> {
-    return this.espnService.getMatchSummary(leagueId, eventId);
-  }
-
-  // ============================================================
-  // STARTUP STANDINGS
-  // ============================================================
-
-  private async collectStartupStandings(
-    activeLeagues: Awaited<
-      ReturnType<EspnActiveCompetitionService['getActiveLeagues']>
-    >,
-  ): Promise<void> {
-    let processed = 0;
-    let collected = 0;
-    let failed = 0;
-
-    this.logger.log(
-      `Starting startup standings collection for ` +
-        `${activeLeagues.length} active ESPN competitions`,
-    );
-
-    for (const league of activeLeagues) {
-      if (!league.isActive) {
-        continue;
-      }
-
-      processed += 1;
-
-      try {
-        const standings = await this.espnService.getStandings(
-          league.slug || league.leagueId,
-        );
-
-        const result = await this.sportsCollectionService.collectEspnStandings(
-          league.leagueId,
-          standings,
-          league.season,
-        );
-
-        collected += result;
-      } catch (error) {
-        failed += 1;
-
-        this.logger.error(
-          `Startup standings collection failed for ` +
-            `${league.leagueId}: ` +
-            `${error instanceof Error ? error.message : String(error)}`,
-          error instanceof Error ? error.stack : undefined,
-        );
-      }
-    }
-
-    this.logger.log(
-      `ESPN startup standings completed: ` +
-        `processed=${processed}, ` +
-        `entries=${collected}, ` +
-        `failed=${failed}`,
-    );
-  }
-
-  // ============================================================
   // QUEUE STATE
   // ============================================================
 
@@ -668,28 +633,9 @@ export class SportsStartupService implements OnModuleInit {
   }> {
     return {
       pending: await this.espnQueueService.countPending(),
-
       processing: await this.espnQueueService.countProcessing(),
-
       completed: await this.espnQueueService.countCompleted(),
-
       failed: await this.espnQueueService.countFailed(),
     };
-  }
-
-  // ============================================================
-  // DATE HELPER
-  // ============================================================
-
-  private toUtcDateOnly(value: Date): string {
-    const date = new Date(value);
-
-    const year = date.getUTCFullYear();
-
-    const month = String(date.getUTCMonth() + 1).padStart(2, '0');
-
-    const day = String(date.getUTCDate()).padStart(2, '0');
-
-    return `${year}-${month}-${day}`;
   }
 }
